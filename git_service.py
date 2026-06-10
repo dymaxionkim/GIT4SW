@@ -208,8 +208,37 @@ class GitService:
             
         sw_files = []
         for root, dirs, files in os.walk(self.repo_path):
-            if ".git" in root or ".venv" in root or ".idea" in root or ".vscode" in root:
-                continue
+            # Always skip .git directory
+            if '.git' in dirs:
+                dirs.remove('.git')
+
+            # Filter out directories ignored by .gitignore
+            if dirs:
+                dir_paths = [os.path.join(root, d) for d in dirs]
+                try:
+                    cmd_args = ["git", "check-ignore", "-z"] + dir_paths
+                    if cmd_args[0] == "git" and self.git_path and os.path.exists(self.git_path):
+                        cmd_args[0] = self.git_path
+                    result = subprocess.run(
+                        cmd_args,
+                        cwd=self.repo_path,
+                        capture_output=True,
+                        text=True,
+                        encoding="utf-8",
+                        errors="ignore"
+                    )
+                    # git check-ignore outputs ignored paths separated by NUL
+                    if result.stdout:
+                        ignored_paths = set(
+                            p for p in result.stdout.split('\0') if p
+                        )
+                        dirs[:] = [
+                            d for d in dirs
+                            if os.path.join(root, d) not in ignored_paths
+                        ]
+                except Exception:
+                    pass
+
             for file in files:
                 ext = os.path.splitext(file)[1].lower()
                 if ext in [".sldprt", ".sldasm", ".slddrw"]:
