@@ -6,6 +6,7 @@ import tkinter.font as tkfont
 import threading
 import queue
 import json
+import webbrowser
 
 from git_service import GitService, MergeConflictError
 from sw_monitor import SolidWorksMonitorService
@@ -879,9 +880,21 @@ class GIT4SWApp(tk.Tk):
         lbl_subtitle = tk.Label(container, text="SolidWorks Git Version Control Client", fg="#4b5563", bg="#ffffff", font=("TkDefaultFont", 12, "italic"))
         lbl_subtitle.pack(anchor="w", pady=(0, 20))
         
-        about_text = (
-            "Core Engine: GitPython, Git CLI & Git LFS, Solidworks & eDrawings\n"
-            "Developer: dhkima@higenrnm.com\n\n"
+        txt_about = tk.Text(container, bg="#ffffff", fg="#1f2937", font="TkDefaultFont", wrap="word", relief="flat")
+        
+        # Configure hyperlink tag
+        txt_about.tag_config("link", foreground="#2563eb", underline=1)
+        txt_about.tag_bind("link", "<Button-1>", lambda e: webbrowser.open_new("https://codeberg.org/dymaxionkim/GIT4SW"))
+        txt_about.tag_bind("link", "<Enter>", lambda e: txt_about.config(cursor="hand2"))
+        txt_about.tag_bind("link", "<Leave>", lambda e: txt_about.config(cursor=""))
+        
+        txt_about.insert("insert", "Core Engine: GitPython, Git CLI & Git LFS, Solidworks & eDrawings\n")
+        txt_about.insert("insert", "Developer: dhkima@higenrnm.com\n")
+        txt_about.insert("insert", "이 소프트웨어는 ")
+        txt_about.insert("insert", "https://codeberg.org/dymaxionkim/GIT4SW", "link")
+        txt_about.insert("insert", " 저장소에서 배포하고 있습니다.\n\n")
+        
+        about_body = (
             "Description:\n"
             "GIT4SW is an agentic CAD version control desktop client developed specifically for "
             "SolidWorks designers. By combining standard Git branch workflows with Git LFS locking "
@@ -896,8 +909,7 @@ class GIT4SWApp(tk.Tk):
             "Developed using Google Antigravity-IDE."
         )
         
-        txt_about = tk.Text(container, bg="#ffffff", fg="#1f2937", font="TkDefaultFont", wrap="word", relief="flat")
-        txt_about.insert("1.0", about_text)
+        txt_about.insert("insert", about_body)
         txt_about.config(state="disabled")
         txt_about.pack(fill="both", expand=True)
         
