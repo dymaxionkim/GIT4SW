@@ -1,0 +1,10 @@
+{
+    "git_path": "C:\\Users\\dhkima\\scoop\\apps\\git\\current\\bin\\git.exe",
+    "git-lfs_path": "C:\\Users\\dhkima\\scoop\\apps\\git\\current\\mingw64\\bin\\git-lfs.exe",
+    "solidworks_path": "C:\\Program Files\\SOLIDWORKS Corp\\SOLIDWORKS\\SLDWORKS.exe",
+    "edrawings_path": "C:\\Program Files\\SOLIDWORKS Corp\\eDrawings\\eDrawings.exe",
+    "workspace_path": "D:\\github\\TEST",
+    "github_token": "",
+    "default_local_path": "D:\\github",
+    "organization_name": "mech-higenmotor"
+}

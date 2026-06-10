@@ -1,0 +1,98 @@
+# GIT4SW: SolidWorks Git Version Control Client
+
+SolidWorks로 설계 작업을 진행할 때 도면(`.slddrw`), 파트(`.sldprt`), 어셈블리(`.sldasm`) 등의 3D CAD 바이너리 파일은 일반 텍스트 코딩 작업과 다르게 Git에서 코드 차원 병합(Merge)이 불가능하여 다자간 협업 시 덮어쓰기나 변경점 소실 등의 심각한 문제가 수시로 발생합니다.
+
+**GIT4SW**는 이러한 비정형 CAD 파일들의 다자간 동시 수정으로 발생할 수 있는 버전 엉킴과 충돌을 원천 예방하기 위해 고안된 **SolidWorks 전용 Git 버전 관리 데스크톱 클라이언트**입니다. 표준 Git 브랜치 워크플로우에 **Git LFS(Large File Storage) Lock 메커니즘**을 결합하여, 특정 사용자가 파일을 수정하는 동안 다른 사용자가 동일한 파일을 덮어쓰지 못하도록 사전에 완벽 차단해 줍니다.
+
+![](GIT4SW.png)
+
+---
+
+## 1. 주요 기능 및 특징
+
+* **실시간 SolidWorks API 연동 모니터링**: 백그라운드 스레드가 활성화된 SolidWorks 창의 문서 개체들을 주기적으로 추적하여, 사용자가 CAD 파일을 여는 즉시 자동으로 원격 LFS Lock을 획득하고, 창을 닫으면 자동으로 Lock을 반납(Release)합니다.
+* **작업 안전성 확보 (저장 및 닫기 유도)**: 브랜치를 전환하거나 싱크를 마칠 때 SolidWorks에 미저장된 변경사항이 있는 경우, 파일 파손 및 락 충돌을 방지하기 위해 사용자에게 먼저 변경사항을 저장하고 닫을 것인지 다이얼로그 팝업을 통해 유도하여 데이터를 안전하게 조율합니다.
+* **직관적인 확장자별 색상 구분 테이블**: File Manager 화면에서 디렉터리 경로는 검은색, 파일명은 주황/녹색/빨강으로 구분(파트: 초록 `#059669`, 어셈블리: 주황 `#d97706`, 도면: 빨강 `#dc2626`)하여 시인성을 극대화했습니다.
+* **유연한 브랜치 관리 및 원격 배포**:
+  - **"Make my branch" 기능**: 사용자의 GitHub 계정 명칭을 조회하여 즉시 개인 개발용 원격 브랜치를 자동 생성하고 업스트림을 동기화하여 main 브랜치를 해치지 않고 안전하게 작업하도록 돕습니다.
+  - **"Merge all branches into main" 기능**: 관리자(Maintainer) 모드에서 여러 협업 개발 브랜치를 `main` 브랜치로 일괄 비동기 머지 및 충돌 해결 옵션(Ours/Theirs 선택 모달)을 제공합니다.
+* **과거 버전 탐색 및 복원**: 전체 커밋 이력을 그래프 정렬하여 보여주며, 특정 이력을 더블클릭하는 것만으로 안전하게 해당 버전 시점으로 워크스페이스를 되돌립니다 (Standard Detached HEAD 상태 유지).
+* **비차단 비동기 UI 모델**: 커밋, 브랜치 푸시, 원격 LFS 상태 쿼리 등의 긴 작업을 수행할 때 화면이 굳지 않도록 모든 동작을 백그라운드 다중 스레드로 분할 처리하며 하단 `System Log` 상태 인디케이터(● Working / ● Idle)와 실시간 로그를 연계해 직관적인 상태를 표시합니다.
+* **독자적인 실행기 경로 설정**: `config.json`을 통해 `git.exe`와 `git-lfs.exe` 실행 경로를 각각 완벽하게 커스터마이징하여, GitPython 엔진이 Scoop과 같이 특수한 환경의 독립된 실행기를 그대로 호출해 동작하도록 연동합니다.
+* **GitHub (github.com) 원격 저장소 전용**: 본 프로그램은 `PyGithub` API 라이브러리를 통해 원격 브랜치 갱신, 관리자용 신규 저장소 생성 및 연동 배포 기능을 수행하므로, **github.com 원격 저장소 서비스 사용**을 전제로 하여 긴밀하게 설계되었습니다.
+
+---
+
+## 2. 요구 환경 및 필수 소프트웨어
+
+* **운영체제**: Windows 10 / 11 (x64)
+* **CAD 시스템**: Dassault Systèmes SolidWorks 및 eDrawings 뷰어 설치 필수 (SolidWorks COM API 기반 실시간 도면 추적 및 eDrawings 외부 미리보기 열기 실행 목적)
+* **필수 유틸리티**:
+  - **Git**: `git` 버전 2.x 이상 (경로 지정 가능)
+  - **Git LFS**: 대형 파일 및 바이너리 락 처리를 위한 확장 기능
+  - **uv**: 고속 Python 패키지 및 가상환경 관리자
+
+  > [!TIP]
+  > **Scoop 패키지 관리자**를 사용하여 `git`, `git-lfs`, `uv`를 손쉽게 설치할 수 있습니다:
+  > ```powershell
+  > scoop install git git-lfs uv
+  > ```
+* **Python 라이브러리 의존성** (`pyproject.toml`에 내장):
+  - `gitpython >= 3.1.43` (Git 제어 백엔드)
+  - `pygithub >= 2.9.1` (GitHub API 통신)
+  - `pywin32 >= 306` (SolidWorks COM 연결 모니터링)
+
+---
+
+## 3. 실행 방법 (자동 의존성 설치 및 구동)
+
+본 프로젝트는 고속 Python 패키지 관리자인 `uv`를 기반으로 하므로 별도의 수동 라이브러리 설치 절차가 필요 없습니다.
+
+프로젝트 폴더 내에 준비된 **`GIT4SW.bat`** 배치 파일을 더블클릭하여 바로 실행하면 됩니다.
+
+> [!NOTE]
+> `GIT4SW.bat`는 내부적으로 `uv run main.py`를 실행시킵니다.
+> 최초 실행 시 `uv`가 `pyproject.toml`에 기재된 스펙을 감지하여 가상환경(`.venv`)을 자동으로 빌드하고 필요한 의존성 라이브러리(`gitpython`, `pygithub`, `pywin32` 등)를 알아서 다운로드 및 설치한 뒤 프로그램을 안전하게 구동해 줍니다.
+
+---
+
+## 4. 사용 설명서
+
+### 4.1 초기 설정
+
+프로그램을 최초로 실행한 후, 좌측 사이드바 메뉴 맨 하단의 **Config** 버튼을 눌러 설정 화면(Configuration Manager)에서 필수 환경 설정을 먼저 진행해야 합니다. 각 입력 필드에 알맞은 경로와 값을 입력한 후 하단의 **[Save Configuration]** 버튼을 클릭하면 `config.json`에 저장되고 앱에 즉시 반영됩니다.
+
+각 설정 항목의 상세 내용 및 예시는 다음과 같습니다:
+
+* **Git Path**: 프로그램이 내부적으로 Git 명령을 호출해 실행할 `git.exe` 바이너리의 절대 경로입니다.
+  - *예*: `C:\Users\dhkima\scoop\apps\git\current\bin\git.exe`
+* **Git-Lfs Path**: Git LFS 바이너리 락 획득/조회를 위해 호출할 `git-lfs.exe` 실행 파일의 절대 경로입니다.
+  - *예*: `C:\Users\dhkima\scoop\apps\git\current\mingw64\bin\git-lfs.exe`
+* **Solidworks Path**: 로컬 시스템에 설치된 SolidWorks 실행 파일(`SLDWORKS.exe`)의 절대 경로입니다. 파일 매니저에서 Solidworks 열기 버튼 클릭 시 및 Fallback 예외 복구 시 실행 경로로 사용됩니다.
+  - *예*: `C:\Program Files\SOLIDWORKS Corp\SOLIDWORKS\SLDWORKS.exe`
+* **Edrawings Path**: 외부 eDrawings 도면 미리보기 실행 파일(`eDrawings.exe`)의 절대 경로입니다. 파일 매니저에서 eDrawings 버튼 클릭 시 사용됩니다.
+  - *예*: `C:\Program Files\SOLIDWORKS Corp\eDrawings\eDrawings.exe`
+* **Github Token**: 사용자의 개인 개발용 원격 브랜치를 생성하거나, Maintainer 모드에서 원격 비공개(Private) 저장소를 자동 퍼블리싱할 때 인증용으로 사용할 GitHub 개인 액세스 토큰(Personal Access Token)입니다.
+  - *예*: `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`
+* **Default Local Path**: 신규 저장소 생성 및 원격 클론 작업 시 기본으로 사용할 로컬 부모 디렉터리 경로입니다.
+  - *예*: `C:\Users\dhkima\github`
+* **Organization Name**: 관리자 모드에서 신규 비공개 저장소를 자동 개설할 대상 GitHub 조직(Organization)의 이름입니다.
+  - *예*: `mech-higenmotor`
+
+### 4.2 기본 작업 워크플로우
+
+1. **워크스페이스 등록**:
+   - `Dashboard` 화면 중앙의 `Repository Configuration` 카드 내에서 **Local Path**를 사용자의 실제 작업 폴더 경로로 설정합니다. 유효한 Git 저장소일 경우 우측에 `(🟢 Active)` 표시와 현재의 브랜치 정보가 갱신됩니다.
+2. **개발용 개인 브랜치 생성**:
+   - 대시보드에서 **[Make my branch]** 버튼을 누르면 현재 GitHub 계정 명칭 혹은 로컬 명칭과 동일한 이름의 전용 브랜치를 생성하고 자동으로 원격 origin에 Ref를 주입하며 업스트림으로 전환됩니다. (이미 동일한 브랜치가 존재하는 경우 버튼은 비활성화 처리되어 텍스트가 노출되지 않도록 가려집니다.)
+3. **SolidWorks 부품 설계 및 자동 잠금**:
+   - SolidWorks에서 파트나 어셈블리 파일을 오픈하여 수정을 시작하는 즉시 백그라운드 모니터에 의해 `git lfs lock` 명령이 실행됩니다. 타 협업 개발자가 원격 상태를 새로고침하면 해당 도면이 "잠김" 상태로 표시되므로 수정 소실 걱정 없이 안전하게 협업이 유지됩니다.
+4. **저장 및 버전 업로드 (Check-in)**:
+   - 파일 수정이 완료되면 `File Manager` 탭으로 이동합니다.
+   - 단일 또는 다중 선택 상태에서 **[Upload Selected File Version]** 또는 워크스페이스 내 수정/신규 파일을 모두 스테이징하여 커밋하고 즉시 원격 브랜치로 게시해 주는 **[Upload Every Files Version]** 버튼을 통해 업로드합니다.
+5. **도면 확인 및 복원 (History Log)**:
+   - 특정 이력 버전을 확인하거나 되돌려야 할 때는 `History log` 모드에 진입합니다. 원하는 커밋 줄을 더블클릭하면 해당 커밋 상태로 소스 및 CAD 도면들이 즉시 롤백 복원됩니다.
+
+### 4.3 관리자 기능 (Maintainer Mode)
+* **저장소 생성 및 배포 (Make New Repository)**: 신규 CAD 관리용 프로젝트를 기획 시, 저장소 이름을 입력하고 **[Make]** 버튼을 실행하면 GitHub 조직 하위에 Private 저장소를 생성하고 템플릿 파일(`.gitattributes`, `.gitignore`)을 주입한 뒤 main/user 브랜치 배포까지의 모든 복잡한 과정을 단 몇 초 만에 자동으로 마칩니다.
+* **일괄 병합 (Merge all branches into main)**: 프로젝트 리더가 개발 브랜치들의 모든 진척 상황을 병합하려 할 때 실행합니다. 병합 도중 충돌(Conflict)이 감치되면 Ours(main 유지) 또는 Theirs(개발 브랜치 이식)를 묻는 팝업 다이어로그를 띄워 백그라운드 스레드에서 안전하고 순차적으로 병합 처리를 진행해 줍니다.
