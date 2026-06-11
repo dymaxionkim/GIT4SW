@@ -2399,6 +2399,19 @@ class GIT4SWApp(tk.Tk):
         self.btn_clone.state(["disabled"])
         self.write_log(f"Starting cloning process from {remote_url}...", "info")
         
+        github_token = config_data.get("github_token", "").strip()
+        authenticated_url = remote_url
+        if github_token and "github.com" in remote_url.lower():
+            match = re.match(r'^(https?://)(github\.com/.*)$', remote_url, re.IGNORECASE)
+            if match:
+                prefix, rest = match.groups()
+                authenticated_url = f"{prefix}{github_token}@{rest}"
+                
+        def redact_token(text):
+            if github_token and len(github_token) >= 8:
+                return text.replace(github_token, "***")
+            return text
+
         orig_workspace_path = self.workspace_path
         orig_git_service = self.git_service
         
@@ -2406,7 +2419,8 @@ class GIT4SWApp(tk.Tk):
             self.increment_tasks()
             try:
                 try:
-                    res = temp_service.clone_repository(remote_url)
+                    res = temp_service.clone_repository(authenticated_url)
+                    clean_res = redact_token(res)
                     
                     def on_success():
                         self.workspace_path = local_dir
@@ -2417,14 +2431,15 @@ class GIT4SWApp(tk.Tk):
                         self.refresh_history()
                         self.write_log(f"Clone completed successfully and workspace updated to: {local_dir}", "success")
                         
-                    self.task_queue.put(('success', f"Clone complete successfully!\n{res}", on_success))
+                    self.task_queue.put(('success', f"Clone complete successfully!\n{clean_res}", on_success))
                 except Exception as e:
+                    clean_err = redact_token(str(e))
                     def on_failure():
                         self.workspace_path = orig_workspace_path
                         self.git_service = orig_git_service
                         self.refresh_dashboard()
                         
-                    self.task_queue.put(('error', f"Clone failed:\n{e}", on_failure))
+                    self.task_queue.put(('error', f"Clone failed:\n{clean_err}", on_failure))
             finally:
                 self.decrement_tasks()
                 # Restore button text
