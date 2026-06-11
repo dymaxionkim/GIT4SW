@@ -262,6 +262,19 @@ class GIT4SWApp(tk.Tk):
         self.option_add("*TCombobox*Listbox.selectBackground", "#d1fae5")
         self.option_add("*TCombobox*Listbox.selectForeground", "#065f46")
 
+        # Entry (ensure no gray border/padding bleeds through on card backgrounds)
+        style.configure("TEntry",
+                        fieldbackground="#ffffff",
+                        background="#ffffff",
+                        foreground="#1f2937",
+                        insertcolor="#1f2937",
+                        borderwidth=1,
+                        relief="solid",
+                        padding=4)
+        style.map("TEntry",
+                  fieldbackground=[("disabled", "#f3f4f6"), ("readonly", "#f9fafb")],
+                  foreground=[("disabled", "#9ca3af")])
+
     def init_ui(self):
         # Master Layout (Sidebar + Stacked content frame)
         self.main_container = tk.Frame(self, bg="#f3f4f6")
