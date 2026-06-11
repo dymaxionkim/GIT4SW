@@ -839,7 +839,7 @@ class GIT4SWApp(tk.Tk):
     def refresh_dashboard(self):
         self.update_repo_branch_info()
         self.ent_local_dir.delete(0, tk.END)
-        self.ent_local_dir.insert(0, self.workspace_path)
+        self.ent_local_dir.insert(0, os.path.normpath(self.workspace_path))
         
         if not self.git_service.is_git_repo():
             self.lbl_local_status.config(text="⚠️ Not a Git Repo", foreground="#ef4444")
@@ -2137,7 +2137,7 @@ class GIT4SWApp(tk.Tk):
                     
                     # Update local path entry text
                     self.ent_local_dir.delete(0, tk.END)
-                    self.ent_local_dir.insert(0, local_repo_path)
+                    self.ent_local_dir.insert(0, os.path.normpath(local_repo_path))
                     
                     # Refresh all views
                     self.refresh_dashboard()
@@ -2369,9 +2369,8 @@ class GIT4SWApp(tk.Tk):
         if not config_ws:
             config_ws = self.workspace_path
             
-        # Discard the existing Local Path and construct a new one: default_local_path + "/" + repo_name
-        ws_clean = config_ws.replace("\\", "/").rstrip("/")
-        local_dir = f"{ws_clean}/{repo_name}"
+        # Discard the existing Local Path and construct a new one: default_local_path \ repo_name
+        local_dir = os.path.normpath(os.path.join(config_ws, repo_name))
         
         self.ent_local_dir.delete(0, tk.END)
         self.ent_local_dir.insert(0, local_dir)
@@ -2537,24 +2536,24 @@ class GIT4SWApp(tk.Tk):
             initial_dir = self.workspace_path
             # Reset entry text since the typed path was invalid
             self.ent_local_dir.delete(0, tk.END)
-            self.ent_local_dir.insert(0, self.workspace_path)
+            self.ent_local_dir.insert(0, os.path.normpath(self.workspace_path))
             
         dir_path = filedialog.askdirectory(initialdir=initial_dir, title="Select Project Folder")
         if dir_path:
-            self.workspace_path = dir_path
+            self.workspace_path = os.path.normpath(dir_path)
             self.git_service = GitService(self.workspace_path)
             
             # Save workspace path to config.json
-            self.save_workspace_to_config(dir_path)
+            self.save_workspace_to_config(self.workspace_path)
             
             self.refresh_dashboard()
             self.refresh_file_list()
             self.refresh_history()
-            self.write_log(f"Switched project workspace to: {dir_path}", "success")
+            self.write_log(f"Switched project workspace to: {self.workspace_path}", "success")
         else:
             # If user cancelled, ensure the entry has the current valid workspace path
             self.ent_local_dir.delete(0, tk.END)
-            self.ent_local_dir.insert(0, self.workspace_path)
+            self.ent_local_dir.insert(0, os.path.normpath(self.workspace_path))
 
     def save_workspace_to_config(self, path):
         config_path = "config.json"
