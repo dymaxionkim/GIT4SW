@@ -255,9 +255,14 @@ class GitService:
 
             # Filter out directories ignored by .gitignore
             if dirs:
-                dir_paths = [os.path.join(root, d) for d in dirs]
                 try:
-                    cmd_args = ["git", "check-ignore", "-z"] + dir_paths
+                    # Construct relative paths with forward slashes and trailing slashes for git check-ignore
+                    rel_dir_paths = []
+                    for d in dirs:
+                        rel_path = os.path.relpath(os.path.join(root, d), self.repo_path).replace("\\", "/")
+                        rel_dir_paths.append(rel_path + "/")
+                        
+                    cmd_args = ["git", "check-ignore", "-z"] + rel_dir_paths
                     if cmd_args[0] == "git" and self.git_path and os.path.exists(self.git_path):
                         cmd_args[0] = self.git_path
                     result = subprocess.run(
@@ -275,7 +280,7 @@ class GitService:
                         )
                         dirs[:] = [
                             d for d in dirs
-                            if os.path.join(root, d) not in ignored_paths
+                            if (os.path.relpath(os.path.join(root, d), self.repo_path).replace("\\", "/") + "/") not in ignored_paths
                         ]
                 except Exception:
                     pass
