@@ -728,9 +728,10 @@ class GIT4SWApp(tk.Tk):
         
         txt_about.insert("insert", "Core Engine: GitPython, Git CLI & Git LFS, Solidworks & eDrawings\n")
         txt_about.insert("insert", "Developer: dhkima@higenrnm.com\n")
-        txt_about.insert("insert", "이 소프트웨어는 ")
+        txt_about.insert("insert", "License: GNU GPLv3\n")
+        txt_about.insert("insert", "This software is distributed from the ")
         txt_about.insert("insert", "https://codeberg.org/dymaxionkim/GIT4SW", "link")
-        txt_about.insert("insert", " 저장소에서 배포하고 있습니다.\n\n")
+        txt_about.insert("insert", " repository.\n\n")
         
         about_body = (
             "Description:\n"
