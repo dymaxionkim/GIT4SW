@@ -2355,7 +2355,25 @@ class GIT4SWApp(tk.Tk):
             try:
                 try:
                     result = self.git_service.merge_branch(source)
-                    self.task_queue.put(('success', f"Merge complete:\n{result}", self.refresh_dashboard))
+                    
+                    # 1. Push current branch to remote
+                    push_msg = ""
+                    remote_url = self.git_service.get_remote_url()
+                    if remote_url and current:
+                        self.write_log(f"Pushing merged branch '{current}' to remote...", "info")
+                        try:
+                            self.git_service._run_lfs_cmd(["git", "push", "-u", "origin", current])
+                            push_msg = f"\n\nSuccessfully pushed branch '{current}' to remote."
+                        except Exception as pe:
+                            push_msg = f"\n\nWarning: Push failed:\n{pe}"
+                            
+                    # 2. Return to the original branch state (ensure checkout)
+                    try:
+                        self.git_service.switch_branch(current, force=False)
+                    except Exception as se:
+                        print(f"Failed to switch back to original branch '{current}': {se}")
+
+                    self.task_queue.put(('success', f"Merge complete:\n{result}{push_msg}", self.refresh_dashboard))
                 except MergeConflictError as ce:
                     self.task_queue.put(('merge_conflict', {
                         'files': ce.conflicted_files,
@@ -2730,9 +2748,27 @@ class GIT4SWApp(tk.Tk):
                 try:
                     try:
                         result = self.git_service.resolve_merge_conflicts(strategy, conflicted_files)
+                        
+                        # 1. Push current branch to remote
+                        push_msg = ""
+                        remote_url = self.git_service.get_remote_url()
+                        if remote_url and current_branch:
+                            self.write_log(f"Pushing merged branch '{current_branch}' to remote...", "info")
+                            try:
+                                self.git_service._run_lfs_cmd(["git", "push", "-u", "origin", current_branch])
+                                push_msg = f"\n\nSuccessfully pushed branch '{current_branch}' to remote."
+                            except Exception as pe:
+                                push_msg = f"\n\nWarning: Push failed:\n{pe}"
+                                
+                        # 2. Return to the original branch state (ensure checkout)
+                        try:
+                            self.git_service.switch_branch(current_branch, force=False)
+                        except Exception as se:
+                            print(f"Failed to switch back to original branch '{current_branch}': {se}")
+
                         self.task_queue.put((
                             'success',
-                            f"Resolved conflicts using version from {label} and completed merge.\n\n{result}",
+                            f"Resolved conflicts using version from {label} and completed merge.\n\n{result}{push_msg}",
                             self.refresh_dashboard
                         ))
                     except Exception as e:
