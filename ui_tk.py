@@ -1415,27 +1415,6 @@ class GIT4SWApp(tk.Tk):
         btn_save_frm = ttk.Frame(save_card, style="TFrame")
         btn_save_frm.pack(fill="x", padx=8, pady=(2, 6))
         
-        # Load predefined commit messages from commit.json
-        commit_messages = [""]
-        commit_json_path = os.path.join(self.workspace_path, "commit.json")
-        if os.path.exists(commit_json_path):
-            try:
-                import json
-                with open(commit_json_path, "r", encoding="utf-8") as f:
-                    data = json.load(f)
-                    if isinstance(data, list):
-                        commit_messages.extend(data)
-            except Exception as e:
-                print(f"Error loading commit.json: {e}")
-        else:
-            commit_messages.extend([
-                "feat: Add new parts or assemblies",
-                "fix: Correct geometry errors or modeling issues",
-                "refactor: Clean up design feature tree or references",
-                "docs: Update drawings, annotations, or bill of materials (BOM)",
-                "chore: Clean up temporary files or modify configurations"
-            ])
-
         # Pack buttons first on the right side
         self.btn_save_all = ttk.Button(btn_save_frm, text="Upload Every Files Version", style="Primary.TButton", command=self.save_all_versions)
         self.btn_save_all.pack(side="right")
@@ -1444,10 +1423,13 @@ class GIT4SWApp(tk.Tk):
         self.btn_save_ver.pack(side="right", padx=(0, 8))
         
         # Commit message selection combobox (stretched to the left end)
-        self.cb_commit_msg = ttk.Combobox(btn_save_frm, state="readonly", values=commit_messages)
+        self.cb_commit_msg = ttk.Combobox(btn_save_frm, state="readonly")
         self.cb_commit_msg.set("")
         self.cb_commit_msg.pack(side="left", fill="x", expand=True, padx=(0, 8))
         self.cb_commit_msg.bind("<<ComboboxSelected>>", self.on_commit_msg_selected)
+        
+        # Load predefined commit messages from commit.json
+        self.load_commit_messages()
         
         return view
 
@@ -1502,6 +1484,36 @@ class GIT4SWApp(tk.Tk):
 
     def on_sort_order_selected(self, event):
         self.populate_file_table()
+
+    def load_commit_messages(self):
+        commit_messages = [""]
+        commit_json_path = os.path.join(self.workspace_path, "commit.json")
+        if not os.path.exists(commit_json_path):
+            script_dir = os.path.dirname(os.path.abspath(__file__))
+            commit_json_path = os.path.join(script_dir, "commit.json")
+            
+        if os.path.exists(commit_json_path):
+            try:
+                import json
+                with open(commit_json_path, "r", encoding="utf-8") as f:
+                    data = json.load(f)
+                    if isinstance(data, list):
+                        commit_messages.extend(data)
+            except Exception as e:
+                print(f"Error loading commit.json: {e}")
+        else:
+            commit_messages.extend([
+                "feat: Add new parts or assemblies",
+                "fix: Correct geometry errors or modeling issues",
+                "refactor: Clean up design feature tree or references",
+                "docs: Update drawings, annotations, or bill of materials (BOM)",
+                "chore: Clean up temporary files or modify configurations"
+            ])
+        if hasattr(self, 'cb_commit_msg'):
+            self.cb_commit_msg['values'] = commit_messages
+            current = self.cb_commit_msg.get()
+            if current not in commit_messages:
+                self.cb_commit_msg.set("")
 
     def on_commit_msg_selected(self, event):
         selected = self.cb_commit_msg.get()
@@ -2776,6 +2788,7 @@ class GIT4SWApp(tk.Tk):
                         self.workspace_path = local_dir
                         self.git_service = temp_service
                         self.save_workspace_to_config(local_dir)
+                        self.load_commit_messages()
                         self.refresh_dashboard()
                         self.refresh_file_list()
                         self.refresh_history()
@@ -2906,6 +2919,9 @@ class GIT4SWApp(tk.Tk):
             
             # Save workspace path to config.json
             self.save_workspace_to_config(self.workspace_path)
+            
+            # Reload commit templates for the new workspace
+            self.load_commit_messages()
             
             self.refresh_dashboard()
             self.refresh_file_list()
