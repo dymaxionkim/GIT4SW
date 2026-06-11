@@ -1874,18 +1874,19 @@ class GIT4SWApp(tk.Tk):
                         
                 other_branches = [b for b in remote_branches if b != 'main']
                 
-                # Sequentially checkout other branches and pull/merge origin/b
+                # Sequentially checkout other branches and fetch+merge origin/b
                 for b in other_branches:
-                    self.write_log(f"Checking out and pulling branch '{b}'...", "info")
+                    self.write_log(f"Checking out and updating branch '{b}'...", "info")
                     repo.git.checkout(b)
                     
-                    # Merge origin/b into b, auto-resolving conflicts using 'theirs'
+                    # Fetch remote then merge, always using merge strategy with -Xtheirs
                     try:
-                        self.git_service._run_lfs_cmd(["git", "pull", "origin", b, "-Xtheirs", "--no-edit"])
-                        self.write_log(f"Fast-forwarded/merged branch '{b}' from remote origin.", "success")
+                        self.git_service._run_lfs_cmd(["git", "fetch", "origin", b])
+                        self.git_service._run_lfs_cmd(["git", "merge", f"origin/{b}", "--no-edit", "-Xtheirs"])
+                        self.write_log(f"Merged remote origin/{b} into local '{b}' successfully.", "success")
                     except Exception as pull_err:
-                        self.write_log(f"Warning: git pull for '{b}' failed, attempting to resolve conflicts: {pull_err}", "warning")
-                        # If pull failed due to unresolved conflicts, try to checkout --theirs on conflicts
+                        self.write_log(f"Warning: merge for '{b}' failed, attempting to resolve conflicts: {pull_err}", "warning")
+                        # If merge failed due to unresolved conflicts, resolve using theirs
                         conflicted_paths = self.git_service.get_merge_conflicts()
                         if conflicted_paths:
                             for f in conflicted_paths:
@@ -1902,14 +1903,15 @@ class GIT4SWApp(tk.Tk):
                         else:
                             raise pull_err
                 
-                # Switch to main and pull origin/main
-                self.write_log("Switching to main branch and pulling origin/main...", "info")
+                # Switch to main and fetch+merge origin/main
+                self.write_log("Switching to main branch and updating from origin/main...", "info")
                 repo.git.checkout("main")
                 try:
-                    self.git_service._run_lfs_cmd(["git", "pull", "origin", "main", "-Xtheirs", "--no-edit"])
-                    self.write_log("main branch is up to date / pulled remote updates.", "success")
+                    self.git_service._run_lfs_cmd(["git", "fetch", "origin", "main"])
+                    self.git_service._run_lfs_cmd(["git", "merge", "origin/main", "--no-edit", "-Xtheirs"])
+                    self.write_log("main branch is up to date / merged remote updates.", "success")
                 except Exception as pull_err:
-                    self.write_log(f"Warning: git pull for main failed, attempting auto-resolution: {pull_err}", "warning")
+                    self.write_log(f"Warning: merge for main failed, attempting auto-resolution: {pull_err}", "warning")
                     conflicted_paths = self.git_service.get_merge_conflicts()
                     if conflicted_paths:
                         for f in conflicted_paths:
