@@ -766,7 +766,7 @@ class GIT4SWApp(tk.Tk):
         local_frm = ttk.Frame(repo_card, style="TFrame")
         local_frm.pack(fill="x", padx=12, pady=(2, 2))
         
-        lbl_local_title = ttk.Label(local_frm, text="Local Path:", style="Card.TLabel")
+        lbl_local_title = ttk.Label(local_frm, text="Local Path:", style="Card.TLabel", width=15, anchor="w")
         lbl_local_title.pack(side="left")
         
         self.ent_local_dir = ttk.Entry(local_frm)
@@ -775,27 +775,27 @@ class GIT4SWApp(tk.Tk):
         self.lbl_local_status = ttk.Label(local_frm, text="", style="Card.TLabel")
         self.lbl_local_status.pack(side="left", padx=(0, 8))
         
-        self.btn_change_ws = ttk.Button(local_frm, text="Change Workspace", command=self.change_workspace)
+        self.btn_change_ws = ttk.Button(local_frm, text="Change Workspace", command=self.change_workspace, width=18)
         self.btn_change_ws.pack(side="right", padx=(8, 0))
         
         # Remote Server Frame with Clone button
         remote_frm = ttk.Frame(repo_card, style="TFrame")
         remote_frm.pack(fill="x", padx=12, pady=(2, 2))
         
-        lbl_remote_title = ttk.Label(remote_frm, text="Remote Server:", style="Card.TLabel")
+        lbl_remote_title = ttk.Label(remote_frm, text="Remote Server:", style="Card.TLabel", width=15, anchor="w")
         lbl_remote_title.pack(side="left")
         
         self.ent_remote_url = ttk.Entry(remote_frm)
         self.ent_remote_url.pack(side="left", fill="x", expand=True, padx=(8, 8))
         
-        self.btn_clone = ttk.Button(remote_frm, text="Clone", command=self.clone_repository)
+        self.btn_clone = ttk.Button(remote_frm, text="Clone", command=self.clone_repository, width=18)
         self.btn_clone.pack(side="right", padx=(8, 0))
         
         # Branch Selection frame
         branch_frm = ttk.Frame(repo_card, style="TFrame")
         branch_frm.pack(fill="x", padx=12, pady=(2, 2))
         
-        lbl_branch = ttk.Label(branch_frm, text="Active Branch:", style="Card.TLabel")
+        lbl_branch = ttk.Label(branch_frm, text="Active Branch:", style="Card.TLabel", width=15, anchor="w")
         lbl_branch.pack(side="left", padx=(0, 8))
         
         self.cb_branch = ttk.Combobox(branch_frm, state="readonly", width=30)
