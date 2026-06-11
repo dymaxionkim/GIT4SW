@@ -1859,12 +1859,18 @@ class GIT4SWApp(tk.Tk):
                     
                 self.write_log(f"Found remote branches: {remote_branches}", "info")
                 
-                # Ensure we have local counterparts for all remote branches
-                local_branch_names = [b.name for b in repo.branches]
+                # Ensure we have local counterparts for all remote branches,
+                # force-resetting any that already exist to match the remote ref.
+                # Skip the currently checked-out branch (cannot force-reset it while checked out).
+                current_branch_now = self.git_service.get_current_branch() or ""
                 for b in remote_branches:
-                    if b not in local_branch_names:
-                        repo.create_head(b, f"origin/{b}")
-                        self.write_log(f"Created local counterpart branch for '{b}'", "info")
+                    if b == current_branch_now:
+                        continue
+                    try:
+                        self.git_service._run_lfs_cmd(["git", "branch", "-f", b, f"origin/{b}"])
+                        self.write_log(f"Local branch '{b}' set to track origin/{b}", "info")
+                    except Exception as be:
+                        self.write_log(f"Warning: could not reset branch '{b}' to origin/{b}: {be}", "warning")
                         
                 other_branches = [b for b in remote_branches if b != 'main']
                 
