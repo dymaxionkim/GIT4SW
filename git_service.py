@@ -84,6 +84,34 @@ class GitService:
         self._load_repo()
         return self.repo is not None
 
+    def clone_repository(self, remote_url):
+        """Clones a remote repository into self.repo_path."""
+        parent_dir = os.path.dirname(self.repo_path)
+        if not os.path.exists(parent_dir):
+            os.makedirs(parent_dir, exist_ok=True)
+            
+        cmd_args = ["git", "clone", remote_url, self.repo_path]
+        if self.git_path and os.path.exists(self.git_path):
+            cmd_args[0] = self.git_path
+
+        try:
+            result = subprocess.run(
+                cmd_args,
+                cwd=parent_dir,
+                capture_output=True,
+                text=True,
+                check=True,
+                encoding="utf-8",
+                errors="ignore"
+            )
+            self._load_repo()
+            return result.stdout.strip()
+        except subprocess.CalledProcessError as e:
+            err_msg = e.stderr.strip() if e.stderr else str(e)
+            raise RuntimeError(f"Git clone failed: {err_msg}")
+        except FileNotFoundError:
+            raise RuntimeError("Git CLI is not installed or not found on system PATH.")
+
     def initialize_repository(self, remote_url=None):
         """Initializes a new git repository, configures LFS for SolidWorks, and adds remote."""
         if not self.is_git_repo():

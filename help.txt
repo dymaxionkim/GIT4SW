@@ -14,8 +14,10 @@ The Dashboard is the central cockpit of the application, showing repository conf
   - Displays the absolute path to your active local Git repository.
 • Change Workspace (Button)
   - Opens a folder chooser dialog to switch the workspace to another Git repository directory.
-• Remote Server (Label)
-  - Displays the remote repository URL (e.g., Codeberg, GitHub) currently linked to the workspace.
+• Remote Server (Text Field & Entry)
+  - Displays the remote repository URL currently linked to the workspace, or allows you to enter a URL to clone a new repository.
+• Clone (Button)
+  - Clones the Git repository from the Remote Server URL into the directory specified in Local Path.
 • Active Branch (Combobox/Dropdown)
   - Displays the currently checked-out branch. Selecting a different branch from this dropdown automatically switches (checkouts) the workspace to that branch.
 • Make my branch (Button)

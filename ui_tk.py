@@ -778,8 +778,18 @@ class GIT4SWApp(tk.Tk):
         self.btn_change_ws = ttk.Button(local_frm, text="Change Workspace", command=self.change_workspace)
         self.btn_change_ws.pack(side="right", padx=(8, 0))
         
-        self.lbl_remote_url = ttk.Label(repo_card, text="Remote Server: Loading...", style="Card.TLabel")
-        self.lbl_remote_url.pack(anchor="w", padx=12, pady=1)
+        # Remote Server Frame with Clone button
+        remote_frm = ttk.Frame(repo_card, style="TFrame")
+        remote_frm.pack(fill="x", padx=12, pady=(2, 2))
+        
+        lbl_remote_title = ttk.Label(remote_frm, text="Remote Server:", style="Card.TLabel")
+        lbl_remote_title.pack(side="left")
+        
+        self.ent_remote_url = ttk.Entry(remote_frm)
+        self.ent_remote_url.pack(side="left", fill="x", expand=True, padx=(8, 8))
+        
+        self.btn_clone = ttk.Button(remote_frm, text="Clone", command=self.clone_repository)
+        self.btn_clone.pack(side="right", padx=(8, 0))
         
         # Branch Selection frame
         branch_frm = ttk.Frame(repo_card, style="TFrame")
@@ -833,18 +843,18 @@ class GIT4SWApp(tk.Tk):
         
         if not self.git_service.is_git_repo():
             self.lbl_local_status.config(text="⚠️ Not a Git Repo", foreground="#ef4444")
-            self.lbl_remote_url.config(text="Remote Server: Repository not initialized")
             self.btn_sync.state(["disabled"])
+            self.btn_clone.state(["!disabled"])
             self.cb_branch.config(values=[], state="disabled")
             self.btn_make_my_branch.config(state="disabled")
         else:
             self.lbl_local_status.config(text="🟢 Git Repo Active", foreground="#10b981")
             url = self.git_service.get_remote_url()
+            self.ent_remote_url.delete(0, tk.END)
             if url:
-                self.lbl_remote_url.config(text=f"Remote Server: {url}")
-            else:
-                self.lbl_remote_url.config(text="Remote Server: Not configured (Local Repository)")
+                self.ent_remote_url.insert(0, url)
             self.btn_sync.state(["!disabled"])
+            self.btn_clone.state(["disabled"])
             self.btn_make_my_branch.config(state="disabled")
             self.load_branches_in_combo()
 
@@ -2328,6 +2338,50 @@ class GIT4SWApp(tk.Tk):
                 
         threading.Thread(target=run, daemon=True).start()
 
+    def clone_repository(self):
+        remote_url = self.ent_remote_url.get().strip()
+        if not remote_url:
+            self.write_log("Please enter a Remote Server URL to clone.", "warning")
+            return
+            
+        local_dir = self.ent_local_dir.get().strip()
+        if not local_dir:
+            self.write_log("Please specify a Local Path first.", "warning")
+            return
+            
+        # Confirm with user
+        ans = messagebox.askyesno(
+            "Confirm Clone",
+            f"Are you sure you want to clone repository:\n'{remote_url}'\n\ninto local path:\n'{local_dir}'?"
+        )
+        if not ans:
+            return
+            
+        self.btn_clone.config(text="Cloning...")
+        self.btn_clone.state(["disabled"])
+        self.write_log(f"Starting cloning process from {remote_url}...", "info")
+        
+        # Temporarily update workspace path
+        self.workspace_path = local_dir
+        self.git_service = GitService(self.workspace_path)
+        
+        def run():
+            self.increment_tasks()
+            try:
+                try:
+                    res = self.git_service.clone_repository(remote_url)
+                    self.task_queue.put(('success', f"Clone complete successfully!\n{res}", self.refresh_dashboard))
+                except Exception as e:
+                    self.task_queue.put(('error', f"Clone failed:\n{e}", self.refresh_dashboard))
+            finally:
+                self.decrement_tasks()
+                # Restore button text
+                def restore_btn():
+                    self.btn_clone.config(text="Clone")
+                self.task_queue.put(('callback', None, restore_btn))
+                
+        threading.Thread(target=run, daemon=True).start()
+
     def merge_main_branch(self):
         """Merges the main branch into the current branch."""
         current = self.git_service.get_current_branch()
@@ -2801,22 +2855,38 @@ class GIT4SWApp(tk.Tk):
                 
                 # Only restore button states when no background tasks are running
                 if self.bg_tasks_count == 0:
+                    is_repo = self.git_service.is_git_repo()
                     self.btn_lock.config(text="Lock (Checkout)")
-                    self.btn_lock.state(["!disabled"])
-                    self.btn_unlock.state(["!disabled"])
-                    self.btn_force_unlock.state(["!disabled"])
+                    if is_repo:
+                        self.btn_lock.state(["!disabled"])
+                        self.btn_unlock.state(["!disabled"])
+                        self.btn_force_unlock.state(["!disabled"])
+                        self.btn_save_ver.state(["!disabled"])
+                        self.btn_save_all.state(["!disabled"])
+                        self.btn_sync.state(["!disabled"])
+                        self.btn_merge.state(["!disabled"])
+                        self.btn_discard.state(["!disabled"])
+                        if hasattr(self, 'btn_clone'):
+                            self.btn_clone.state(["disabled"])
+                    else:
+                        self.btn_lock.state(["disabled"])
+                        self.btn_unlock.state(["disabled"])
+                        self.btn_force_unlock.state(["disabled"])
+                        self.btn_save_ver.state(["disabled"])
+                        self.btn_save_all.state(["disabled"])
+                        self.btn_sync.state(["disabled"])
+                        self.btn_merge.state(["disabled"])
+                        self.btn_discard.state(["disabled"])
+                        if hasattr(self, 'btn_clone'):
+                            self.btn_clone.state(["!disabled"])
+                            
                     self.btn_save_ver.config(text="Upload Selected File Version")
-                    self.btn_save_ver.state(["!disabled"])
                     self.btn_save_all.config(text="Upload Every Files Version")
-                    self.btn_save_all.state(["!disabled"])
                     self.btn_sync.config(text="Get Latest Version (Sync)")
-                    self.btn_sync.state(["!disabled"])
-                    self.btn_merge.state(["!disabled"])
                     self.btn_restore.state(["!disabled"])
                     self.btn_restore_latest.state(["!disabled"])
                     self.btn_edrawings.state(["!disabled"])
                     self.btn_solidworks.state(["!disabled"])
-                    self.btn_discard.state(["!disabled"])
                 
                 if msg_type == 'success':
                     self.write_log(content, "success")
