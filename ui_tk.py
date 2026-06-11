@@ -763,7 +763,7 @@ class GIT4SWApp(tk.Tk):
         lbl_repo_title.pack(anchor="w", padx=12, pady=(8, 2))
         
         # Local Path Frame with Change button
-        local_frm = ttk.Frame(repo_card, style="TFrame")
+        local_frm = ttk.Frame(repo_card, style="Card.TFrame")
         local_frm.pack(fill="x", padx=12, pady=(2, 2))
         
         lbl_local_title = ttk.Label(local_frm, text="Local Path:", style="Card.TLabel", width=15, anchor="w")
@@ -779,7 +779,7 @@ class GIT4SWApp(tk.Tk):
         self.btn_change_ws.pack(side="right", padx=(8, 0))
         
         # Remote Server Frame with Clone button
-        remote_frm = ttk.Frame(repo_card, style="TFrame")
+        remote_frm = ttk.Frame(repo_card, style="Card.TFrame")
         remote_frm.pack(fill="x", padx=12, pady=(2, 2))
         
         lbl_remote_title = ttk.Label(remote_frm, text="Remote Server:", style="Card.TLabel", width=15, anchor="w")
@@ -792,8 +792,8 @@ class GIT4SWApp(tk.Tk):
         self.btn_clone.pack(side="right", padx=(8, 0))
         
         # Branch Selection frame
-        branch_frm = ttk.Frame(repo_card, style="TFrame")
-        branch_frm.pack(fill="x", padx=12, pady=(2, 2))
+        branch_frm = ttk.Frame(repo_card, style="Card.TFrame")
+        branch_frm.pack(fill="x", padx=12, pady=(2, 8))
         
         lbl_branch = ttk.Label(branch_frm, text="Active Branch:", style="Card.TLabel", width=15, anchor="w")
         lbl_branch.pack(side="left", padx=(0, 8))
