@@ -16,246 +16,79 @@ class CustomFileTable(tk.Frame):
     def __init__(self, parent):
         super().__init__(parent, bg="#ffffff")
         
-        # Get system default fonts
-        self.default_font = tkfont.nametofont("TkDefaultFont")
-        self.bold_font = self.default_font.copy()
-        self.bold_font.configure(weight="bold")
-        
-        # Container to align header and canvas perfectly without scrollbar width offset
-        self.left_container = tk.Frame(self, bg="#ffffff")
-        self.left_container.pack(side="left", fill="both", expand=True)
-        
-        # 1. Header Frame (fixed at top, inside left_container)
-        self.header_frame = tk.Frame(self.left_container, bg="#f3f4f6", height=32)
-        self.header_frame.pack(fill="x")
-        self.header_frame.pack_propagate(False)
-        self.header_frame.grid_columnconfigure(0, weight=1)
-        self.header_frame.grid_rowconfigure(0, weight=1)
-        
-        headers = [
-            ("File Path", "w", None),
-            ("Status", "center", 90),
-            ("SolidWorks", "center", 90),
-            ("Lock Status", "center", 110),
-            ("Locked By", "center", 110)
-        ]
-        
-        for col_idx, (text, anchor, width) in enumerate(headers):
-            if width:
-                f = tk.Frame(self.header_frame, width=width, bg="#f3f4f6")
-                f.pack_propagate(False)
-                lbl = tk.Label(f, text=text, bg="#f3f4f6", fg="#374151", font=self.bold_font, anchor=anchor)
-                lbl.pack(fill="both", expand=True)
-                f.grid(row=0, column=col_idx, sticky="ns")
-            else:
-                lbl = tk.Label(self.header_frame, text=text, bg="#f3f4f6", fg="#374151", font=self.bold_font, anchor=anchor, padx=8)
-                lbl.grid(row=0, column=col_idx, sticky="ew")
-                
-        # Header bottom border line
-        self.header_divider = tk.Frame(self.left_container, height=1, bg="#e5e7eb")
-        self.header_divider.pack(fill="x")
-        
-        # 2. Scrollable Canvas (inside left_container)
-        self.canvas = tk.Canvas(self.left_container, borderwidth=0, highlightthickness=0, bg="#ffffff")
-        self.scrollbar = ttk.Scrollbar(self, orient="vertical", command=self.canvas.yview)
-        
-        self.scrollable_frame = tk.Frame(self.canvas, bg="#ffffff")
-        self.scrollable_frame.bind(
-            "<Configure>",
-            lambda e: self.canvas.configure(scrollregion=self.canvas.bbox("all"))
+        # Create Treeview
+        self.treeview = ttk.Treeview(
+            self,
+            columns=("path", "status", "solidworks", "locked", "by"),
+            show="headings",
+            selectmode="extended"
         )
         
-        self.canvas_window = self.canvas.create_window((0, 0), window=self.scrollable_frame, anchor="nw")
-        self.canvas.bind("<Configure>", lambda e: self.canvas.itemconfig(self.canvas_window, width=e.width))
-        self.canvas.configure(yscrollcommand=self.scrollbar.set)
+        # Create Scrollbar
+        self.scrollbar = ttk.Scrollbar(self, orient="vertical", command=self.treeview.yview)
+        self.treeview.configure(yscrollcommand=self.scrollbar.set)
         
-        self.canvas.pack(side="left", fill="both", expand=True)
+        # Pack them
+        self.treeview.pack(side="left", fill="both", expand=True)
         self.scrollbar.pack(side="right", fill="y")
         
-        # Mousewheel binding setup for Canvas
-        self.canvas.bind("<Enter>", lambda e: self.canvas.bind_all("<MouseWheel>", self._on_mousewheel))
-        self.canvas.bind("<Leave>", lambda e: self.canvas.unbind_all("<MouseWheel>"))
+        # Set headings
+        self.treeview.heading("path", text="File Path", anchor="w")
+        self.treeview.heading("status", text="Status", anchor="center")
+        self.treeview.heading("solidworks", text="SolidWorks", anchor="center")
+        self.treeview.heading("locked", text="Locked", anchor="center")
+        self.treeview.heading("by", text="By", anchor="center")
         
-        # Selection and data structures
-        self.items = {}  # item_id -> dict
-        self.item_ids = []
-        self.selected_item_ids = set()
-        self.last_clicked_id = None
-        self.next_id = 1
+        # Column formatting
+        self.treeview.column("path", anchor="w", stretch=True)
+        self.treeview.column("status", anchor="center", width=90, minwidth=90, stretch=False)
+        self.treeview.column("solidworks", anchor="center", width=90, minwidth=90, stretch=False)
+        self.treeview.column("locked", anchor="center", width=90, minwidth=90, stretch=False)
+        self.treeview.column("by", anchor="center", width=90, minwidth=90, stretch=False)
         
-    def _on_mousewheel(self, event):
-        self.canvas.yview_scroll(int(-1 * (event.delta / 120)), "units")
-        
-    def split_path(self, path):
-        path_norm = path.replace("\\", "/")
-        if "/" in path_norm:
-            dir_part, file_part = path_norm.rsplit("/", 1)
-            dir_part = dir_part + "/"
-        else:
-            dir_part = ""
-            file_part = path_norm
-            
-        name_part, ext_part = os.path.splitext(file_part)
-        return dir_part, name_part, ext_part
-        
-    def _on_row_click(self, item_id, event):
-        is_shift = bool(event.state & 0x0001)
-        is_ctrl = bool(event.state & 0x0004)
-        
-        if is_shift and self.last_clicked_id in self.item_ids:
-            idx1 = self.item_ids.index(self.last_clicked_id)
-            idx2 = self.item_ids.index(item_id)
-            start_idx = min(idx1, idx2)
-            end_idx = max(idx1, idx2)
-            
-            if not is_ctrl:
-                self.selected_item_ids.clear()
-            for i in range(start_idx, end_idx + 1):
-                self.selected_item_ids.add(self.item_ids[i])
-        elif is_ctrl:
-            if item_id in self.selected_item_ids:
-                self.selected_item_ids.remove(item_id)
-            else:
-                self.selected_item_ids.add(item_id)
-                self.last_clicked_id = item_id
-        else:
-            self.selected_item_ids.clear()
-            self.selected_item_ids.add(item_id)
-            self.last_clicked_id = item_id
-            
-        self._update_row_visuals()
-        
-    def _bind_row_click(self, widget, item_id):
-        widget.bind("<Button-1>", lambda e: self._on_row_click(item_id, e))
-        widget.bind("<Enter>", lambda e: self.canvas.bind_all("<MouseWheel>", self._on_mousewheel))
-        widget.bind("<Leave>", lambda e: self.canvas.unbind_all("<MouseWheel>"))
-        for child in widget.winfo_children():
-            self._bind_row_click(child, item_id)
-            
-    def _set_widget_bg(self, widget, bg_color):
-        try:
-            widget.config(bg=bg_color)
-        except Exception:
-            pass
-        for child in widget.winfo_children():
-            self._set_widget_bg(child, bg_color)
-            
-    def _update_row_visuals(self):
-        for idx, item_id in enumerate(self.item_ids):
-            item = self.items[item_id]
-            is_selected = item_id in self.selected_item_ids
-            if is_selected:
-                bg_color = "#e5e7eb"
-            else:
-                bg_color = "#ffffff" if idx % 2 == 0 else "#f9fafb"
-            
-            try:
-                current_bg = item['row_frame'].cget("bg")
-            except Exception:
-                current_bg = ""
-                
-            if current_bg != bg_color:
-                self._set_widget_bg(item['row_frame'], bg_color)
-            
-    def insert(self, parent="", index="end", values=None):
-        item_id = f"item_{self.next_id}"
-        self.next_id += 1
-        
-        row_height = 28
-        
-        row_frame = tk.Frame(self.scrollable_frame, height=row_height, bg="#ffffff")
-        row_frame.pack(fill="x")
-        row_frame.pack_propagate(False)
-        row_frame.grid_columnconfigure(0, weight=1)
-        row_frame.grid_rowconfigure(0, weight=1)
-        
-        path_val, status_val, sw_open_val, lock_val, owner_val = values
-        
-        # Split path and determine colors
-        dir_part, name_part, ext_part = self.split_path(path_val)
-        ext_lower = ext_part.lower()
-        ext_color = {
-            ".sldprt": "#059669",
-            ".sldasm": "#d97706",
-            ".slddrw": "#dc2626",
-        }.get(ext_lower, "#7c3aed")
-        
-        # Col 0: File Path (divided labels packed left-to-right)
-        cell_path_frm = tk.Frame(row_frame, bg="#ffffff")
-        cell_path_frm.grid(row=0, column=0, sticky="w", padx=8)
-        
-        lbl_dir = tk.Label(cell_path_frm, text=dir_part, fg="#000000", font=self.default_font, anchor="w", bg="#ffffff", padx=0, pady=0, bd=0, highlightthickness=0)
-        lbl_dir.pack(side="left", padx=0, pady=0)
-        
-        lbl_name = tk.Label(cell_path_frm, text=name_part, fg=ext_color, font=self.default_font, anchor="w", bg="#ffffff", padx=0, pady=0, bd=0, highlightthickness=0)
-        lbl_name.pack(side="left", padx=0, pady=0)
-        
-        lbl_ext = tk.Label(cell_path_frm, text=ext_part, fg=ext_color, font=self.default_font, anchor="w", bg="#ffffff", padx=0, pady=0, bd=0, highlightthickness=0)
-        lbl_ext.pack(side="left", padx=0, pady=0)
-        
-        cols = [
-            (status_val, 1, 90),
-            (sw_open_val, 2, 90),
-            (lock_val, 3, 110),
-            (owner_val, 4, 110)
-        ]
-        
-        other_lbls = []
-        for val, col_idx, width in cols:
-            f = tk.Frame(row_frame, width=width, height=row_height, bg="#ffffff")
-            f.pack_propagate(False)
-            lbl = tk.Label(f, text=val, fg="#1f2937", font=self.default_font, anchor="center", bg="#ffffff")
-            lbl.pack(fill="both", expand=True, padx=4)
-            f.grid(row=0, column=col_idx, sticky="ns")
-            other_lbls.append((f, lbl))
-            
-        self._bind_row_click(row_frame, item_id)
-        
-        self.items[item_id] = {
-            'values': values,
-            'row_frame': row_frame,
-            'widgets': {
-                'lbl_dir': lbl_dir,
-                'lbl_name': lbl_name,
-                'lbl_ext': lbl_ext,
-                'path_frm': cell_path_frm,
-                'other_lbls': other_lbls
-            }
-        }
-        self.item_ids.append(item_id)
-        
-        self._update_row_visuals()
-        return item_id
-        
-    def delete(self, item_id):
-        if item_id in self.items:
-            self.items[item_id]['row_frame'].destroy()
-            del self.items[item_id]
-            if item_id in self.item_ids:
-                self.item_ids.remove(item_id)
-            if item_id in self.selected_item_ids:
-                self.selected_item_ids.remove(item_id)
-            if self.last_clicked_id == item_id:
-                self.last_clicked_id = None
-            self._update_row_visuals()
-            
-    def selection_add(self, item_id):
-        if item_id in self.items:
-            self.selected_item_ids.add(item_id)
-            self._update_row_visuals()
-            
-    def selection(self):
-        return tuple(self.selected_item_ids)
-        
-    def item(self, item_id, option=None):
-        if item_id in self.items:
-            if option == 'values':
-                return self.items[item_id]['values']
-            return {'values': self.items[item_id]['values']}
-        return None
+        # Define Tags for coloring entire row based on extension
+        self.treeview.tag_configure("sldprt", foreground="#059669")
+        self.treeview.tag_configure("sldasm", foreground="#d97706")
+        self.treeview.tag_configure("slddrw", foreground="#dc2626")
+        self.treeview.tag_configure("default_ext", foreground="#7c3aed")
         
     def get_children(self):
-        return tuple(self.item_ids)
+        return self.treeview.get_children()
+        
+    def delete(self, item_id):
+        self.treeview.delete(item_id)
+        
+    def selection(self):
+        return self.treeview.selection()
+        
+    def item(self, item_id, option=None):
+        if option == 'values':
+            return self.treeview.item(item_id, 'values')
+        if option:
+            return self.treeview.item(item_id, option)
+        return self.treeview.item(item_id)
+        
+    def insert(self, parent="", index="end", values=None):
+        if not values:
+            return ""
+        path_val = values[0]
+        _, ext = os.path.splitext(path_val)
+        ext_lower = ext.lower()
+        
+        if ext_lower == ".sldprt":
+            tag = "sldprt"
+        elif ext_lower == ".sldasm":
+            tag = "sldasm"
+        elif ext_lower == ".slddrw":
+            tag = "slddrw"
+        else:
+            tag = "default_ext"
+            
+        return self.treeview.insert(parent, index, values=values, tags=(tag,))
+        
+    def selection_add(self, item_id):
+        self.treeview.selection_add(item_id)
+
 
 
 class BranchSelectionDialog(tk.Toplevel):
@@ -1450,7 +1283,7 @@ class GIT4SWApp(tk.Tk):
                         
                         lock_text = "—"
                         if file_info['locked']:
-                            lock_text = "🔓 Locked by me" if file_info['is_our_lock'] else "🔒 Locked by other"
+                            lock_text = "🔓 me" if file_info['is_our_lock'] else "🔒 other"
                             
                         owner_text = file_info['locked_by'] if file_info['locked'] else "—"
                         
@@ -1483,27 +1316,38 @@ class GIT4SWApp(tk.Tk):
     def check_sw_open_state(self, file_rel_path):
         """
         Prompts user if file is open in SolidWorks.
-        Returns 'save_and_close', 'close_only', 'cancel', or 'ignore'.
+        Called from background/worker threads.
+        Uses cached `self.last_open_files` to check open status without calling COM.
+        If the file is open, COM close is run in the worker thread.
+        Any UI messagebox prompting is dispatched safely to the GUI thread.
         """
-        def prompt_callback(title, is_dirty):
-            # We show a messagebox dialog with Yes / No / Cancel
-            # Yes: Save and Close (save_and_close)
-            # No: Close only without saving (close_only)
-            # Cancel: Cancel operation (cancel)
-            dirty_msg = "\n⚠️ Warning: There are unsaved changes in SolidWorks." if is_dirty else ""
-            msg = f"File '{title}' is open in SolidWorks.{dirty_msg}\n\nDo you want to Save & Close it before performing the Git operation?"
+        # 1. Quick check using cached open files (runs instantly on worker thread)
+        is_open = any(f.lower() == file_rel_path.lower() for f in self.last_open_files)
+        if not is_open:
+            return True # Not open, safe to proceed
             
-            ans = messagebox.askyesnocancel("SolidWorks File Active", msg)
-            if ans is True: # Yes
-                return 'save_and_close'
-            elif ans is False: # No
-                # We prompt whether they want to close without saving or ignore
-                ans2 = messagebox.askyesno("Confirm Close", "Close without saving? (Unsaved changes will be lost.)")
-                return 'close_only' if ans2 else 'ignore'
-            else: # Cancel
-                return 'cancel'
+        # 2. It is open. We need to query/close via COM in the background thread,
+        # but the dialog must be shown on the GUI thread.
+        def thread_safe_prompt(title, is_dirty):
+            res_q = queue.Queue()
+            
+            def show_msgbox():
+                dirty_msg = "\n⚠️ Warning: There are unsaved changes in SolidWorks." if is_dirty else ""
+                msg = f"File '{title}' is open in SolidWorks.{dirty_msg}\n\nDo you want to Save & Close it before performing the Git operation?"
+                ans = messagebox.askyesnocancel("SolidWorks File Active", msg)
+                if ans is True: # Yes
+                    res = 'save_and_close'
+                elif ans is False: # No
+                    ans2 = messagebox.askyesno("Confirm Close", "Close without saving? (Unsaved changes will be lost.)")
+                    res = 'close_only' if ans2 else 'ignore'
+                else: # Cancel
+                    res = 'cancel'
+                res_q.put(res)
                 
-        return self.sw_service.check_and_close_file(file_rel_path, self.workspace_path, prompt_callback)
+            self.task_queue.put(('callback', None, show_msgbox))
+            return res_q.get() # blocks background thread until GUI thread sets result
+            
+        return self.sw_service.check_and_close_file(file_rel_path, self.workspace_path, thread_safe_prompt)
 
     def lock_file(self):
         selected_items = self.tree.selection()
@@ -1513,18 +1357,18 @@ class GIT4SWApp(tk.Tk):
             
         files_to_lock = [self.tree.item(item, 'values')[0] for item in selected_items]
         
-        # Conflict check: Ask to save and close active SolidWorks document for each file
-        for file_rel_path in files_to_lock:
-            if not self.check_sw_open_state(file_rel_path):
-                return
-            
-        # Run in thread
+        # Disable buttons on GUI thread
         self.btn_lock.config(text="Locking...")
         self.btn_lock.state(["disabled"])
         
         def run():
             self.increment_tasks()
             try:
+                # Run check_sw_open_state in worker thread
+                for file_rel_path in files_to_lock:
+                    if not self.check_sw_open_state(file_rel_path):
+                        return
+                        
                 success_count = 0
                 errors = []
                 for file_rel_path in files_to_lock:
@@ -1536,11 +1380,15 @@ class GIT4SWApp(tk.Tk):
                 
                 if errors:
                     err_msg = "\n".join(errors)
-                    self.task_queue.put(('error', f"Locked {success_count} files, but errors occurred:\n\n{err_msg}", self.refresh_file_list))
+                    self.task_queue.put(('error', f"Locked {success_count} files, but errors occurred:\n\n{err_msg}", None))
                 else:
-                    self.task_queue.put(('success', f"Locked {success_count} files successfully!", self.refresh_file_list))
+                    self.task_queue.put(('success', f"Locked {success_count} files successfully!", None))
             finally:
                 self.decrement_tasks()
+                
+            import time
+            time.sleep(1.5)
+            self.task_queue.put(('callback', None, self.refresh_file_list))
                 
         threading.Thread(target=run, daemon=True).start()
 
@@ -1552,17 +1400,17 @@ class GIT4SWApp(tk.Tk):
             
         files_to_unlock = [self.tree.item(item, 'values')[0] for item in selected_items]
         
-        # Conflict check: Ask to save and close active SolidWorks document for each file
-        for file_rel_path in files_to_unlock:
-            if not self.check_sw_open_state(file_rel_path):
-                return
-            
-        # Run in thread
+        # Disable buttons on GUI thread
         self.btn_unlock.state(["disabled"])
         
         def run():
             self.increment_tasks()
             try:
+                # Run check_sw_open_state in worker thread
+                for file_rel_path in files_to_unlock:
+                    if not self.check_sw_open_state(file_rel_path):
+                        return
+                        
                 success_count = 0
                 errors = []
                 for file_rel_path in files_to_unlock:
@@ -1574,11 +1422,15 @@ class GIT4SWApp(tk.Tk):
                 
                 if errors:
                     err_msg = "\n".join(errors)
-                    self.task_queue.put(('error', f"Unlocked {success_count} files, but errors occurred:\n\n{err_msg}", self.refresh_file_list))
+                    self.task_queue.put(('error', f"Unlocked {success_count} files, but errors occurred:\n\n{err_msg}", None))
                 else:
-                    self.task_queue.put(('success', f"Unlocked {success_count} files successfully!", self.refresh_file_list))
+                    self.task_queue.put(('success', f"Unlocked {success_count} files successfully!", None))
             finally:
                 self.decrement_tasks()
+                
+            import time
+            time.sleep(1.5)
+            self.task_queue.put(('callback', None, self.refresh_file_list))
                 
         threading.Thread(target=run, daemon=True).start()
 
@@ -1598,16 +1450,16 @@ class GIT4SWApp(tk.Tk):
         if not ans:
             return
             
-        # Conflict check: Ask to save and close active SolidWorks document for each file
-        for file_rel_path in files_to_unlock:
-            if not self.check_sw_open_state(file_rel_path):
-                return
-            
         self.btn_force_unlock.state(["disabled"])
         
         def run():
             self.increment_tasks()
             try:
+                # Run check_sw_open_state in worker thread
+                for file_rel_path in files_to_unlock:
+                    if not self.check_sw_open_state(file_rel_path):
+                        return
+                        
                 success_count = 0
                 errors = []
                 for file_rel_path in files_to_unlock:
@@ -1619,11 +1471,15 @@ class GIT4SWApp(tk.Tk):
                 
                 if errors:
                     err_msg = "\n".join(errors)
-                    self.task_queue.put(('error', f"Force unlocked {success_count} files, but errors occurred:\n\n{err_msg}", self.refresh_file_list))
+                    self.task_queue.put(('error', f"Force unlocked {success_count} files, but errors occurred:\n\n{err_msg}", None))
                 else:
-                    self.task_queue.put(('success', f"Force unlocked {success_count} files successfully!", self.refresh_file_list))
+                    self.task_queue.put(('success', f"Force unlocked {success_count} files successfully!", None))
             finally:
                 self.decrement_tasks()
+                
+            import time
+            time.sleep(1.5)
+            self.task_queue.put(('callback', None, self.refresh_file_list))
                 
         threading.Thread(target=run, daemon=True).start()
 
@@ -1639,17 +1495,18 @@ class GIT4SWApp(tk.Tk):
             self.write_log("Please write a description of the version changes.", "warning")
             return
             
-        # Conflict check: Ask to save and close active SolidWorks document for each file
-        for file_rel_path in files_to_save:
-            if not self.check_sw_open_state(file_rel_path):
-                return
-            
         self.btn_save_ver.config(text="Uploading...")
         self.btn_save_ver.state(["disabled"])
         
         def run():
             self.increment_tasks()
+            success = False
             try:
+                # Run check_sw_open_state in worker thread
+                for file_rel_path in files_to_save:
+                    if not self.check_sw_open_state(file_rel_path):
+                        return
+                        
                 try:
                     # 1. Commit and push multiple files
                     self.git_service.save_version(files_to_save, msg)
@@ -1658,20 +1515,30 @@ class GIT4SWApp(tk.Tk):
                     for file_rel_path in files_to_save:
                         try:
                             locks = self.git_service.get_lfs_locks()
-                            if file_rel_path in locks and locks[file_rel_path]['is_ours']:
-                                self.git_service.unlock_file(file_rel_path)
+                            matched_lock_path = None
+                            for l_path in locks:
+                                if l_path.lower() == file_rel_path.lower():
+                                    matched_lock_path = l_path
+                                    break
+                            if matched_lock_path and locks[matched_lock_path]['is_ours']:
+                                self.git_service.unlock_file(matched_lock_path)
                         except Exception:
                             pass
                         
                     def on_done():
                         self.txt_message.delete("1.0", tk.END)
-                        self.refresh_file_list()
                         
                     self.task_queue.put(('success', f"Version saved and uploaded to server successfully for {len(files_to_save)} files!", on_done))
+                    success = True
                 except Exception as e:
                     self.task_queue.put(('error', f"Upload failed:\n{e}", None))
             finally:
                 self.decrement_tasks()
+                
+            if success:
+                import time
+                time.sleep(1.5)
+                self.task_queue.put(('callback', None, self.refresh_file_list))
                 
         threading.Thread(target=run, daemon=True).start()
 
@@ -1681,56 +1548,6 @@ class GIT4SWApp(tk.Tk):
             self.write_log("Please write a description of the version changes.", "warning")
             return
             
-        # Check if there are open SolidWorks files in this repo, and ask to save & close them
-        try:
-            open_docs = self.sw_service.get_all_open_documents()
-        except Exception:
-            open_docs = []
-            
-        if open_docs:
-            repo_path_norm = os.path.abspath(self.workspace_path).replace("\\", "/").lower()
-            repo_open_docs = []
-            for doc in open_docs:
-                filepath = doc['path']
-                if filepath:
-                    filepath_norm = os.path.abspath(filepath).replace("\\", "/").lower()
-                    if filepath_norm.startswith(repo_path_norm):
-                        repo_open_docs.append(doc)
-            
-            if repo_open_docs:
-                file_list = "\n".join(
-                    f"  • {doc['title']}" + (" (⚠️ Unsaved changes)" if doc['dirty'] else "")
-                    for doc in repo_open_docs
-                )
-                ans = messagebox.askyesnocancel(
-                    "SolidWorks Open Files Detected",
-                    f"The following workspace files are open in SolidWorks:\n\n{file_list}\n\n"
-                    f"[Yes] Save and close files\n"
-                    f"[No] Close files without saving (discard changes)\n"
-                    f"[Cancel] Cancel upload operation"
-                )
-                if ans is None:
-                    return
-                    
-                sw = self.sw_service._get_sw_app()
-                if sw:
-                    for doc in repo_open_docs:
-                        doc_obj = doc.get('doc_obj')
-                        if not doc_obj:
-                            continue
-                        try:
-                            if ans is True: # Yes
-                                try:
-                                    doc_obj.Save3(1, 0, 0)
-                                except Exception:
-                                    try:
-                                        doc_obj.Save()
-                                    except Exception:
-                                        pass
-                            sw.CloseDoc(doc['title'])
-                        except Exception as ce:
-                            print(f"DEBUG: Failed to close {doc['title']}: {ce}")
-
         self.btn_save_ver.state(["disabled"])
         self.btn_save_all.config(text="Uploading All...")
         self.btn_save_all.state(["disabled"])
@@ -1738,6 +1555,65 @@ class GIT4SWApp(tk.Tk):
         def run():
             self.increment_tasks()
             try:
+                # Check if there are open SolidWorks files in this repo using cache first
+                if self.last_open_files:
+                    try:
+                        open_docs = self.sw_service.get_all_open_documents()
+                    except Exception:
+                        open_docs = []
+                        
+                    if open_docs:
+                        repo_path_norm = os.path.abspath(self.workspace_path).replace("\\", "/").lower()
+                        repo_open_docs = []
+                        for doc in open_docs:
+                            filepath = doc['path']
+                            if filepath:
+                                filepath_norm = os.path.abspath(filepath).replace("\\", "/").lower()
+                                if filepath_norm.startswith(repo_path_norm):
+                                    repo_open_docs.append(doc)
+                                    
+                        if repo_open_docs:
+                            res_q = queue.Queue()
+                            
+                            def show_prompt():
+                                file_list = "\n".join(
+                                    f"  • {doc['title']}" + (" (⚠️ Unsaved changes)" if doc['dirty'] else "")
+                                    for doc in repo_open_docs
+                                )
+                                ans = messagebox.askyesnocancel(
+                                    "SolidWorks Open Files Detected",
+                                    f"The following workspace files are open in SolidWorks:\n\n{file_list}\n\n"
+                                    f"[Yes] Save and close files\n"
+                                    f"[No] Close files without saving (discard changes)\n"
+                                    f"[Cancel] Cancel upload operation"
+                                )
+                                res_q.put(ans)
+                                
+                            self.task_queue.put(('callback', None, show_prompt))
+                            ans = res_q.get() # block worker thread until user responds
+                            
+                            if ans is None:
+                                return # cancel
+                                
+                            sw = self.sw_service._get_sw_app()
+                            if sw:
+                                for doc in repo_open_docs:
+                                    doc_obj = doc.get('doc_obj')
+                                    if not doc_obj:
+                                        continue
+                                    try:
+                                        if ans is True: # Yes
+                                            try:
+                                                doc_obj.Save3(1, 0, 0)
+                                            except Exception:
+                                                try:
+                                                    doc_obj.Save()
+                                                except Exception:
+                                                    pass
+                                        sw.CloseDoc(doc['title'])
+                                    except Exception as ce:
+                                        print(f"DEBUG: Failed to close {doc['title']}: {ce}")
+
                 import git
                 if not self.git_service.is_git_repo():
                     raise RuntimeError("Not a git repository.")
@@ -2608,28 +2484,77 @@ class GIT4SWApp(tk.Tk):
             self.write_log("Please select at least one SolidWorks file first.", "warning")
             return
             
-        path = self.load_solidworks_path()
-        if os.path.exists(path):
-            errors = []
-            import subprocess
-            for file in files:
-                try:
-                    subprocess.Popen([path, os.path.abspath(file)])
-                except Exception as e:
-                    errors.append(f"Failed to open {os.path.basename(file)} in SolidWorks: {e}")
-            if errors:
-                self.write_log("\n".join(errors), "error")
-        else:
-            errors = []
-            for file in files:
-                try:
-                    os.startfile(os.path.abspath(file))
-                except Exception as e:
-                    errors.append(f"Failed to open {os.path.basename(file)} in SolidWorks: {e}")
-            if errors:
-                self.write_log(f"SolidWorks executable not found at path: {path}. Fallback failed:\n" + "\n".join(errors), "error")
-            else:
-                self.write_log(f"SolidWorks executable not found at '{path}'. Opened using system default association.", "warning")
+        def run():
+            self.increment_tasks()
+            try:
+                # 1. Try to connect to an existing SolidWorks instance
+                sw_app = self.sw_service._get_sw_app()
+                if sw_app:
+                    import pythoncom
+                    import win32com.client
+                    pythoncom.CoInitialize()
+                    
+                    errors_ref = win32com.client.VARIANT(pythoncom.VT_BYREF | pythoncom.VT_I4, 0)
+                    warnings_ref = win32com.client.VARIANT(pythoncom.VT_BYREF | pythoncom.VT_I4, 0)
+                    
+                    for file in files:
+                        abs_file_path = os.path.abspath(file)
+                        ext = os.path.splitext(file)[1].lower()
+                        
+                        doc_type = 1  # swDocPART
+                        if ext == '.sldprt':
+                            doc_type = 1
+                        elif ext == '.sldasm':
+                            doc_type = 2
+                        elif ext == '.slddrw':
+                            doc_type = 3
+                            
+                        try:
+                            # Open Doc (Options: 1 = swOpenDocOptions_Silent)
+                            doc = sw_app.OpenDoc6(abs_file_path, doc_type, 1, "", errors_ref, warnings_ref)
+                            if doc:
+                                try:
+                                    title = self.sw_service._call_com_method(doc, 'GetTitle')
+                                    # Option: 2 = swUserDecision
+                                    self.sw_service._call_com_method(sw_app, 'ActivateDoc3', title, True, 2, errors_ref)
+                                except Exception as ae:
+                                    print(f"Failed to activate document: {ae}")
+                                self.task_queue.put(('success', f"Opened '{os.path.basename(file)}' in the running SolidWorks.", None))
+                            else:
+                                self.task_queue.put(('error', f"Failed to open '{os.path.basename(file)}' in running SolidWorks. (OpenDoc6 returned NULL)", None))
+                        except Exception as e:
+                            self.task_queue.put(('error', f"Failed to open '{os.path.basename(file)}' in running SolidWorks: {e}", None))
+                    return
+                
+                # 2. SolidWorks is not running, launch a new instance
+                path = self.load_solidworks_path()
+                if os.path.exists(path):
+                    errors = []
+                    import subprocess
+                    for file in files:
+                        try:
+                            subprocess.Popen([path, os.path.abspath(file)])
+                        except Exception as e:
+                            errors.append(f"Failed to open {os.path.basename(file)} in SolidWorks: {e}")
+                    if errors:
+                        self.task_queue.put(('error', "\n".join(errors), None))
+                else:
+                    errors = []
+                    for file in files:
+                        try:
+                            os.startfile(os.path.abspath(file))
+                        except Exception as e:
+                            errors.append(f"Failed to open {os.path.basename(file)} in SolidWorks: {e}")
+                    if errors:
+                        err_msg = f"SolidWorks executable not found at path: {path}. Fallback failed:\n" + "\n".join(errors)
+                        self.task_queue.put(('error', err_msg, None))
+                    else:
+                        warn_msg = f"SolidWorks executable not found at '{path}'. Opened using system default association."
+                        self.task_queue.put(('success', warn_msg, None))
+            finally:
+                self.decrement_tasks()
+                
+        threading.Thread(target=run, daemon=True).start()
 
     def discard_changes(self):
         selected_items = self.tree.selection()
@@ -2647,16 +2572,16 @@ class GIT4SWApp(tk.Tk):
         if not ans:
             return
             
-        # Conflict check: Ask to save and close active SolidWorks document for each file
-        for file_rel_path in files_to_discard:
-            if not self.check_sw_open_state(file_rel_path):
-                return
-            
         self.btn_discard.state(["disabled"])
         
         def run():
             self.increment_tasks()
             try:
+                # Run check_sw_open_state in worker thread
+                for file_rel_path in files_to_discard:
+                    if not self.check_sw_open_state(file_rel_path):
+                        return
+                        
                 success_count = 0
                 errors = []
                 for file_rel_path in files_to_discard:
@@ -2817,24 +2742,33 @@ class GIT4SWApp(tk.Tk):
             while True:
                 msg_type, content, callback = self.task_queue.get_nowait()
                 
-                # Restore button states
-                self.btn_lock.config(text="Lock (Checkout)")
-                self.btn_lock.state(["!disabled"])
-                self.btn_unlock.state(["!disabled"])
-                self.btn_force_unlock.state(["!disabled"])
-                self.btn_save_ver.config(text="Upload Selected File Version")
-                self.btn_save_ver.state(["!disabled"])
-                self.btn_save_all.config(text="Upload Every Files Version")
-                self.btn_save_all.state(["!disabled"])
-                self.btn_sync.config(text="Get Latest Version (Sync)")
-                self.btn_sync.state(["!disabled"])
-                self.btn_merge.state(["!disabled"])
-                self.btn_restore.state(["!disabled"])
-                self.btn_restore_latest.state(["!disabled"])
-                self.btn_edrawings.state(["!disabled"])
-                self.btn_solidworks.state(["!disabled"])
-                self.btn_discard.state(["!disabled"])
-
+                # Update bg_tasks_count first
+                if msg_type == 'bg_task_start':
+                    self.bg_tasks_count += 1
+                    self.lbl_status_indicator.config(text="● Working", fg="#ef4444")
+                elif msg_type == 'bg_task_end':
+                    self.bg_tasks_count = max(0, self.bg_tasks_count - 1)
+                    if self.bg_tasks_count == 0:
+                        self.lbl_status_indicator.config(text="● Idle", fg="#10b981")
+                
+                # Only restore button states when no background tasks are running
+                if self.bg_tasks_count == 0:
+                    self.btn_lock.config(text="Lock (Checkout)")
+                    self.btn_lock.state(["!disabled"])
+                    self.btn_unlock.state(["!disabled"])
+                    self.btn_force_unlock.state(["!disabled"])
+                    self.btn_save_ver.config(text="Upload Selected File Version")
+                    self.btn_save_ver.state(["!disabled"])
+                    self.btn_save_all.config(text="Upload Every Files Version")
+                    self.btn_save_all.state(["!disabled"])
+                    self.btn_sync.config(text="Get Latest Version (Sync)")
+                    self.btn_sync.state(["!disabled"])
+                    self.btn_merge.state(["!disabled"])
+                    self.btn_restore.state(["!disabled"])
+                    self.btn_restore_latest.state(["!disabled"])
+                    self.btn_edrawings.state(["!disabled"])
+                    self.btn_solidworks.state(["!disabled"])
+                    self.btn_discard.state(["!disabled"])
                 
                 if msg_type == 'success':
                     self.write_log(content, "success")
@@ -2842,14 +2776,6 @@ class GIT4SWApp(tk.Tk):
                     self.write_log(content, "error")
                 elif msg_type == 'silent_error':
                     print(content)
-                elif msg_type == 'bg_task_start':
-                    self.bg_tasks_count += 1
-                    if self.bg_tasks_count > 0:
-                        self.lbl_status_indicator.config(text="● Working", fg="#ef4444")
-                elif msg_type == 'bg_task_end':
-                    self.bg_tasks_count = max(0, self.bg_tasks_count - 1)
-                    if self.bg_tasks_count == 0:
-                        self.lbl_status_indicator.config(text="● Idle", fg="#10b981")
                 elif msg_type == 'merge_conflict':
                     self._show_conflict_dialog(
                         content['files'],
@@ -2884,7 +2810,8 @@ class GIT4SWApp(tk.Tk):
                         if filepath_norm.lower().startswith(repo_path_norm.lower()):
                             rel_path = filepath_norm[len(repo_path_norm):].strip("/")
                             if rel_path:
-                                current_open_files.add(rel_path)
+                                corrected_path = self.git_service.get_correct_filepath_casing(rel_path)
+                                current_open_files.add(corrected_path)
                 
                 # 2. Fetch locks once for this loop to verify status
                 locks = {}
@@ -2914,15 +2841,22 @@ class GIT4SWApp(tk.Tk):
                             # Not locked, lock it!
                             def run_lock(path_to_lock):
                                 self.increment_tasks()
+                                success = False
                                 try:
                                     try:
                                         self.git_service.lock_file(path_to_lock)
                                         self.files_locked_by_us.add(path_to_lock)
-                                        self.task_queue.put(('sw_status', f"Automatically locked {path_to_lock}", self.refresh_file_list))
+                                        self.task_queue.put(('sw_status', f"Automatically locked {path_to_lock}", None))
+                                        success = True
                                     except Exception as e:
                                         self.task_queue.put(('silent_error', f"Auto-lock failed for {path_to_lock}: {e}", None))
                                 finally:
                                     self.decrement_tasks()
+                                    
+                                if success:
+                                    import time
+                                    time.sleep(1.5)
+                                    self.task_queue.put(('callback', None, self.refresh_file_list))
                                     
                             threading.Thread(target=run_lock, args=(rel_path,), daemon=True).start()
                 
@@ -2942,16 +2876,23 @@ class GIT4SWApp(tk.Tk):
                         if is_locked_by_us:
                             def run_unlock(path_to_unlock, path_to_remove):
                                 self.increment_tasks()
+                                success = False
                                 try:
                                     try:
                                         self.git_service.unlock_file(path_to_unlock)
                                         if path_to_remove in self.files_locked_by_us:
                                             self.files_locked_by_us.remove(path_to_remove)
-                                        self.task_queue.put(('sw_status', f"Automatically unlocked {path_to_unlock}", self.refresh_file_list))
+                                        self.task_queue.put(('sw_status', f"Automatically unlocked {path_to_unlock}", None))
+                                        success = True
                                     except Exception as e:
                                         self.task_queue.put(('silent_error', f"Auto-unlock failed for {path_to_unlock}: {e}", None))
                                 finally:
                                     self.decrement_tasks()
+                                    
+                                if success:
+                                    import time
+                                    time.sleep(1.5)
+                                    self.task_queue.put(('callback', None, self.refresh_file_list))
                                     
                             threading.Thread(target=run_unlock, args=(rel_path, matched_path), daemon=True).start()
                             

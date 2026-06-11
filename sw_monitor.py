@@ -26,13 +26,21 @@ class SolidWorksMonitorService:
             return getattr(obj, name)
 
     def _get_sw_app(self):
-        """Attempts to connect to SolidWorks COM interface."""
+        """Attempts to connect to SolidWorks COM interface, caching the connection."""
         if not WIN32_AVAILABLE:
             return None
             
         try:
             # CoInitialize is required for thread-safe COM access
             pythoncom.CoInitialize()
+            if self.sw_app:
+                try:
+                    # Simple property access to test connection validity
+                    self.sw_app.Visible
+                    return self.sw_app
+                except Exception:
+                    self.sw_app = None
+                    
             # Try to get active SolidWorks instance
             self.sw_app = win32com.client.GetActiveObject("SldWorks.Application")
             return self.sw_app

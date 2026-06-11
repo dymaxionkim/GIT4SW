@@ -175,6 +175,47 @@ class GitService:
         except Exception:
             return ""
 
+    def get_correct_filepath_casing(self, file_path):
+        """
+        Returns the exact case-sensitive relative path as it exists in the Git repository 
+        or on disk, to prevent casing mismatches on Windows.
+        """
+        # Normalize slashes first
+        rel_path = os.path.relpath(os.path.join(self.repo_path, file_path), self.repo_path).replace("\\", "/")
+        rel_path_lower = rel_path.lower()
+        
+        # 1. Try to find it in the git index first (most accurate for Git/LFS)
+        if self.repo:
+            try:
+                for entry in self.repo.index.entries:
+                    entry_path = entry[0]
+                    if entry_path.lower() == rel_path_lower:
+                        return entry_path
+            except Exception:
+                pass
+                
+        # 2. Fallback: Search the filesystem to match casing of directories and filename
+        parts = rel_path.split('/')
+        current_dir = self.repo_path
+        corrected_parts = []
+        for part in parts:
+            if not part:
+                continue
+            part_lower = part.lower()
+            matched = part
+            try:
+                if os.path.isdir(current_dir):
+                    for name in os.listdir(current_dir):
+                        if name.lower() == part_lower:
+                            matched = name
+                            break
+            except Exception:
+                pass
+            corrected_parts.append(matched)
+            current_dir = os.path.join(current_dir, matched)
+            
+        return "/".join(corrected_parts)
+
     def get_status(self):
         """
         Scans workspace directory files and merges Git status with LFS lock status.
@@ -247,7 +288,12 @@ class GitService:
                      
                      status_desc = changed_files.get(rel_path, 'unmodified')
                      
-                     lock_info = locks.get(rel_path, None)
+                     # Case-insensitive lookup in locks
+                     lock_info = None
+                     for l_path, l_val in locks.items():
+                         if l_path.lower() == rel_path.lower():
+                             lock_info = l_val
+                             break
                      locked = lock_info is not None
                      locked_by = lock_info['owner'] if locked else None
                      is_our_lock = lock_info['is_ours'] if locked else False
@@ -306,12 +352,12 @@ class GitService:
 
     def lock_file(self, file_path):
         """Locks a file using git lfs lock."""
-        rel_path = os.path.relpath(os.path.join(self.repo_path, file_path), self.repo_path).replace("\\", "/")
+        rel_path = self.get_correct_filepath_casing(file_path)
         return self._run_lfs_cmd(["git", "lfs", "lock", rel_path])
 
     def unlock_file(self, file_path, force=False):
         """Unlocks a file using git lfs unlock."""
-        rel_path = os.path.relpath(os.path.join(self.repo_path, file_path), self.repo_path).replace("\\", "/")
+        rel_path = self.get_correct_filepath_casing(file_path)
         args = ["git", "lfs", "unlock", rel_path]
         if force:
             args.append("--force")
@@ -338,7 +384,7 @@ class GitService:
             
         rel_paths = []
         for fp in file_paths:
-            rel_path = os.path.relpath(os.path.join(self.repo_path, fp), self.repo_path).replace("\\", "/")
+            rel_path = self.get_correct_filepath_casing(fp)
             rel_paths.append(rel_path)
             
         try:
@@ -624,7 +670,7 @@ class GitService:
             return
             
         for fp in file_paths:
-            rel_path = os.path.relpath(os.path.join(self.repo_path, fp), self.repo_path).replace("\\", "/")
+            rel_path = self.get_correct_filepath_casing(fp)
             abs_path = os.path.join(self.repo_path, rel_path)
             
             is_tracked = False
