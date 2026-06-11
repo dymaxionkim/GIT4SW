@@ -826,7 +826,7 @@ class GIT4SWApp(tk.Tk):
         sw_card = ttk.Frame(view, style="Card.TFrame")
         sw_card.pack(fill="x", padx=16, pady=4)
         
-        lbl_sw_title = ttk.Label(sw_card, text="SolidWorks Live Monitor", style="CardTitle.TLabel")
+        lbl_sw_title = ttk.Label(sw_card, text="Live Monitor", style="CardTitle.TLabel")
         lbl_sw_title.pack(anchor="w", padx=12, pady=(8, 2))
         
         self.lbl_sw_status = ttk.Label(sw_card, text="No SolidWorks connection or active file.", style="Card.TLabel", wraplength=700)
@@ -2906,52 +2906,18 @@ class GIT4SWApp(tk.Tk):
                             threading.Thread(target=run_unlock, args=(rel_path, matched_path), daemon=True).start()
                             
                 # 5. Build status message for Dashboard
-                if open_docs:
-                    lines = ["🟢 Open in SolidWorks:"]
-                    for doc in open_docs:
-                        title = doc['title']
-                        filepath = doc['path']
-                        dirty = doc['dirty']
-                        
-                        # Check if inside repo
-                        if filepath:
-                            filepath_norm = os.path.abspath(filepath).replace("\\", "/")
-                            if filepath_norm.lower().startswith(repo_path_norm.lower()):
-                                rel_path = filepath_norm[len(repo_path_norm):].strip("/")
-                                file_status = f"  - {title}"
-                                if dirty:
-                                    file_status += " (⚠️ Unsaved changes)"
-                                
-                                # Show lock status (case-insensitive)
-                                rel_path_lower = rel_path.lower()
-                                if rel_path_lower in locks_lower:
-                                    owner = locks_lower[rel_path_lower]['owner']
-                                    is_ours = locks_lower[rel_path_lower]['is_ours']
-                                    if is_ours:
-                                        file_status += " [🔓 Locked by you]"
-                                    else:
-                                        file_status += f" [🔒 Locked by '{owner}']"
-                                else:
-                                    # Check files_locked_by_us case-insensitively
-                                    is_locked_by_us = any(f.lower() == rel_path.lower() for f in self.files_locked_by_us)
-                                    if is_locked_by_us:
-                                        file_status += " [🔓 Locked by you]"
-                                    else:
-                                        file_status += " [⚠️ Unlocked/Read-Only]"
-                            else:
-                                # Outside repo
-                                file_status = f"  - {title} (🟡 Outside Project)"
-                                if dirty:
-                                    file_status += " (⚠️ Unsaved changes)"
-                        else:
-                            file_status = f"  - {title} (🟡 Outside Project)"
-                            if dirty:
-                                file_status += " (⚠️ Unsaved changes)"
-                        
-                        lines.append(file_status)
-                    status_text = "\n".join(lines)
-                else:
-                    status_text = "SolidWorks is not active or no documents are currently open."
+                is_active = self.sw_service._get_sw_app() is not None
+                active_text = "Active" if is_active else "Inactive"
+                total_files = len(self.files_data) if getattr(self, 'files_data', None) else 0
+                num_open = len(open_docs) if open_docs else 0
+                num_locked = sum(1 for f in self.files_data if f.get('locked')) if getattr(self, 'files_data', None) else 0
+                
+                status_text = (
+                    f"• SolidWorks 상태: {active_text}\n"
+                    f"• 전체 파일 개수: {total_files}개\n"
+                    f"• 열려있는 파일 개수: {num_open}개\n"
+                    f"• Locked 상태 파일 개수: {num_locked}개"
+                )
                 
                 # Update status label
                 # If the set of open files changed (comparing normalized sets case-insensitively), trigger refresh
