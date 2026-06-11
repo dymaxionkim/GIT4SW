@@ -776,39 +776,39 @@ class GIT4SWApp(tk.Tk):
         lbl_repo_title.pack(anchor="w", padx=12, pady=(8, 2))
         
         # Local Path Frame with Change button
-        local_frm = ttk.Frame(repo_card, style="Card.TFrame")
+        local_frm = tk.Frame(repo_card, bg="#ffffff")
         local_frm.pack(fill="x", padx=12, pady=(2, 2))
         
-        lbl_local_title = ttk.Label(local_frm, text="Local Path:", style="Card.TLabel", width=15, anchor="w")
+        lbl_local_title = tk.Label(local_frm, text="Local Path:", bg="#ffffff", fg="#1f2937", width=15, anchor="w")
         lbl_local_title.pack(side="left")
-        
-        self.ent_local_dir = ttk.Entry(local_frm)
-        self.ent_local_dir.pack(side="left", fill="x", expand=True, padx=(8, 8))
-        
-        self.lbl_local_status = ttk.Label(local_frm, text="", style="Card.TLabel")
-        self.lbl_local_status.pack(side="left", padx=(0, 8))
         
         self.btn_change_ws = ttk.Button(local_frm, text="Change Workspace", command=self.change_workspace, width=18)
         self.btn_change_ws.pack(side="right", padx=(8, 0))
         
+        self.ent_local_dir = ttk.Entry(local_frm)
+        self.ent_local_dir.pack(side="left", fill="x", expand=True, padx=(8, 8))
+        
+        self.lbl_local_status = tk.Label(local_frm, text="", bg="#ffffff", fg="#059669", font=("TkDefaultFont", 9))
+        self.lbl_local_status.pack(side="left", padx=(0, 8))
+        
         # Remote Server Frame with Clone button
-        remote_frm = ttk.Frame(repo_card, style="Card.TFrame")
+        remote_frm = tk.Frame(repo_card, bg="#ffffff")
         remote_frm.pack(fill="x", padx=12, pady=(2, 2))
         
-        lbl_remote_title = ttk.Label(remote_frm, text="Remote Server:", style="Card.TLabel", width=15, anchor="w")
+        lbl_remote_title = tk.Label(remote_frm, text="Remote Server:", bg="#ffffff", fg="#1f2937", width=15, anchor="w")
         lbl_remote_title.pack(side="left")
-        
-        self.ent_remote_url = ttk.Entry(remote_frm)
-        self.ent_remote_url.pack(side="left", fill="x", expand=True, padx=(8, 8))
         
         self.btn_clone = ttk.Button(remote_frm, text="Clone", command=self.clone_repository, width=18)
         self.btn_clone.pack(side="right", padx=(8, 0))
         
+        self.ent_remote_url = ttk.Entry(remote_frm)
+        self.ent_remote_url.pack(side="left", fill="x", expand=True, padx=(8, 8))
+        
         # Branch Selection frame
-        branch_frm = ttk.Frame(repo_card, style="Card.TFrame")
+        branch_frm = tk.Frame(repo_card, bg="#ffffff")
         branch_frm.pack(fill="x", padx=12, pady=(2, 8))
         
-        lbl_branch = ttk.Label(branch_frm, text="Active Branch:", style="Card.TLabel", width=15, anchor="w")
+        lbl_branch = tk.Label(branch_frm, text="Active Branch:", bg="#ffffff", fg="#1f2937", width=15, anchor="w")
         lbl_branch.pack(side="left", padx=(0, 8))
         
         self.cb_branch = ttk.Combobox(branch_frm, state="readonly", width=30)
