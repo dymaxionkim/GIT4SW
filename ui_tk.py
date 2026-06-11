@@ -163,7 +163,7 @@ class GIT4SWApp(tk.Tk):
         self.bg_tasks_count = 0
         
         self.title("GIT4SW - SolidWorks Git Client (Tkinter)")
-        self.geometry("1100x720")
+        self.geometry("1100x600")
         
         # Set window icon
         script_dir = os.path.dirname(os.path.abspath(__file__))
@@ -223,6 +223,12 @@ class GIT4SWApp(tk.Tk):
                   background=[("active", "#047857"), ("disabled", "#f3f4f6")],
                   foreground=[("active", "#ffffff"), ("disabled", "#f3f4f6")])
                   
+        # [수정] Make my branch 전용 스타일 추가 (비활성화 시 배경 및 텍스트 모두 흰색)
+        style.configure("MakeBranch.TButton", padding=6, background="#059669", foreground="#ffffff", borderwidth=0)
+        style.map("MakeBranch.TButton",
+                  background=[("active", "#047857"), ("disabled", "#ffffff")],
+                  foreground=[("active", "#ffffff"), ("disabled", "#ffffff")])
+
         style.configure("Danger.TButton", padding=6, background="#ef4444", foreground="#ffffff", borderwidth=0)
         style.map("Danger.TButton",
                   background=[("active", "#dc2626"), ("disabled", "#f3f4f6")],
@@ -325,11 +331,11 @@ class GIT4SWApp(tk.Tk):
         
         # Sidebar Menu Buttons
         self.btn_dash = tk.Button(sidebar, text=" Dashboard", fg="#374151", bg="#e5e7eb", activebackground="#d1d5db", activeforeground="#111827",
-                             font=self.sidebar_font, bd=0, anchor="w", padx=20, command=lambda: self.switch_view(0))
+                               font=self.sidebar_font, bd=0, anchor="w", padx=20, command=lambda: self.switch_view(0))
         self.btn_dash.pack(fill="x", pady=(24, 4))
         
         self.btn_files = tk.Button(sidebar, text=" File Manager", fg="#374151", bg="#e5e7eb", activebackground="#d1d5db", activeforeground="#111827",
-                              font=self.sidebar_font, bd=0, anchor="w", padx=20, command=lambda: self.switch_view(1))
+                               font=self.sidebar_font, bd=0, anchor="w", padx=20, command=lambda: self.switch_view(1))
         self.btn_files.pack(fill="x", pady=4)
         
         self.btn_history = tk.Button(sidebar, text=" History log", fg="#374151", bg="#e5e7eb", activebackground="#d1d5db", activeforeground="#111827",
@@ -337,19 +343,19 @@ class GIT4SWApp(tk.Tk):
         self.btn_history.pack(fill="x", pady=4)
                
         self.btn_about = tk.Button(sidebar, text=" About", fg="#374151", bg="#e5e7eb", activebackground="#d1d5db", activeforeground="#111827",
-                              font=self.sidebar_font, bd=0, anchor="w", padx=20, command=lambda: self.switch_view(6))
+                               font=self.sidebar_font, bd=0, anchor="w", padx=20, command=lambda: self.switch_view(6))
         self.btn_about.pack(fill="x", side="bottom", pady=(4, 24))
 
         self.btn_help = tk.Button(sidebar, text=" Help", fg="#374151", bg="#e5e7eb", activebackground="#d1d5db", activeforeground="#111827",
-                             font=self.sidebar_font, bd=0, anchor="w", padx=20, command=lambda: self.switch_view(5))
+                               font=self.sidebar_font, bd=0, anchor="w", padx=20, command=lambda: self.switch_view(5))
         self.btn_help.pack(fill="x", side="bottom", pady=4)
 
         self.btn_config = tk.Button(sidebar, text=" Config", fg="#374151", bg="#e5e7eb", activebackground="#d1d5db", activeforeground="#111827",
-                               font=self.sidebar_font, bd=0, anchor="w", padx=20, command=lambda: self.switch_view(4))
+                                font=self.sidebar_font, bd=0, anchor="w", padx=20, command=lambda: self.switch_view(4))
         self.btn_config.pack(fill="x", side="bottom", pady=4)
 
         self.btn_maintainer = tk.Button(sidebar, text=" Maintainer", fg="#374151", bg="#e5e7eb", activebackground="#d1d5db", activeforeground="#111827",
-                                   font=self.sidebar_font, bd=0, anchor="w", padx=20, command=lambda: self.switch_view(3))
+                                    font=self.sidebar_font, bd=0, anchor="w", padx=20, command=lambda: self.switch_view(3))
         self.btn_maintainer.pack(fill="x", side="bottom", pady=4)
         
         # Divider Line
@@ -815,7 +821,8 @@ class GIT4SWApp(tk.Tk):
         self.cb_branch.pack(side="left", padx=(0, 8))
         self.cb_branch.bind("<<ComboboxSelected>>", self.on_branch_selected)
         
-        self.btn_make_my_branch = ttk.Button(branch_frm, text="Make my branch", command=self.make_my_branch)
+        # [수정] 기본 스타일을 전용 스타일인 "MakeBranch.TButton"으로 지정
+        self.btn_make_my_branch = ttk.Button(branch_frm, text="Make my branch", command=self.make_my_branch, style="MakeBranch.TButton")
         self.btn_make_my_branch.pack(side="left")
         
         # Sync Card
@@ -859,7 +866,8 @@ class GIT4SWApp(tk.Tk):
             self.btn_sync.state(["disabled"])
             self.btn_clone.state(["!disabled"])
             self.cb_branch.config(values=[], state="disabled")
-            self.btn_make_my_branch.config(state="disabled")
+            # [수정] 비활성화 시 전용 스타일 강제 적용
+            self.btn_make_my_branch.config(style="MakeBranch.TButton", state="disabled")
         else:
             self.lbl_local_status.config(text="🟢 Git Repo Active", foreground="#10b981")
             url = self.git_service.get_remote_url()
@@ -868,10 +876,9 @@ class GIT4SWApp(tk.Tk):
                 self.ent_remote_url.insert(0, url)
             self.btn_sync.state(["!disabled"])
             self.btn_clone.state(["!disabled"])
-            self.btn_make_my_branch.config(state="disabled")
+            # [수정] 비활성화 시 전용 스타일 강제 적용
+            self.btn_make_my_branch.config(style="MakeBranch.TButton", state="disabled")
             self.load_branches_in_combo()
-
-
 
     def load_branches_in_combo(self):
         if not self.git_service.is_git_repo():
@@ -963,11 +970,11 @@ class GIT4SWApp(tk.Tk):
                     else:
                         self.cb_branch.set("")
                         
-                    # Style Make my branch button based on branch existence
+                    # [수정] 버튼의 상태에 관계없이 일관되게 전용 스타일(MakeBranch.TButton)을 유지하도록 변경
                     if username and not branch_exists:
-                        self.btn_make_my_branch.config(style="Primary.TButton", state="normal")
+                        self.btn_make_my_branch.config(style="MakeBranch.TButton", state="normal")
                     else:
-                        self.btn_make_my_branch.config(style="TButton", state="disabled")
+                        self.btn_make_my_branch.config(style="MakeBranch.TButton", state="disabled")
                         
                     self.update_repo_branch_info()
                         
@@ -1055,7 +1062,8 @@ class GIT4SWApp(tk.Tk):
             
         self.is_switching_branch = True
         self.cb_branch.config(state="disabled")
-        self.btn_make_my_branch.config(state="disabled")
+        # [수정] 전용 스타일과 함께 비활성화 상태 부여
+        self.btn_make_my_branch.config(style="MakeBranch.TButton", state="disabled")
         
         def run():
             self.increment_tasks()
@@ -2548,7 +2556,6 @@ class GIT4SWApp(tk.Tk):
             self.write_log(f"Workspace path does not exist: {self.workspace_path}", "error")
 
     def change_workspace(self):
-
         typed_path = self.ent_local_dir.get().strip()
         
         if typed_path and os.path.isdir(typed_path):
