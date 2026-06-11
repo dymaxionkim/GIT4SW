@@ -1811,6 +1811,8 @@ class GIT4SWApp(tk.Tk):
             self.write_log("Error: Current workspace is not a valid Git repository.", "error")
             return
             
+        original_branch = self.git_service.get_current_branch()
+            
         config_path = "config.json"
         token = ""
         if os.path.exists(config_path):
@@ -1955,6 +1957,14 @@ class GIT4SWApp(tk.Tk):
                 self.git_service._run_lfs_cmd(["git", "push", "-u", "origin", "main"])
                 self.write_log("Successfully pushed main branch to origin.", "success")
                 
+                # Return to the original branch state (ensure checkout)
+                if original_branch:
+                    self.write_log(f"Returning to original branch '{original_branch}'...", "info")
+                    try:
+                        self.git_service.switch_branch(original_branch, force=False)
+                    except Exception as se:
+                        print(f"Failed to switch back to original branch '{original_branch}': {se}")
+                
                 def on_done():
                     self.refresh_dashboard()
                     self.refresh_file_list()
@@ -1965,6 +1975,11 @@ class GIT4SWApp(tk.Tk):
                 self.task_queue.put(('success', "All branches merged and pushed successfully!", on_done))
                 
             except Exception as e:
+                if original_branch:
+                    try:
+                        self.git_service.switch_branch(original_branch, force=False)
+                    except Exception:
+                        pass
                 self.task_queue.put(('error', f"Merge all branches failed:\n{e}", None))
             finally:
                 self.decrement_tasks()
