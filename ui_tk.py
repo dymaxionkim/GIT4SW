@@ -2349,6 +2349,16 @@ class GIT4SWApp(tk.Tk):
             self.write_log("Please specify a Local Path first.", "warning")
             return
             
+        # Check if the repository already exists at the local path
+        temp_service = GitService(local_dir)
+        if temp_service.is_git_repo():
+            messagebox.showerror(
+                "Repository Exists",
+                "The repository already exists at the local path."
+            )
+            self.write_log(f"Clone aborted: Repository already exists at '{local_dir}'.", "warning")
+            return
+            
         # Confirm with user
         ans = messagebox.askyesno(
             "Confirm Clone",
@@ -2361,18 +2371,32 @@ class GIT4SWApp(tk.Tk):
         self.btn_clone.state(["disabled"])
         self.write_log(f"Starting cloning process from {remote_url}...", "info")
         
-        # Temporarily update workspace path
-        self.workspace_path = local_dir
-        self.git_service = GitService(self.workspace_path)
+        orig_workspace_path = self.workspace_path
+        orig_git_service = self.git_service
         
         def run():
             self.increment_tasks()
             try:
                 try:
-                    res = self.git_service.clone_repository(remote_url)
-                    self.task_queue.put(('success', f"Clone complete successfully!\n{res}", self.refresh_dashboard))
+                    res = temp_service.clone_repository(remote_url)
+                    
+                    def on_success():
+                        self.workspace_path = local_dir
+                        self.git_service = temp_service
+                        self.save_workspace_to_config(local_dir)
+                        self.refresh_dashboard()
+                        self.refresh_file_list()
+                        self.refresh_history()
+                        self.write_log(f"Clone completed successfully and workspace updated to: {local_dir}", "success")
+                        
+                    self.task_queue.put(('success', f"Clone complete successfully!\n{res}", on_success))
                 except Exception as e:
-                    self.task_queue.put(('error', f"Clone failed:\n{e}", self.refresh_dashboard))
+                    def on_failure():
+                        self.workspace_path = orig_workspace_path
+                        self.git_service = orig_git_service
+                        self.refresh_dashboard()
+                        
+                    self.task_queue.put(('error', f"Clone failed:\n{e}", on_failure))
             finally:
                 self.decrement_tasks()
                 # Restore button text
