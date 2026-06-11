@@ -854,7 +854,7 @@ class GIT4SWApp(tk.Tk):
             if url:
                 self.ent_remote_url.insert(0, url)
             self.btn_sync.state(["!disabled"])
-            self.btn_clone.state(["disabled"])
+            self.btn_clone.state(["!disabled"])
             self.btn_make_my_branch.config(state="disabled")
             self.load_branches_in_combo()
 
@@ -2867,7 +2867,7 @@ class GIT4SWApp(tk.Tk):
                         self.btn_merge.state(["!disabled"])
                         self.btn_discard.state(["!disabled"])
                         if hasattr(self, 'btn_clone'):
-                            self.btn_clone.state(["disabled"])
+                            self.btn_clone.state(["!disabled"])
                     else:
                         self.btn_lock.state(["disabled"])
                         self.btn_unlock.state(["disabled"])
