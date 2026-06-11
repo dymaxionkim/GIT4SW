@@ -2913,10 +2913,10 @@ class GIT4SWApp(tk.Tk):
                 num_locked = sum(1 for f in self.files_data if f.get('locked')) if getattr(self, 'files_data', None) else 0
                 
                 status_text = (
-                    f"• SolidWorks 상태: {active_text}\n"
-                    f"• 전체 파일 개수: {total_files}개\n"
-                    f"• 열려있는 파일 개수: {num_open}개\n"
-                    f"• Locked 상태 파일 개수: {num_locked}개"
+                    f"• SolidWorks Status: {active_text}\n"
+                    f"• Total Files: {total_files}\n"
+                    f"• Open Files: {num_open}\n"
+                    f"• Locked Files: {num_locked}"
                 )
                 
                 # Update status label
