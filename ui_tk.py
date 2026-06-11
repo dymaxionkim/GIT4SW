@@ -362,6 +362,11 @@ class GIT4SWApp(tk.Tk):
         """Appends a message to the bottom log text box.
         msg_type can be: 'info', 'warning', 'error', 'success'
         """
+        import threading
+        if threading.current_thread() is not threading.main_thread():
+            self.task_queue.put(('log', (message, msg_type), None))
+            return
+
         import datetime
         timestamp = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         prefix = f"[{timestamp}] "
@@ -2776,6 +2781,9 @@ class GIT4SWApp(tk.Tk):
                     self.write_log(content, "error")
                 elif msg_type == 'silent_error':
                     print(content)
+                elif msg_type == 'log':
+                    msg_content, log_type = content
+                    self.write_log(msg_content, log_type)
                 elif msg_type == 'merge_conflict':
                     self._show_conflict_dialog(
                         content['files'],
@@ -2784,7 +2792,8 @@ class GIT4SWApp(tk.Tk):
                     )
                 elif msg_type == 'sw_status':
                     # SolidWorks live monitor state update
-                    self.lbl_sw_status.config(text=content)
+                    if content is not None:
+                        self.lbl_sw_status.config(text=content)
                     
                 if callback:
                     callback()
