@@ -1,0 +1,102 @@
+GIT4SW - SolidWorks Git Version Control Client User Guide
+==========================================================
+
+GIT4SW is an agentic CAD version control desktop application designed for SolidWorks designers. It integrates standard Git workflows with Git LFS (Large File Storage) locking mechanisms to enable concurrent, overwrite-free collaboration on 3D CAD models.
+
+Below is a detailed walkthrough of each application tab, its widgets, and functions.
+
+----------------------------------------------------------
+1. DASHBOARD MODE
+----------------------------------------------------------
+The Dashboard is the central cockpit of the application, showing repository configurations, sync controls, and real-time statuses.
+
+• Local Path (Text Field & Entry)
+  - Displays the absolute path to your active local Git repository.
+• Change Workspace (Button)
+  - Opens a folder chooser dialog to switch the workspace to another Git repository directory.
+• Remote Server (Label)
+  - Displays the remote repository URL (e.g., Codeberg, GitHub) currently linked to the workspace.
+• Active Branch (Combobox/Dropdown)
+  - Displays the currently checked-out branch. Selecting a different branch from this dropdown automatically switches (checkouts) the workspace to that branch.
+• Make my branch (Button)
+  - Resolves your identity from your git/GitHub configuration, automatically creates a new local and remote developer branch under your username, and switches to it. This keeps your work isolated and prevents direct modification conflicts on the 'main' branch.
+• Get Latest Version (Sync) (Button)
+  - Downloads and applies (pulls) the latest changes from the remote server for the active branch.
+• Merge main branch into current branch (Button)
+  - Merges updates from the shared 'main' (or 'master') branch into your developer branch. It automatically commits, pushes the merged branch back to the remote server, and safely switches the workspace back to your original developer branch.
+• Live Monitor (Card & Status Panel)
+  - Displays real-time status of SolidWorks and repository metrics:
+    - SolidWorks Status: Shows whether SolidWorks is currently running (Active or Inactive).
+    - Total Files: The total count of version-tracked files in the workspace (excluding ignored paths).
+    - Open Files: Number of files from this project currently open in SolidWorks.
+    - Locked Files: Number of files locked under Git LFS.
+
+----------------------------------------------------------
+2. FILE MANAGER MODE
+----------------------------------------------------------
+The File Manager provides file-level checkout, checking-in, and local modifications management.
+
+• File Table (Treeview Table)
+  - Lists all files in the workspace with the following columns:
+    - File Path: Path relative to repository. Rows are color-coded: Parts (.sldprt) are Green, Assemblies (.sldasm) are Orange, Drawings (.slddrw) are Red, and other files are Purple.
+    - Status: Shows whether a file is unmodified, modified locally (Modified), or a new file (New File).
+    - SolidWorks: Displays 'Open' if the file is currently loaded in the CAD application.
+    - Locked: Indicates lock state ('me' if locked by you, 'other' if locked by someone else).
+    - By: Displays the name of the developer who holds the lock.
+• Refresh (Button)
+  - Reloads files, queries LFS lock database, and updates SolidWorks open documents instantly.
+• Open (Button)
+  - Opens the current workspace folder in Windows File Explorer.
+• Lock (Checkout) (Button)
+  - Checks out the selected files and acquires LFS locks on them to prevent other designers from overwriting your work. (Locks are also automatically acquired when you open files in SolidWorks).
+• Unlock File (Button)
+  - Manually releases your LFS locks on the selected files.
+• Force Unlock (Button)
+  - Forcefully breaks another developer's LFS lock on the selected files. (Use with caution!).
+• Discard (Button)
+  - Undoes all local modifications to the selected files, restoring them to the last commit.
+• eDrawings (Button)
+  - Opens the selected CAD file in the eDrawings application for quick, lightweight viewing.
+• Solidworks (Button)
+  - Opens the selected CAD file in the active instance of SolidWorks.
+• Version Description (Text Box)
+  - Enter a brief description (commit message) describing what changes you made to the files.
+• Upload Selected File Version (Button)
+  - Commits, pushes, and uploads selected modified files to the remote server, releasing locks upon success.
+• Upload Every Files Version (Button)
+  - Commits, pushes, and uploads all modified files in the workspace, and releases all active locks.
+
+----------------------------------------------------------
+3. HISTORY LOG MODE
+----------------------------------------------------------
+The History Log lets you browse previous revisions and audit modifications.
+
+• Revision List (Table)
+  - Shows a log of all past commits (Commit Hash, Author, Date, Message) for the active branch.
+• Commit Details (Text Area)
+  - Displays detailed file modifications, diffs, and detailed notes for the selected commit.
+
+----------------------------------------------------------
+4. MAINTAINER MODE
+----------------------------------------------------------
+Dedicated to project administrators/maintainers to oversee integration and initialize new repositories.
+
+• Merge all branches into main (Button)
+  - Fetches all remote branches, pulls them locally, resolves conflicts according to your choices, merges them all into 'main', pushes the updated 'main' back to remote origin, and returns the repository back to the original developer branch.
+• Repository Name (Entry) & Create New CAD Repository (Button)
+  - Enter a repository name and click to automatically create a private repository on GitHub, initialize it locally, apply Git LFS configuration, assign locked file extensions (.sldprt, .sldasm, .slddrw), set up remote tracking, and push the initial commit.
+
+----------------------------------------------------------
+5. CONFIG MODE
+----------------------------------------------------------
+Configure system and application paths to ensure integration runs smoothly.
+
+• Path Configurations (Entries)
+  - Custom executable/folder paths for Git, Git LFS, SolidWorks, eDrawings, GitHub Personal Access Token, default local directory, and default GitHub organization name.
+• Save Configuration (Button)
+  - Saves all configured values to config.json and re-initializes Git and COM connections.
+
+----------------------------------------------------------
+6. ABOUT MODE
+----------------------------------------------------------
+Displays details about GIT4SW versions, core engine components, developer contact, repository link, and GPLv3 licensing terms.

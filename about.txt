@@ -1,0 +1,16 @@
+Core Engine: GitPython, Git CLI & Git LFS, Solidworks & eDrawings
+Developer: dhkima@higenrnm.com
+License: GNU GPLv3
+This software is distributed from the https://codeberg.org/dymaxionkim/GIT4SW repository.
+
+Description:
+GIT4SW is an agentic CAD version control desktop client developed specifically for SolidWorks designers. By combining standard Git branch workflows with Git LFS locking mechanisms, GIT4SW offers concurrent conflict-free CAD collaboration while preventing overwrites and version drift in large 3D model files.
+
+Key Features:
+- COM-based real-time SolidWorks document tracking
+- Automatic background Git LFS lock acquisition and release
+- Complete revision history traversal & Detached HEAD checkout
+- Bulk actions (checkout, merge, pull/push) with background task queues
+- Modern color-coded file extension lists and aesthetic sidebar tabs
+
+Developed using Google Antigravity-IDE.

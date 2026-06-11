@@ -664,114 +664,19 @@ class GIT4SWApp(tk.Tk):
         container = tk.Frame(card, bg="#ffffff")
         container.pack(fill="both", expand=True, padx=16, pady=(0, 16))
         
-        help_text = (
-            "GIT4SW - SolidWorks Git Version Control Client User Guide\n"
-            "==========================================================\n\n"
-            "GIT4SW is an agentic CAD version control desktop application designed for "
-            "SolidWorks designers. It integrates standard Git workflows with Git LFS (Large File Storage) "
-            "locking mechanisms to enable concurrent, overwrite-free collaboration on 3D CAD models.\n\n"
-            "Below is a detailed walkthrough of each application tab, its widgets, and functions.\n\n"
-            "----------------------------------------------------------\n"
-            "1. DASHBOARD MODE\n"
-            "----------------------------------------------------------\n"
-            "The Dashboard is the central cockpit of the application, showing repository configurations, "
-            "sync controls, and real-time statuses.\n\n"
-            "• Local Path (Text Field & Entry)\n"
-            "  - Displays the absolute path to your active local Git repository.\n"
-            "• Change Workspace (Button)\n"
-            "  - Opens a folder chooser dialog to switch the workspace to another Git repository directory.\n"
-            "• Remote Server (Label)\n"
-            "  - Displays the remote repository URL (e.g., Codeberg, GitHub) currently linked to the workspace.\n"
-            "• Active Branch (Combobox/Dropdown)\n"
-            "  - Displays the currently checked-out branch. Selecting a different branch from this dropdown "
-            "automatically switches (checkouts) the workspace to that branch.\n"
-            "• Make my branch (Button)\n"
-            "  - Resolves your identity from your git/GitHub configuration, automatically creates a new local "
-            "and remote developer branch under your username, and switches to it. This keeps your work "
-            "isolated and prevents direct modification conflicts on the 'main' branch.\n"
-            "• Get Latest Version (Sync) (Button)\n"
-            "  - Downloads and applies (pulls) the latest changes from the remote server for the active branch.\n"
-            "• Merge main branch into current branch (Button)\n"
-            "  - Merges updates from the shared 'main' (or 'master') branch into your developer branch. "
-            "It automatically commits, pushes the merged branch back to the remote server, and safely "
-            "switches the workspace back to your original developer branch.\n"
-            "• Live Monitor (Card & Status Panel)\n"
-            "  - Displays real-time status of SolidWorks and repository metrics:\n"
-            "    - SolidWorks Status: Shows whether SolidWorks is currently running (Active or Inactive).\n"
-            "    - Total Files: The total count of version-tracked files in the workspace (excluding ignored paths).\n"
-            "    - Open Files: Number of files from this project currently open in SolidWorks.\n"
-            "    - Locked Files: Number of files locked under Git LFS.\n\n"
-            "----------------------------------------------------------\n"
-            "2. FILE MANAGER MODE\n"
-            "----------------------------------------------------------\n"
-            "The File Manager provides file-level checkout, checking-in, and local modifications management.\n\n"
-            "• File Table (Treeview Table)\n"
-            "  - Lists all files in the workspace with the following columns:\n"
-            "    - File Path: Path relative to repository. Rows are color-coded: Parts (.sldprt) are Green, "
-            "Assemblies (.sldasm) are Orange, Drawings (.slddrw) are Red, and other files are Purple.\n"
-            "    - Status: Shows whether a file is unmodified, modified locally (Modified), or a new file (New File).\n"
-            "    - SolidWorks: Displays 'Open' if the file is currently loaded in the CAD application.\n"
-            "    - Locked: Indicates lock state ('me' if locked by you, 'other' if locked by someone else).\n"
-            "    - By: Displays the name of the developer who holds the lock.\n"
-            "• Refresh (Button)\n"
-            "  - Reloads files, queries LFS lock database, and updates SolidWorks open documents instantly.\n"
-            "• Open (Button)\n"
-            "  - Opens the current workspace folder in Windows File Explorer.\n"
-            "• Lock (Checkout) (Button)\n"
-            "  - Checks out the selected files and acquires LFS locks on them to prevent other designers from "
-            "overwriting your work. (Locks are also automatically acquired when you open files in SolidWorks).\n"
-            "• Unlock File (Button)\n"
-            "  - Manually releases your LFS locks on the selected files.\n"
-            "• Force Unlock (Button)\n"
-            "  - Forcefully breaks another developer's LFS lock on the selected files. (Use with caution!).\n"
-            "• Discard (Button)\n"
-            "  - Undoes all local modifications to the selected files, restoring them to the last commit.\n"
-            "• eDrawings (Button)\n"
-            "  - Opens the selected CAD file in the eDrawings application for quick, lightweight viewing.\n"
-            "• Solidworks (Button)\n"
-            "  - Opens the selected CAD file in the active instance of SolidWorks.\n"
-            "• Version Description (Text Box)\n"
-            "  - Enter a brief description (commit message) describing what changes you made to the files.\n"
-            "• Upload Selected File Version (Button)\n"
-            "  - Commits, pushes, and uploads selected modified files to the remote server, releasing locks upon success.\n"
-            "• Upload Every Files Version (Button)\n"
-            "  - Commits, pushes, and uploads all modified files in the workspace, and releases all active locks.\n\n"
-            "----------------------------------------------------------\n"
-            "3. HISTORY LOG MODE\n"
-            "----------------------------------------------------------\n"
-            "The History Log lets you browse previous revisions and audit modifications.\n\n"
-            "• Revision List (Table)\n"
-            "  - Shows a log of all past commits (Commit Hash, Author, Date, Message) for the active branch.\n"
-            "• Commit Details (Text Area)\n"
-            "  - Displays detailed file modifications, diffs, and detailed notes for the selected commit.\n\n"
-            "----------------------------------------------------------\n"
-            "4. MAINTAINER MODE\n"
-            "----------------------------------------------------------\n"
-            "Dedicated to project administrators/maintainers to oversee integration and initialize new repositories.\n\n"
-            "• Merge all branches into main (Button)\n"
-            "  - Fetches all remote branches, pulls them locally, resolves conflicts according to your choices, "
-            "merges them all into 'main', pushes the updated 'main' back to remote origin, and returns the "
-            "repository back to the original developer branch.\n"
-            "• Repository Name (Entry) & Create New CAD Repository (Button)\n"
-            "  - Enter a repository name and click to automatically create a private repository on GitHub, "
-            "initialize it locally, apply Git LFS configuration, assign locked file extensions (.sldprt, "
-            ".sldasm, .slddrw), set up remote tracking, and push the initial commit.\n\n"
-            "----------------------------------------------------------\n"
-            "5. CONFIG MODE\n"
-            "----------------------------------------------------------\n"
-            "Configure system and application paths to ensure integration runs smoothly.\n\n"
-            "• Path Configurations (Entries)\n"
-            "  - Custom executable/folder paths for Git, Git LFS, SolidWorks, eDrawings, GitHub Personal Access Token, "
-            "default local directory, and default GitHub organization name.\n"
-            "• Save Configuration (Button)\n"
-            "  - Saves all configured values to config.json and re-initializes Git and COM connections.\n\n"
-            "----------------------------------------------------------\n"
-            "6. ABOUT MODE\n"
-            "----------------------------------------------------------\n"
-            "Displays details about GIT4SW versions, core engine components, developer contact, repository link, "
-            "and GPLv3 licensing terms."
-        )
-        
+        # Load help text from file
+        script_dir = os.path.dirname(os.path.abspath(__file__))
+        help_path = os.path.join(script_dir, "help.txt")
+        help_text = ""
+        if os.path.exists(help_path):
+            try:
+                with open(help_path, "r", encoding="utf-8") as f:
+                    help_text = f.read()
+            except Exception as e:
+                help_text = f"Error loading help.txt:\n{e}"
+        else:
+            help_text = "help.txt file not found."
+            
         txt_help = tk.Text(container, bg="#ffffff", fg="#1f2937", font="TkDefaultFont", wrap="word", relief="flat")
         txt_help.insert("1.0", help_text)
         txt_help.config(state="disabled")
@@ -810,29 +715,31 @@ class GIT4SWApp(tk.Tk):
         txt_about.tag_bind("link", "<Enter>", lambda e: txt_about.config(cursor="hand2"))
         txt_about.tag_bind("link", "<Leave>", lambda e: txt_about.config(cursor=""))
         
-        txt_about.insert("insert", "Core Engine: GitPython, Git CLI & Git LFS, Solidworks & eDrawings\n")
-        txt_about.insert("insert", "Developer: dhkima@higenrnm.com\n")
-        txt_about.insert("insert", "License: GNU GPLv3\n")
-        txt_about.insert("insert", "This software is distributed from the ")
-        txt_about.insert("insert", "https://codeberg.org/dymaxionkim/GIT4SW", "link")
-        txt_about.insert("insert", " repository.\n\n")
+        # Load about text from file
+        script_dir = os.path.dirname(os.path.abspath(__file__))
+        about_path = os.path.join(script_dir, "about.txt")
+        about_text = ""
+        if os.path.exists(about_path):
+            try:
+                with open(about_path, "r", encoding="utf-8") as f:
+                    about_text = f.read()
+            except Exception as e:
+                about_text = f"Error loading about.txt:\n{e}"
+        else:
+            about_text = "about.txt file not found."
+            
+        txt_about.insert("1.0", about_text)
         
-        about_body = (
-            "Description:\n"
-            "GIT4SW is an agentic CAD version control desktop client developed specifically for "
-            "SolidWorks designers. By combining standard Git branch workflows with Git LFS locking "
-            "mechanisms, GIT4SW offers concurrent conflict-free CAD collaboration while preventing "
-            "overwrites and version drift in large 3D model files.\n\n"
-            "Key Features:\n"
-            "- COM-based real-time SolidWorks document tracking\n"
-            "- Automatic background Git LFS lock acquisition and release\n"
-            "- Complete revision history traversal & Detached HEAD checkout\n"
-            "- Bulk actions (checkout, merge, pull/push) with background task queues\n"
-            "- Modern color-coded file extension lists and aesthetic sidebar tabs\n\n"
-            "Developed using Google Antigravity-IDE."
-        )
-        
-        txt_about.insert("insert", about_body)
+        # Search for link URL and apply tag to make it clickable
+        link_url = "https://codeberg.org/dymaxionkim/GIT4SW"
+        start_idx = "1.0"
+        while True:
+            pos = txt_about.search(link_url, start_idx, stopindex=tk.END)
+            if not pos:
+                break
+            end_pos = f"{pos} + {len(link_url)}c"
+            txt_about.tag_add("link", pos, end_pos)
+            start_idx = end_pos
         txt_about.config(state="disabled")
         txt_about.pack(fill="both", expand=True)
         
