@@ -19,7 +19,7 @@ class CustomFileTable(tk.Frame):
         # Create Treeview
         self.treeview = ttk.Treeview(
             self,
-            columns=("path", "status", "solidworks", "locked", "by"),
+            columns=("path", "status", "solidworks", "locked"),
             show="headings",
             selectmode="extended"
         )
@@ -37,14 +37,12 @@ class CustomFileTable(tk.Frame):
         self.treeview.heading("status", text="Status", anchor="center")
         self.treeview.heading("solidworks", text="SolidWorks", anchor="center")
         self.treeview.heading("locked", text="Locked", anchor="center")
-        self.treeview.heading("by", text="By", anchor="center")
         
         # Column formatting
-        self.treeview.column("path", anchor="w", stretch=True)
-        self.treeview.column("status", anchor="center", width=90, minwidth=90, stretch=False)
-        self.treeview.column("solidworks", anchor="center", width=90, minwidth=90, stretch=False)
-        self.treeview.column("locked", anchor="center", width=90, minwidth=90, stretch=False)
-        self.treeview.column("by", anchor="center", width=90, minwidth=90, stretch=False)
+        self.treeview.column("path", anchor="w", width=450, minwidth=40, stretch=False)
+        self.treeview.column("status", anchor="center", width=120, minwidth=40, stretch=False)
+        self.treeview.column("solidworks", anchor="center", width=100, minwidth=40, stretch=False)
+        self.treeview.column("locked", anchor="center", width=120, minwidth=40, stretch=False)
         
         # Define Tags for coloring entire row based on extension
         self.treeview.tag_configure("sldprt", foreground="#059669")
@@ -142,6 +140,132 @@ class BranchSelectionDialog(tk.Toplevel):
         
     def on_cancel(self):
         self.selected_branch = None
+        self.destroy()
+
+
+class MultiConflictResolutionDialog(tk.Toplevel):
+    def __init__(self, parent, conflicted_files, ours_label, theirs_label):
+        super().__init__(parent)
+        self.title("Resolve Merge Conflicts")
+        self.geometry("680x480")
+        self.configure(bg="#f3f4f6")
+        self.transient(parent)
+        self.grab_set()
+        
+        self.result = None  # Dict {file: 'ours'|'theirs'} or None
+        self.resolutions = {}  # Dict {file: StringVar}
+        
+        # Title/Header
+        lbl = ttk.Label(self, text="Conflicts detected! Choose which version to adopt for each file:", 
+                        wraplength=640, justify="left", style="TLabel", font=("TkDefaultFont", 10, "bold"))
+        lbl.pack(padx=16, pady=12, fill="x")
+        
+        # Scrollable container for files
+        container = ttk.Frame(self, style="Card.TFrame")
+        container.pack(padx=16, pady=4, fill="both", expand=True)
+        
+        # Canvas and scrollbar for scrolling if many files
+        canvas = tk.Canvas(container, bg="#ffffff", bd=0, highlightthickness=0)
+        scrollbar = ttk.Scrollbar(container, orient="vertical", command=canvas.yview)
+        scrollable_frame = tk.Frame(canvas, bg="#ffffff")
+        
+        scrollable_frame.bind(
+            "<Configure>",
+            lambda e: canvas.configure(
+                scrollregion=canvas.bbox("all")
+            )
+        )
+        
+        canvas.create_window((0, 0), window=scrollable_frame, anchor="nw")
+        canvas.configure(yscrollcommand=scrollbar.set)
+        
+        canvas.pack(side="left", fill="both", expand=True)
+        scrollbar.pack(side="right", fill="y")
+        
+        # List of conflicted files
+        for idx, f in enumerate(conflicted_files):
+            row_frm = tk.Frame(scrollable_frame, bg="#ffffff")
+            row_frm.pack(fill="x", padx=12, pady=6)
+            
+            # File name
+            lbl_file = tk.Label(row_frm, text=f, bg="#ffffff", fg="#1f2937", font=("TkDefaultFont", 9), width=30, anchor="w", wraplength=220, justify="left")
+            lbl_file.pack(side="left", padx=(0, 10))
+            
+            # Choice Var (default to ours)
+            var = tk.StringVar(value="ours")
+            self.resolutions[f] = var
+            
+            # Toggle buttons (Radiobutton styled as buttons)
+            choice_frm = tk.Frame(row_frm, bg="#ffffff")
+            choice_frm.pack(side="left", fill="x", expand=True)
+            
+            rb_ours = tk.Radiobutton(
+                choice_frm, 
+                text=ours_label, 
+                value="ours", 
+                variable=var, 
+                indicatoron=False,
+                width=18,
+                padx=8,
+                pady=4,
+                bg="#f3f4f6",
+                fg="#1f2937",
+                selectcolor="#d1fae5",    # Green background when selected
+                activebackground="#e5e7eb",
+                relief="flat",
+                bd=1,
+                highlightthickness=0
+            )
+            rb_ours.pack(side="left", padx=4)
+            
+            rb_theirs = tk.Radiobutton(
+                choice_frm, 
+                text=theirs_label, 
+                value="theirs", 
+                variable=var, 
+                indicatoron=False,
+                width=18,
+                padx=8,
+                pady=4,
+                bg="#f3f4f6",
+                fg="#1f2937",
+                selectcolor="#ffe4e6",    # Rose/red background when selected
+                activebackground="#e5e7eb",
+                relief="flat",
+                bd=1,
+                highlightthickness=0
+            )
+            rb_theirs.pack(side="left", padx=4)
+            
+            # Divider between rows
+            if idx < len(conflicted_files) - 1:
+                row_div = tk.Frame(scrollable_frame, bg="#f3f4f6", height=1)
+                row_div.pack(fill="x", padx=12, pady=4)
+            
+        # Action Buttons Frame
+        btn_frm = ttk.Frame(self, style="TFrame")
+        btn_frm.pack(padx=16, pady=16, fill="x", side="bottom")
+        
+        btn_ok = ttk.Button(btn_frm, text="Apply Resolution", style="Primary.TButton", command=self.on_ok)
+        btn_ok.pack(side="right", padx=(8, 0))
+        
+        btn_cancel = ttk.Button(btn_frm, text="Cancel", command=self.on_cancel)
+        btn_cancel.pack(side="right")
+        
+        # Center the window relative to parent
+        self.update_idletasks()
+        x = parent.winfo_rootx() + (parent.winfo_width() - self.winfo_width()) // 2
+        y = parent.winfo_rooty() + (parent.winfo_height() - self.winfo_height()) // 2
+        self.geometry(f"+{x}+{y}")
+        
+        self.protocol("WM_DELETE_WINDOW", self.on_cancel)
+        
+    def on_ok(self):
+        self.result = {f: var.get() for f, var in self.resolutions.items()}
+        self.destroy()
+        
+    def on_cancel(self):
+        self.result = None
         self.destroy()
 
 
@@ -246,7 +370,8 @@ class GIT4SWApp(tk.Tk):
         style.configure("Treeview.Heading", 
                         background="#f3f4f6", 
                         foreground="#374151", 
-                        borderwidth=0)
+                        borderwidth=1,
+                        relief="flat")
 
         # Combobox (matches Entry / Card style)
         style.configure("TCombobox",
@@ -280,6 +405,20 @@ class GIT4SWApp(tk.Tk):
         style.map("TEntry",
                   fieldbackground=[("disabled", "#f3f4f6"), ("readonly", "#f9fafb")],
                   foreground=[("disabled", "#9ca3af")])
+
+        # TScrollbar (Modern flat styling)
+        style.configure("TScrollbar",
+                        troughcolor="#f3f4f6",      # Soft light track color
+                        background="#d1d5db",       # Flat soft grey thumb
+                        bordercolor="#f3f4f6",      # Same as track to hide border lines
+                        lightcolor="#d1d5db",       # Same as thumb to make it flat
+                        darkcolor="#d1d5db",        # Same as thumb to make it flat
+                        arrowcolor="#4b5563",       # Subtle arrow color
+                        gripcount=0,                # No vertical ridges
+                        arrowsize=11)
+        style.map("TScrollbar",
+                  background=[("active", "#9ca3af"), ("disabled", "#f3f4f6")],
+                  arrowcolor=[("active", "#111827")])
 
     def init_ui(self):
         # Master Layout (Sidebar + Stacked content frame)
@@ -699,7 +838,11 @@ class GIT4SWApp(tk.Tk):
         txt_help = tk.Text(container, bg="#ffffff", fg="#1f2937", font="TkDefaultFont", wrap="word", relief="flat")
         txt_help.insert("1.0", help_text)
         txt_help.config(state="disabled")
-        txt_help.pack(fill="both", expand=True)
+        
+        scrollbar = ttk.Scrollbar(container, orient="vertical", command=txt_help.yview)
+        txt_help.configure(yscrollcommand=scrollbar.set)
+        scrollbar.pack(side="right", fill="y")
+        txt_help.pack(side="left", fill="both", expand=True)
         
         return view
 
@@ -760,7 +903,11 @@ class GIT4SWApp(tk.Tk):
             txt_about.tag_add("link", pos, end_pos)
             start_idx = end_pos
         txt_about.config(state="disabled")
-        txt_about.pack(fill="both", expand=True)
+        
+        scrollbar = ttk.Scrollbar(container, orient="vertical", command=txt_about.yview)
+        txt_about.configure(yscrollcommand=scrollbar.set)
+        scrollbar.pack(side="right", fill="y")
+        txt_about.pack(side="left", fill="both", expand=True)
         
         return view
 
@@ -1208,6 +1355,19 @@ class GIT4SWApp(tk.Tk):
         btn_open = ttk.Button(header_frm, text="Open", command=self.open_workspace_in_explorer)
         btn_open.pack(side="right", padx=(0, 8))
         
+        # Path filter combobox (placed to the left of "Open" button)
+        self.cb_path_filter = ttk.Combobox(header_frm, state="readonly", width=25)
+        self.cb_path_filter.pack(side="right", padx=(0, 8))
+        self.cb_path_filter.config(values=["All Files"])
+        self.cb_path_filter.set("All Files")
+        self.cb_path_filter.bind("<<ComboboxSelected>>", self.on_path_filter_selected)
+        
+        # Sort order combobox (placed to the left of path filter)
+        self.cb_sort_order = ttk.Combobox(header_frm, state="readonly", width=15, values=["by Name", "by Extension"])
+        self.cb_sort_order.pack(side="right", padx=(0, 8))
+        self.cb_sort_order.set("by Name")
+        self.cb_sort_order.bind("<<ComboboxSelected>>", self.on_sort_order_selected)
+        
         # Table Scroll Frame
         table_frm = ttk.Frame(main_panel)
         table_frm.pack(fill="both", expand=True)
@@ -1255,6 +1415,33 @@ class GIT4SWApp(tk.Tk):
         btn_save_frm = ttk.Frame(save_card, style="TFrame")
         btn_save_frm.pack(anchor="e", padx=8, pady=(2, 6))
         
+        # Load predefined commit messages from commit.json
+        commit_messages = [""]
+        commit_json_path = os.path.join(self.workspace_path, "commit.json")
+        if os.path.exists(commit_json_path):
+            try:
+                import json
+                with open(commit_json_path, "r", encoding="utf-8") as f:
+                    data = json.load(f)
+                    if isinstance(data, list):
+                        commit_messages.extend(data)
+            except Exception as e:
+                print(f"Error loading commit.json: {e}")
+        else:
+            commit_messages.extend([
+                "feat: Add new parts or assemblies",
+                "fix: Correct geometry errors or modeling issues",
+                "refactor: Clean up design feature tree or references",
+                "docs: Update drawings, annotations, or bill of materials (BOM)",
+                "chore: Clean up temporary files or modify configurations"
+            ])
+
+        # Commit message selection combobox
+        self.cb_commit_msg = ttk.Combobox(btn_save_frm, state="readonly", width=40, values=commit_messages)
+        self.cb_commit_msg.set("")
+        self.cb_commit_msg.pack(side="left", padx=(0, 8))
+        self.cb_commit_msg.bind("<<ComboboxSelected>>", self.on_commit_msg_selected)
+        
         self.btn_save_ver = ttk.Button(btn_save_frm, text="Upload Selected File Version", command=self.save_version)
         self.btn_save_ver.pack(side="left", padx=(0, 8))
         
@@ -1273,14 +1460,6 @@ class GIT4SWApp(tk.Tk):
             return
 
         self.is_refreshing_file_list = True
-
-        # Save selection
-        selected_paths = []
-        for item in self.tree.selection():
-            values = self.tree.item(item, 'values')
-            if values:
-                selected_paths.append(values[0])
-
         self.increment_tasks()
 
         def run():
@@ -1288,55 +1467,105 @@ class GIT4SWApp(tk.Tk):
                 files_data = self.git_service.get_status()
                 
                 def update_gui():
-                    # Clear list
-                    for item in self.tree.get_children():
-                        self.tree.delete(item)
-                        
                     self.files_data = files_data
+                    
+                    # Extract unique directories
+                    dirs = set()
                     for file_info in files_data:
-                        # Map statuses
-                        status_map = {
-                            'modified': '🟢 Modified',
-                            'untracked': '🔵 New File',
-                            'unmodified': '⚪ Unmodified'
-                        }
-                        status_text = status_map.get(file_info['status'], file_info['status'])
+                        d = os.path.dirname(file_info['file']) or "."
+                        dirs.add(d)
                         
-                        # Case-insensitive comparison for open files
-                        is_open_in_sw = "—"
-                        for open_f in self.last_open_files:
-                            if open_f.lower() == file_info['file'].lower():
-                                is_open_in_sw = "🟢 Open"
-                                break
+                    sorted_dirs = ["All Files"] + sorted(list(dirs))
+                    current_filter = self.cb_path_filter.get()
+                    self.cb_path_filter.config(values=sorted_dirs)
+                    if current_filter not in sorted_dirs:
+                        self.cb_path_filter.set("All Files")
+                    else:
+                        self.cb_path_filter.set(current_filter)
                         
-                        lock_text = "—"
-                        if file_info['locked']:
-                            lock_text = "🔓 me" if file_info['is_our_lock'] else "🔒 other"
+                    self.populate_file_table()
                             
-                        owner_text = file_info['locked_by'] if file_info['locked'] else "—"
-                        
-                        new_item = self.tree.insert("", "end", values=(
-                            file_info['file'],
-                            status_text,
-                            is_open_in_sw,
-                            lock_text,
-                            owner_text
-                        ))
-                        
-                        # Restore selection
-                        if file_info['file'] in selected_paths:
-                            self.tree.selection_add(new_item)
-                            
-                self.task_queue.put(('file_list_update', None, update_gui))
+                self.task_queue.put(('callback', None, update_gui))
             except Exception as e:
                 def on_error():
                     self.write_log(f"Failed to load file list: {e}", "error")
-                self.task_queue.put(('file_list_update', None, on_error))
+                self.task_queue.put(('callback', None, on_error))
             finally:
                 self.is_refreshing_file_list = False
                 self.decrement_tasks()
 
         threading.Thread(target=run, daemon=True).start()
+
+    def on_path_filter_selected(self, event):
+        self.populate_file_table()
+
+    def on_sort_order_selected(self, event):
+        self.populate_file_table()
+
+    def on_commit_msg_selected(self, event):
+        selected = self.cb_commit_msg.get()
+        self.txt_message.delete("1.0", tk.END)
+        self.txt_message.insert("1.0", selected)
+
+    def populate_file_table(self):
+        # Save selection
+        selected_paths = []
+        for item in self.tree.selection():
+            values = self.tree.item(item, 'values')
+            if values:
+                selected_paths.append(values[0])
+                
+        # Clear list
+        for item in self.tree.get_children():
+            self.tree.delete(item)
+            
+        if not getattr(self, 'files_data', None):
+            return
+
+        selected_path = self.cb_path_filter.get()
+        if not selected_path:
+            selected_path = "All Files"
+            
+        # 1. Filter files_data
+        filtered_files = []
+        for file_info in self.files_data:
+            dir_name = os.path.dirname(file_info['file']) or "."
+            if selected_path == "All Files" or dir_name == selected_path:
+                filtered_files.append(file_info)
+
+        # 2. Sort filtered_files
+        sort_method = self.cb_sort_order.get()
+        if sort_method == "by Extension":
+            filtered_files.sort(key=lambda f: (os.path.splitext(f['file'])[1].lower(), os.path.basename(f['file']).lower(), f['file'].lower()))
+        else:  # "by Name"
+            filtered_files.sort(key=lambda f: (os.path.basename(f['file']).lower(), f['file'].lower()))
+            
+        # 3. Populate tree
+        for file_info in filtered_files:
+            status_map = {
+                'modified': '🟢 Modified',
+                'untracked': '🔵 New File',
+                'unmodified': '⚪ Unmodified'
+            }
+            status_text = status_map.get(file_info['status'], file_info['status'])
+            
+            is_open_in_sw = "—"
+            for open_f in self.last_open_files:
+                if open_f.lower() == file_info['file'].lower():
+                    is_open_in_sw = "🟢 Open"
+                    break
+                    
+            owner_text = file_info['locked_by'] if file_info['locked'] else "—"
+            
+            new_item = self.tree.insert("", "end", values=(
+                file_info['file'],
+                status_text,
+                is_open_in_sw,
+                owner_text
+            ))
+            
+            if file_info['file'] in selected_paths:
+                self.tree.selection_add(new_item)
 
 
 
@@ -1535,31 +1764,94 @@ class GIT4SWApp(tk.Tk):
                     if not self.check_sw_open_state(file_rel_path):
                         return
                         
+                import git
+                # 1. Stage selected files
+                rel_paths = []
+                for fp in files_to_save:
+                    rel_path = self.git_service.get_correct_filepath_casing(fp)
+                    rel_paths.append(rel_path)
+                
                 try:
-                    # 1. Commit and push multiple files
-                    self.git_service.save_version(files_to_save, msg)
-                    
-                    # 2. Try to automatically unlock if they were ours
-                    for file_rel_path in files_to_save:
-                        try:
-                            locks = self.git_service.get_lfs_locks()
-                            matched_lock_path = None
-                            for l_path in locks:
-                                if l_path.lower() == file_rel_path.lower():
-                                    matched_lock_path = l_path
-                                    break
-                            if matched_lock_path and locks[matched_lock_path]['is_ours']:
-                                self.git_service.unlock_file(matched_lock_path)
-                        except Exception:
-                            pass
-                        
-                    def on_done():
-                        self.txt_message.delete("1.0", tk.END)
-                        
-                    self.task_queue.put(('success', f"Version saved and uploaded to server successfully for {len(files_to_save)} files!", on_done))
-                    success = True
+                    self.git_service.repo.index.add(rel_paths)
                 except Exception as e:
-                    self.task_queue.put(('error', f"Upload failed:\n{e}", None))
+                    raise RuntimeError(f"Failed to add files to index: {e}")
+                
+                # Commit locally first
+                name = "SolidWorks Designer"
+                email = "designer@example.com"
+                try:
+                    reader = self.git_service.repo.config_reader()
+                    name = reader.get_value("user", "name", default="SolidWorks Designer")
+                    email = reader.get_value("user", "email", default="designer@example.com")
+                except Exception:
+                    pass
+                author = git.Actor(name, email)
+                
+                try:
+                    self.git_service.repo.index.commit(msg, author=author, committer=author)
+                    self.write_log("Saved changes locally.", "success")
+                except Exception as e:
+                    raise RuntimeError(f"Local commit failed: {e}")
+                
+                # 2. Pull & Conflict Resolution (if remote is configured)
+                remote_url = self.git_service.get_remote_url()
+                branch = self.git_service.get_current_branch()
+                
+                if remote_url and branch:
+                    self.write_log("Fetching remote tracking branch...", "info")
+                    try:
+                        self.git_service._run_lfs_cmd(["git", "fetch", "origin"])
+                        
+                        conflicted_files = self.git_service.check_merge_conflicts(f"origin/{branch}")
+                        if conflicted_files:
+                            self.write_log(f"Conflicts pre-detected in {len(conflicted_files)} files! Showing resolution dialog...", "warning")
+                            resolutions = self.prompt_multi_conflict_resolution(
+                                conflicted_files,
+                                ours_label="Keep Ours (Local)",
+                                theirs_label="Keep Theirs (Remote)"
+                            )
+                            if resolutions is None:
+                                self.write_log("Upload cancelled by user. Rolling back local commit...", "warning")
+                                self.git_service._run_lfs_cmd(["git", "reset", "--soft", "HEAD~1"])
+                                return
+                            
+                            self.write_log("Applying resolutions and completing sync...", "info")
+                            self.git_service.sync_pull_with_resolutions(resolutions)
+                        else:
+                            self.write_log("No conflicts detected. Performing standard pull...", "info")
+                            self.git_service.sync_pull_clean()
+                            
+                        # 3. Push to remote
+                        self.write_log("Pushing committed changes to remote server...", "info")
+                        self.git_service._run_lfs_cmd(["git", "push", "origin", branch])
+                    except Exception as sync_err:
+                        # If fetch/pull/push failed, rollback local commit too
+                        self.write_log(f"Upload sync failed: {sync_err}. Rolling back local commit...", "error")
+                        self.git_service._run_lfs_cmd(["git", "reset", "--soft", "HEAD~1"])
+                        raise sync_err
+                        
+                # 4. Try to automatically unlock if they were ours
+                for file_rel_path in files_to_save:
+                    try:
+                        locks = self.git_service.get_lfs_locks()
+                        matched_lock_path = None
+                        for l_path in locks:
+                            if l_path.lower() == file_rel_path.lower():
+                                matched_lock_path = l_path
+                                break
+                        if matched_lock_path and locks[matched_lock_path]['is_ours']:
+                            self.git_service.unlock_file(matched_lock_path)
+                    except Exception:
+                        pass
+                        
+                def on_done():
+                    self.txt_message.delete("1.0", tk.END)
+                    self.cb_commit_msg.set("")
+                    
+                self.task_queue.put(('success', f"Version saved and uploaded to server successfully for {len(files_to_save)} files!", on_done))
+                success = True
+            except Exception as e:
+                self.task_queue.put(('error', f"Upload failed:\n{e}", None))
             finally:
                 self.decrement_tasks()
                 
@@ -1662,23 +1954,54 @@ class GIT4SWApp(tk.Tk):
                     pass
                 author = git.Actor(name, email)
                 
-                # 2. Commit
+                # 2. Commit locally first
                 self.write_log("Creating commit via GitPython...", "info")
-                commit = repo.index.commit(msg, author=author, committer=author)
-                self.write_log(f"Created commit locally: {commit.hexsha[:7]}", "success")
+                try:
+                    commit = repo.index.commit(msg, author=author, committer=author)
+                    self.write_log(f"Created commit locally: {commit.hexsha[:7]}", "success")
+                except Exception as e:
+                    raise RuntimeError(f"Local commit failed: {e}")
                 
-                # 3. Push if remote configured
+                # 3. Pull & Conflict Resolution (if remote configured)
                 remote_url = self.git_service.get_remote_url()
-                if remote_url:
-                    self.write_log("Pushing commit to remote origin...", "info")
-                    current_branch = self.git_service.get_current_branch()
-                    if not current_branch:
-                        current_branch = "main"
-                    self.git_service._run_lfs_cmd(["git", "push", "-u", "origin", current_branch])
-                    self.write_log(f"Successfully pushed branch '{current_branch}' to remote server.", "success")
+                branch = self.git_service.get_current_branch()
+                
+                if remote_url and branch:
+                    self.write_log("Fetching remote tracking branch...", "info")
+                    try:
+                        self.git_service._run_lfs_cmd(["git", "fetch", "origin"])
+                        
+                        conflicted_files = self.git_service.check_merge_conflicts(f"origin/{branch}")
+                        if conflicted_files:
+                            self.write_log(f"Conflicts pre-detected in {len(conflicted_files)} files! Showing resolution dialog...", "warning")
+                            resolutions = self.prompt_multi_conflict_resolution(
+                                conflicted_files,
+                                ours_label="Keep Ours (Local)",
+                                theirs_label="Keep Theirs (Remote)"
+                            )
+                            if resolutions is None:
+                                self.write_log("Upload cancelled by user. Rolling back local commit...", "warning")
+                                self.git_service._run_lfs_cmd(["git", "reset", "--soft", "HEAD~1"])
+                                return
+                            
+                            self.write_log("Applying resolutions and completing sync...", "info")
+                            self.git_service.sync_pull_with_resolutions(resolutions)
+                        else:
+                            self.write_log("No conflicts detected. Performing standard pull...", "info")
+                            self.git_service.sync_pull_clean()
+                            
+                        # 4. Push to remote
+                        self.write_log("Pushing committed changes to remote server...", "info")
+                        self.git_service._run_lfs_cmd(["git", "push", "-u", "origin", branch])
+                        self.write_log(f"Successfully pushed branch '{branch}' to remote server.", "success")
+                    except Exception as sync_err:
+                        self.write_log(f"Upload sync failed: {sync_err}. Rolling back local commit...", "error")
+                        self.git_service._run_lfs_cmd(["git", "reset", "--soft", "HEAD~1"])
+                        raise sync_err
                 
                 def on_done():
                     self.txt_message.delete("1.0", tk.END)
+                    self.cb_commit_msg.set("")
                     self.refresh_file_list()
                     self.refresh_history()
                     self.load_branches_in_combo()
@@ -1820,6 +2143,15 @@ class GIT4SWApp(tk.Tk):
         self.after(0, ask)
         return res_queue.get()
 
+    def prompt_multi_conflict_resolution(self, conflicted_files, ours_label="Keep Ours (Local)", theirs_label="Keep Theirs (Incoming)"):
+        res_queue = queue.Queue()
+        def ask():
+            dialog = MultiConflictResolutionDialog(self, conflicted_files, ours_label, theirs_label)
+            self.wait_window(dialog)
+            res_queue.put(dialog.result)
+        self.after(0, ask)
+        return res_queue.get()
+
     def on_merge_all_branches_clicked(self):
         from tkinter import messagebox
         ans = messagebox.askyesno(
@@ -1952,36 +2284,25 @@ class GIT4SWApp(tk.Tk):
                 # Merge other local branches into main one by one
                 for b in other_branches:
                     self.write_log(f"Merging local branch '{b}' into main...", "info")
-                    try:
-                        self.git_service._run_lfs_cmd(["git", "merge", b, "--no-edit"])
+                    conflicted_files = self.git_service.check_merge_conflicts(b)
+                    if conflicted_files:
+                        self.write_log(f"Conflicts pre-detected while merging '{b}' into main! Showing resolution dialog...", "warning")
+                        resolutions = self.prompt_multi_conflict_resolution(
+                            conflicted_files,
+                            ours_label="Keep Main (Local)",
+                            theirs_label=f"Keep Branch '{b}' (Incoming)"
+                        )
+                        if resolutions is None:
+                            self.write_log(f"Merge of branch '{b}' cancelled by user. Aborting...", "warning")
+                            raise RuntimeError(f"Merge cancelled by user on branch '{b}'.")
+                            
+                        self.write_log(f"Merging branch '{b}' with resolutions...", "info")
+                        self.git_service.merge_branch_with_resolutions(b, resolutions)
+                        self.write_log(f"Branch '{b}' merged into main successfully with resolutions.", "success")
+                    else:
+                        self.write_log(f"No conflicts detected. Performing standard merge for branch '{b}'...", "info")
+                        self.git_service.merge_branch(b)
                         self.write_log(f"Branch '{b}' merged into main successfully.", "success")
-                    except Exception as me:
-                        conflicted_paths = self.git_service.get_merge_conflicts()
-                        if conflicted_paths:
-                            self.write_log(f"Conflicts detected while merging '{b}' into main!", "warning")
-                            for f in conflicted_paths:
-                                choice = self._prompt_resolve_conflict(f, b)
-                                if choice == 'ours':
-                                    try:
-                                        self.git_service._run_lfs_cmd(["git", "checkout", "--ours", "--", f])
-                                        self.git_service._run_lfs_cmd(["git", "add", f])
-                                        self.write_log(f"Resolved conflict for {f} (kept Ours)", "success")
-                                    except Exception as err:
-                                        self.write_log(f"Failed to resolve {f} with ours: {err}", "error")
-                                else:
-                                    try:
-                                        self.git_service._run_lfs_cmd(["git", "checkout", "--theirs", "--", f])
-                                        self.git_service._run_lfs_cmd(["git", "add", f])
-                                        self.write_log(f"Resolved conflict for {f} (kept Theirs from '{b}')", "success")
-                                    except Exception as err:
-                                        self.write_log(f"Failed to resolve {f} with theirs: {err}", "error")
-                            try:
-                                self.git_service._run_lfs_cmd(["git", "commit", "-m", f"Merge branch '{b}' into main"])
-                                self.write_log(f"Completed merge of '{b}' into main after resolving conflicts.", "success")
-                            except Exception as commit_err:
-                                raise RuntimeError(f"Failed to commit merge of branch '{b}' into main: {commit_err}")
-                        else:
-                            raise me
                         
                 # git push -u origin main
                 self.write_log("Pushing main branch to origin...", "info")
@@ -2510,7 +2831,24 @@ class GIT4SWApp(tk.Tk):
             self.increment_tasks()
             try:
                 try:
-                    result = self.git_service.merge_branch(source)
+                    conflicted_files = self.git_service.check_merge_conflicts(source)
+                    if conflicted_files:
+                        self.write_log(f"Conflicts pre-detected in {len(conflicted_files)} files! Showing resolution dialog...", "warning")
+                        resolutions = self.prompt_multi_conflict_resolution(
+                            conflicted_files,
+                            ours_label=f"Keep Current ({current})",
+                            theirs_label=f"Keep Source ({source})"
+                        )
+                        if resolutions is None:
+                            self.write_log("Merge cancelled by user.", "warning")
+                            return
+                        
+                        self.write_log("Merging main branch with resolutions...", "info")
+                        self.git_service.merge_branch_with_resolutions(source, resolutions)
+                        result = "Merge completed with resolutions."
+                    else:
+                        self.write_log("No conflicts detected. Performing standard merge...", "info")
+                        result = self.git_service.merge_branch(source)
                     
                     # 1. Push current branch to remote
                     push_msg = ""
@@ -2530,12 +2868,6 @@ class GIT4SWApp(tk.Tk):
                         print(f"Failed to switch back to original branch '{current}': {se}")
 
                     self.task_queue.put(('success', f"Merge complete:\n{result}{push_msg}", self.refresh_dashboard))
-                except MergeConflictError as ce:
-                    self.task_queue.put(('merge_conflict', {
-                        'files': ce.conflicted_files,
-                        'source': source,
-                        'current': current
-                    }, None))
                 except Exception as e:
                     self.task_queue.put(('error', f"Merge failed:\n{e}", None))
             finally:

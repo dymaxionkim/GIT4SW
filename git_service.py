@@ -782,5 +782,103 @@ class GitService:
 
     def abort_merge(self):
         """Aborts an in-progress merge and restores the pre-merge state."""
-        self._run_lfs_cmd(["git", "merge", "--abort"])
+        try:
+            self._run_lfs_cmd(["git", "merge", "--abort"])
+        except Exception:
+            pass
         self._load_repo()
+
+    def check_merge_conflicts(self, target_ref):
+        """Returns a list of conflicted files if target_ref were to be merged into HEAD.
+        Returns empty list if there are no conflicts.
+        """
+        if not self.is_git_repo():
+            return []
+        
+        cmd_args = ["git", "merge-tree", "--write-tree", "--name-only", "HEAD", target_ref]
+        if self.git_path and os.path.exists(self.git_path):
+            cmd_args[0] = self.git_path
+            
+        try:
+            result = subprocess.run(
+                cmd_args,
+                cwd=self.repo_path,
+                capture_output=True,
+                text=True,
+                encoding="utf-8",
+                errors="ignore"
+            )
+            # If exit code is 0, no conflicts
+            if result.returncode == 0:
+                return []
+                
+            # If exit code is non-zero, let's parse stdout
+            stdout = result.stdout
+            lines = stdout.strip().split("\n")
+            if len(lines) <= 1:
+                return []
+                
+            conflicted_files = []
+            for line in lines[1:]:
+                line = line.strip()
+                if not line:
+                    break
+                if line.startswith("Auto-merging") or line.startswith("CONFLICT"):
+                    break
+                conflicted_files.append(line)
+            return conflicted_files
+        except Exception:
+            return []
+
+    def merge_branch_with_resolutions(self, source_branch, resolutions):
+        """Merges specified source branch and resolves conflicts using the given resolutions dictionary."""
+        if not self.is_git_repo():
+            raise RuntimeError("Not a git repository.")
+        try:
+            # 1. Start merge (use check=False to let it go into conflict state)
+            self._run_lfs_cmd(["git", "merge", source_branch, "--no-edit"], check=False)
+            
+            # 2. Check if we actually have conflicts in the repo
+            conflicts = self.get_merge_conflicts()
+            if conflicts:
+                for f in conflicts:
+                    res = resolutions.get(f, "ours") # default to ours
+                    if res == "ours":
+                        self._run_lfs_cmd(["git", "checkout", "--ours", "--", f])
+                    else:
+                        self._run_lfs_cmd(["git", "checkout", "--theirs", "--", f])
+                    self._run_lfs_cmd(["git", "add", f])
+                
+                # 3. Finalize merge commit
+                self._run_lfs_cmd(["git", "commit", "-m", f"Merge branch '{source_branch}' (resolved conflicts)"])
+            
+            self._load_repo()
+        except Exception as e:
+            # Abort merge if anything failed
+            self.abort_merge()
+            raise RuntimeError(f"Merge with resolutions failed: {e}")
+
+    def sync_pull_clean(self):
+        """Fetches and merges origin/<branch> assuming no conflicts."""
+        if not self.get_remote_url():
+            return "No remote server configured. Sync skipped."
+        branch = self.get_current_branch()
+        if not branch:
+            raise RuntimeError("Cannot sync/pull because you are not currently on a branch (detached HEAD).")
+            
+        self._run_lfs_cmd(["git", "fetch", "origin"])
+        res = self._run_lfs_cmd(["git", "merge", f"origin/{branch}", "--no-edit"])
+        self._load_repo()
+        return res
+
+    def sync_pull_with_resolutions(self, resolutions):
+        """Fetches and merges origin/<branch> resolving conflicts with the given resolutions."""
+        if not self.get_remote_url():
+            return "No remote server configured. Sync skipped."
+        branch = self.get_current_branch()
+        if not branch:
+            raise RuntimeError("Cannot sync/pull because you are not currently on a branch (detached HEAD).")
+            
+        self._run_lfs_cmd(["git", "fetch", "origin"])
+        self.merge_branch_with_resolutions(f"origin/{branch}", resolutions)
+        return "Sync complete."
