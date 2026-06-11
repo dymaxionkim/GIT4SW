@@ -2344,18 +2344,8 @@ class GIT4SWApp(tk.Tk):
             self.write_log("Please enter a Remote Server URL to clone.", "warning")
             return
             
-        local_dir = self.ent_local_dir.get().strip()
-        if not local_dir:
-            self.write_log("Please specify a Local Path first.", "warning")
-            return
-            
-        # Ensure local path is: config.json's workspace_path + repository name
+        # Parse repository name from remote URL
         import re
-        config_data = self.load_config_data()
-        config_ws = config_data.get("workspace_path", "")
-        if not config_ws:
-            config_ws = self.workspace_path
-            
         repo_name = ""
         url_clean = remote_url
         if url_clean.endswith("/"):
@@ -2369,13 +2359,23 @@ class GIT4SWApp(tk.Tk):
                 last_part = last_part.split(":")[-1]
             repo_name = last_part
             
-        if repo_name:
-            expected_local_dir = os.path.normpath(os.path.join(config_ws, repo_name)).replace("\\", "/")
-            if os.path.normpath(local_dir).replace("\\", "/") != expected_local_dir:
-                local_dir = expected_local_dir
-                self.ent_local_dir.delete(0, tk.END)
-                self.ent_local_dir.insert(0, local_dir)
-                self.write_log(f"Adjusted local clone path to match workspace/repository structure: {local_dir}", "info")
+        if not repo_name:
+            self.write_log("Could not parse repository name from Remote Server URL.", "error")
+            return
+            
+        # Get default_local_path from config.json
+        config_data = self.load_config_data()
+        config_ws = config_data.get("default_local_path", "")
+        if not config_ws:
+            config_ws = self.workspace_path
+            
+        # Discard the existing Local Path and construct a new one: default_local_path + "/" + repo_name
+        ws_clean = config_ws.replace("\\", "/").rstrip("/")
+        local_dir = f"{ws_clean}/{repo_name}"
+        
+        self.ent_local_dir.delete(0, tk.END)
+        self.ent_local_dir.insert(0, local_dir)
+        self.write_log(f"Set local clone path: {local_dir}", "info")
                 
         # Check if the repository already exists at the local path
         temp_service = GitService(local_dir)
