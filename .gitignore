@@ -9,6 +9,8 @@ wheels/
 # Virtual environments
 .venv/
 .venv
+.python-version
+uv.lock
 
 # config.json
 config.json
