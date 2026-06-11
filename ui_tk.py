@@ -2349,6 +2349,34 @@ class GIT4SWApp(tk.Tk):
             self.write_log("Please specify a Local Path first.", "warning")
             return
             
+        # Ensure local path is: config.json's workspace_path + repository name
+        import re
+        config_data = self.load_config_data()
+        config_ws = config_data.get("workspace_path", "")
+        if not config_ws:
+            config_ws = self.workspace_path
+            
+        repo_name = ""
+        url_clean = remote_url
+        if url_clean.endswith("/"):
+            url_clean = url_clean[:-1]
+        if url_clean.endswith(".git"):
+            url_clean = url_clean[:-4]
+        parts = re.split(r'[/\\]', url_clean)
+        if parts:
+            last_part = parts[-1]
+            if ":" in last_part:
+                last_part = last_part.split(":")[-1]
+            repo_name = last_part
+            
+        if repo_name:
+            expected_local_dir = os.path.normpath(os.path.join(config_ws, repo_name)).replace("\\", "/")
+            if os.path.normpath(local_dir).replace("\\", "/") != expected_local_dir:
+                local_dir = expected_local_dir
+                self.ent_local_dir.delete(0, tk.END)
+                self.ent_local_dir.insert(0, local_dir)
+                self.write_log(f"Adjusted local clone path to match workspace/repository structure: {local_dir}", "info")
+                
         # Check if the repository already exists at the local path
         temp_service = GitService(local_dir)
         if temp_service.is_git_repo():
