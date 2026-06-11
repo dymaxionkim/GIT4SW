@@ -1409,7 +1409,7 @@ class GIT4SWApp(tk.Tk):
         lbl_msg = ttk.Label(save_card, text="Version Description:", style="Card.TLabel")
         lbl_msg.pack(anchor="w", padx=8)
         
-        self.txt_message = tk.Text(save_card, height=3, bg="#ffffff", fg="#1f2937", insertbackground="#000000", relief="solid", bd=1, highlightthickness=0)
+        self.txt_message = tk.Text(save_card, height=3, bg="#ffffff", fg="#1f2937", insertbackground="#000000", relief="solid", bd=1, highlightthickness=0, font="TkDefaultFont")
         self.txt_message.pack(fill="x", padx=8, pady=2)
         
         btn_save_frm = ttk.Frame(save_card, style="TFrame")
@@ -1423,7 +1423,7 @@ class GIT4SWApp(tk.Tk):
         self.btn_save_ver.pack(side="right", padx=(0, 8))
         
         # Commit message selection combobox (stretched to the left end)
-        self.cb_commit_msg = ttk.Combobox(btn_save_frm, state="readonly")
+        self.cb_commit_msg = ttk.Combobox(btn_save_frm, state="readonly", postcommand=self.load_commit_messages)
         self.cb_commit_msg.set("")
         self.cb_commit_msg.pack(side="left", fill="x", expand=True, padx=(0, 8))
         self.cb_commit_msg.bind("<<ComboboxSelected>>", self.on_commit_msg_selected)
@@ -1492,23 +1492,37 @@ class GIT4SWApp(tk.Tk):
             script_dir = os.path.dirname(os.path.abspath(__file__))
             commit_json_path = os.path.join(script_dir, "commit.json")
             
+        loaded = False
         if os.path.exists(commit_json_path):
-            try:
-                import json
-                with open(commit_json_path, "r", encoding="utf-8") as f:
-                    data = json.load(f)
-                    if isinstance(data, list):
-                        commit_messages.extend(data)
-            except Exception as e:
-                print(f"Error loading commit.json: {e}")
-        else:
+            for enc in ["utf-8-sig", "utf-8", "cp949", "euc-kr"]:
+                try:
+                    with open(commit_json_path, "r", encoding=enc) as f:
+                        data = json.load(f)
+                        if isinstance(data, list):
+                            data = [str(item) for item in data]
+                            commit_messages.extend(data)
+                            loaded = True
+                            break
+                except (UnicodeDecodeError, json.JSONDecodeError):
+                    continue
+                except Exception as e:
+                    self.write_log(f"Error loading commit.json: {e}", "warning")
+                    break
+
+        if not loaded:
+            if os.path.exists(commit_json_path):
+                self.write_log("Could not parse commit.json. Using default templates.", "warning")
             commit_messages.extend([
-                "feat: Add new parts or assemblies",
-                "fix: Correct geometry errors or modeling issues",
-                "refactor: Clean up design feature tree or references",
-                "docs: Update drawings, annotations, or bill of materials (BOM)",
-                "chore: Clean up temporary files or modify configurations"
+                "대략설계 : ",
+                "상세설계 : ",
+                "디자인리뷰 : ",
+                "도면작성 : ",
+                "프로토타입 제작 : ",
+                "프로토타입 수정보완 : ",
+                "시험평가 : ",
+                "생산이관 : "
             ])
+            
         if hasattr(self, 'cb_commit_msg'):
             self.cb_commit_msg['values'] = commit_messages
             current = self.cb_commit_msg.get()
@@ -2800,6 +2814,7 @@ class GIT4SWApp(tk.Tk):
                     def on_failure():
                         self.workspace_path = orig_workspace_path
                         self.git_service = orig_git_service
+                        self.load_commit_messages()
                         self.refresh_dashboard()
                         
                     self.task_queue.put(('error', f"Clone failed:\n{clean_err}", on_failure))
