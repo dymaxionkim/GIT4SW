@@ -1413,7 +1413,7 @@ class GIT4SWApp(tk.Tk):
         self.txt_message.pack(fill="x", padx=8, pady=2)
         
         btn_save_frm = ttk.Frame(save_card, style="TFrame")
-        btn_save_frm.pack(anchor="e", padx=8, pady=(2, 6))
+        btn_save_frm.pack(fill="x", padx=8, pady=(2, 6))
         
         # Load predefined commit messages from commit.json
         commit_messages = [""]
@@ -1436,17 +1436,18 @@ class GIT4SWApp(tk.Tk):
                 "chore: Clean up temporary files or modify configurations"
             ])
 
-        # Commit message selection combobox
-        self.cb_commit_msg = ttk.Combobox(btn_save_frm, state="readonly", width=40, values=commit_messages)
-        self.cb_commit_msg.set("")
-        self.cb_commit_msg.pack(side="left", padx=(0, 8))
-        self.cb_commit_msg.bind("<<ComboboxSelected>>", self.on_commit_msg_selected)
+        # Pack buttons first on the right side
+        self.btn_save_all = ttk.Button(btn_save_frm, text="Upload Every Files Version", style="Primary.TButton", command=self.save_all_versions)
+        self.btn_save_all.pack(side="right")
         
         self.btn_save_ver = ttk.Button(btn_save_frm, text="Upload Selected File Version", command=self.save_version)
-        self.btn_save_ver.pack(side="left", padx=(0, 8))
+        self.btn_save_ver.pack(side="right", padx=(0, 8))
         
-        self.btn_save_all = ttk.Button(btn_save_frm, text="Upload Every Files Version", style="Primary.TButton", command=self.save_all_versions)
-        self.btn_save_all.pack(side="left")
+        # Commit message selection combobox (stretched to the left end)
+        self.cb_commit_msg = ttk.Combobox(btn_save_frm, state="readonly", values=commit_messages)
+        self.cb_commit_msg.set("")
+        self.cb_commit_msg.pack(side="left", fill="x", expand=True, padx=(0, 8))
+        self.cb_commit_msg.bind("<<ComboboxSelected>>", self.on_commit_msg_selected)
         
         return view
 
