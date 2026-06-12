@@ -297,11 +297,13 @@ class GitService:
         # 2. Get status via git status --porcelain
         changed_files = {}
         try:
-            status_out = self._run_lfs_cmd(["git", "status", "--porcelain"])
+            status_out = self._run_lfs_cmd(["git", "status", "--porcelain", "-u"])
             for line in status_out.splitlines():
                 if len(line) >= 3:
                     status_code = line[:2]
                     filepath = line[3:].strip()
+                    if "\t" in filepath:
+                        filepath = filepath.split("\t")[0]
                     if filepath.startswith('"') and filepath.endswith('"'):
                         filepath = filepath[1:-1]
                         try:
