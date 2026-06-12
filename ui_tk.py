@@ -1561,10 +1561,7 @@ class GIT4SWApp(tk.Tk):
         lbl_save_title = ttk.Label(save_card, text="Save Version & Upload (Check-in)", style="CardTitle.TLabel")
         lbl_save_title.pack(anchor="w", padx=8, pady=(4, 2))
         
-        lbl_msg = ttk.Label(save_card, text="Version Description:", style="Card.TLabel")
-        lbl_msg.pack(anchor="w", padx=8)
-        
-        self.txt_message = tk.Text(save_card, height=3, bg="#ffffff", fg="#1f2937", insertbackground="#000000", relief="solid", bd=1, highlightthickness=0, font="TkDefaultFont")
+        self.txt_message = tk.Text(save_card, height=2, bg="#ffffff", fg="#1f2937", insertbackground="#000000", relief="solid", bd=1, highlightthickness=0, font="TkDefaultFont")
         self.txt_message.pack(fill="x", padx=8, pady=2)
         
         btn_save_frm = ttk.Frame(save_card, style="TFrame")
