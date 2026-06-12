@@ -23,7 +23,7 @@ The Dashboard is the central cockpit of the application, showing repository conf
 • Make my branch (Button)
   - Resolves your identity from your git/GitHub configuration, automatically creates a new local and remote developer branch under your username, and switches to it. This keeps your work isolated and prevents direct modification conflicts on the 'main' branch.
 • README.md (Button)
-  - Opens the README.md file of your active local repository in the Windows Text Editor (Notepad). If the file does not exist locally, the client automatically copies and initializes it from the program's README.md template.
+  - Opens the README.md file of your active local repository in Notepad. Once you edit and close the text editor, the client automatically runs git add, commit, and push to synchronize the file with the remote server. If the file does not exist locally, it initializes it from the template.
 • Get Latest Version (Sync) (Button)
   - Downloads and applies (pulls) the latest changes from the remote server for the active branch.
 • Merge main branch into current branch (Button)
@@ -49,6 +49,12 @@ The File Manager provides file-level checkout, checking-in, and local modificati
     - SolidWorks: Displays 'Open' if the file is currently loaded in the CAD application.
     - Locked: Indicates lock state ('me' if locked by you, 'other' if locked by someone else).
     - By: Displays the name of the developer who holds the lock.
+  - Keyboard Shortcut: Pressing Ctrl+A, Ctrl+a, or Ctrl+ㅁ when focusing the file table automatically selects all files in the list.
+  - Sorting Options (Combobox): Choose from by Name, by Extension, by Status, by Solidworks, or by Locked.
+    - 'by Status' groups files by New File -> Modified -> Unmodified.
+    - 'by Solidworks' groups files with 'Open' status first.
+    - All sorting modes utilize the full relative File Path as the secondary alphabetical sorting key.
+    - Ignored files defined in .gitignore (detected via git ls-files) are filtered out and will not be displayed.
 • Refresh (Button)
   - Reloads files, queries LFS lock database, and updates SolidWorks open documents instantly.
 • Open (Button)
@@ -69,8 +75,10 @@ The File Manager provides file-level checkout, checking-in, and local modificati
   - Enter a brief description (commit message) describing what changes you made to the files.
 • Upload Selected File Version (Button)
   - Commits, pushes, and uploads selected modified files to the remote server, releasing locks upon success.
+  - Safety Checks: If any selected file is currently open in SolidWorks, the upload is blocked with an English warning dialog. If any file is locked by another developer, you will be prompted to skip those files and proceed, or abort the upload.
 • Upload Every Files Version (Button)
   - Commits, pushes, and uploads all modified files in the workspace, and releases all active locks.
+  - Safety Checks: Performs the same SolidWorks open file blocks and other-user lock validation checks as the selected upload.
 
 ----------------------------------------------------------
 3. HISTORY LOG MODE
@@ -105,12 +113,14 @@ Configure system and application paths to ensure integration runs smoothly.
 ----------------------------------------------------------
 6. SYSTEM LOG & PROCESS TERMINATION
 ----------------------------------------------------------
-At the bottom of the client window, the System Log displays timestamped info, success, warning, or error logs about ongoing operations.
+At the bottom of the client window, the System Log displays info, success, warning, or error logs about ongoing operations.
 
 • Status Indicator
   - Displays a green dot and "● Idle" when no background tasks are running, and a red dot and "● Working" when operations are active.
+• Sequential Button Queuing
+  - If you click any action button (e.g. merge, sync, upload) while a background task is running (Working state), the action is queued in self.pending_button_tasks and will automatically execute sequentially once the active process finishes.
 • Terminate (Button)
-  - Allows you to forcefully abort and terminate any ongoing background Git operations. It recursively terminates all spawned child subprocess trees on Windows and restores the client buttons to their default active states.
+  - Allows you to forcefully abort and terminate any ongoing background Git operations. It recursively terminates all spawned child subprocess trees on Windows, clears any queued pending button tasks, and restores the client buttons to their default active states.
   - The button is visually disabled (faded pink color) when the status is "Idle" and turns fully active (red background) only when background tasks are running.
 • Clear (Button)
   - Empties the current text log window.
