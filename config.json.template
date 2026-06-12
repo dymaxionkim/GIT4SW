@@ -6,5 +6,6 @@
     "workspace_path": "D:\\github\\TEST",
     "github_token": "",
     "default_local_path": "D:\\github",
-    "organization_name": "mech-higenmotor"
+    "organization_name": "mech-higenmotor",
+    "auto_sync": false
 }

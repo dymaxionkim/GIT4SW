@@ -82,6 +82,9 @@ SolidWorks로 설계 작업을 진행할 때 도면(`.slddrw`), 파트(`.sldprt`
   - *예*: `C:\Users\dhkima\github`
 * **Organization Name**: 관리자 모드에서 신규 비공개 저장소를 자동 개설할 대상 GitHub 조직(Organization)의 이름입니다.
   - *예*: `mech-higenmotor`
+* **Auto Sync**: 프로그램 구동 시 또는 저장소 스위칭/클론/신규 생성 작업 완료 시 자동으로 원격 동기화(Get Latest Version) 및 메인 브랜치 병합(Merge main branch)을 순차 실행할지 여부를 결정하는 Boolean 설정 변수입니다. 대시보드의 Auto Sync 체크박스로 제어되며 Config 화면의 수동 편집 목록에서는 제외됩니다.
+  - *예*: `true` 또는 `false`
+
 
 ### 4.2 기본 작업 워크플로우
 
