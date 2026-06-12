@@ -4021,14 +4021,13 @@ class GIT4SWApp(tk.Tk):
                                 self.increment_tasks()
                                 success = False
                                 try:
-                                    try:
-                                        self.git_service.lock_file(path_to_lock)
-                                        self.files_locked_by_us.add(path_to_lock)
-                                        self.task_queue.put(('sw_status', f"Automatically locked {path_to_lock}", None))
-                                        success = True
-                                    except Exception as e:
-                                        self.task_queue.put(('silent_error', f"Auto-lock failed for {path_to_lock}: {e}", None))
-                                  finally:
+                                    self.git_service.lock_file(path_to_lock)
+                                    self.files_locked_by_us.add(path_to_lock)
+                                    self.task_queue.put(('sw_status', f"Automatically locked {path_to_lock}", None))
+                                    success = True
+                                except Exception as e:
+                                    self.task_queue.put(('silent_error', f"Auto-lock failed for {path_to_lock}: {e}", None))
+                                finally:
                                     self.decrement_tasks()
                                     
                                 if success:
@@ -4056,15 +4055,14 @@ class GIT4SWApp(tk.Tk):
                                 self.increment_tasks()
                                 success = False
                                 try:
-                                    try:
-                                        self.git_service.unlock_file(path_to_unlock)
-                                        if path_to_remove in self.files_locked_by_us:
-                                            self.files_locked_by_us.remove(path_to_remove)
-                                        self.task_queue.put(('sw_status', f"Automatically unlocked {path_to_unlock}", None))
-                                        success = True
-                                    except Exception as e:
-                                        self.task_queue.put(('silent_error', f"Auto-unlock failed for {path_to_unlock}: {e}", None))
-                                  finally:
+                                    self.git_service.unlock_file(path_to_unlock)
+                                    if path_to_remove in self.files_locked_by_us:
+                                        self.files_locked_by_us.remove(path_to_remove)
+                                    self.task_queue.put(('sw_status', f"Automatically unlocked {path_to_unlock}", None))
+                                    success = True
+                                except Exception as e:
+                                    self.task_queue.put(('silent_error', f"Auto-unlock failed for {path_to_unlock}: {e}", None))
+                                finally:
                                     self.decrement_tasks()
                                     
                                 if success:
