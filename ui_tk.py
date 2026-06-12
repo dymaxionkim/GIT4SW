@@ -1108,7 +1108,7 @@ class GIT4SWApp(tk.Tk):
         lbl_sync_desc = ttk.Label(sync_card, text="Fetch the latest CAD documents from the remote Git server.", style="Card.TLabel")
         lbl_sync_desc.pack(anchor="w", padx=12, pady=1)
         
-        sync_btn_frm = ttk.Frame(sync_card, style="Card.TFrame")
+        sync_btn_frm = tk.Frame(sync_card, bg="#ffffff")
         sync_btn_frm.pack(anchor="w", padx=12, pady=(4, 6))
 
         self.btn_sync = ttk.Button(sync_btn_frm, text="Get Latest Version (Sync)", style="Primary.TButton", command=self.sync_repository)
@@ -1127,6 +1127,8 @@ class GIT4SWApp(tk.Tk):
             selectcolor="#ffffff",
             activebackground="#ffffff",
             activeforeground="#1f2937",
+            highlightbackground="#ffffff",
+            highlightcolor="#ffffff",
             font=("TkDefaultFont", 9, "bold"),
             bd=0,
             padx=10
