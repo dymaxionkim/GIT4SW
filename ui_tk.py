@@ -943,9 +943,6 @@ class GIT4SWApp(tk.Tk):
         card = ttk.Frame(view, style="Card.TFrame")
         card.pack(fill="both", expand=True, padx=16, pady=4)
         
-        lbl_card_title = ttk.Label(card, text="GIT4SW User Guide", style="CardTitle.TLabel")
-        lbl_card_title.pack(anchor="w", padx=16, pady=(12, 8))
-        
         # Text/Instructions Container
         container = tk.Frame(card, bg="#ffffff", height=380)
         container.pack(fill="both", expand=True, padx=16, pady=(0, 16))
