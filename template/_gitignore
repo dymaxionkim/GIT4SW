@@ -17,3 +17,26 @@
 !*.sldasm
 !*.sldprt
 !*.slddrw
+
+# 5. 솔리드웍스 임시 파일 무시
+~$*.SLDASM
+~$*.SLDPRT
+~$*.SLDDRW
+~*.sldasm
+~*.sldprt
+~*.slddrw
+
+# 6. 특정 디렉토리 무시
+__*/
+*__*/
+DOC/
+2D/
+DXF/
+DWG/
+PDF/
+STEP/
+STP/
+STP_ASM/
+BOM/
+build/
+CAE/
