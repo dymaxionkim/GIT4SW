@@ -5,6 +5,8 @@ GIT4SW is an agentic CAD version control desktop application designed for SolidW
 
 Below is a detailed walkthrough of each application tab, its widgets, and functions.
 
+Movie : https://youtu.be/ebOAnOko3p0
+
 ----------------------------------------------------------
 1. DASHBOARD MODE
 ----------------------------------------------------------
