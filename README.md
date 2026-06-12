@@ -6,7 +6,7 @@ SolidWorks로 설계 작업을 진행할 때 도면(`.slddrw`), 파트(`.sldprt`
 
 ![](GIT4SW.png)
 
-[https://youtu.be/ebOAnOko3p0](https://youtu.be/ebOAnOko3p0)
+[https://youtu.be/SGs7_w_s2pI](https://youtu.be/SGs7_w_s2pI)
 
 ---
 
