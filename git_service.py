@@ -317,6 +317,26 @@ class GitService:
         # 1. Fetch LFS locks
         locks = self.get_lfs_locks()
         
+        # 1.5 Fetch ignored files to exclude them from the file list
+        ignored_files = set()
+        try:
+            ignored_out = self._run_lfs_cmd(["git", "ls-files", "--others", "--ignored", "--exclude-standard"])
+            for line in ignored_out.splitlines():
+                line = line.strip()
+                if not line:
+                    continue
+                if line.startswith('"') and line.endswith('"'):
+                    line = line[1:-1]
+                    try:
+                        import codecs
+                        b, _ = codecs.escape_decode(bytes(line, "utf-8"))
+                        line = b.decode("utf-8")
+                    except Exception:
+                        pass
+                ignored_files.add(line.replace("\\", "/").lower())
+        except Exception:
+            pass
+        
         # 2. Get status via git status --porcelain
         changed_files = {}
         try:
@@ -394,6 +414,9 @@ class GitService:
                 if ext in [".sldprt", ".sldasm", ".slddrw"]:
                      full_path = os.path.join(root, file)
                      rel_path = os.path.relpath(full_path, self.repo_path).replace("\\", "/")
+                     
+                     if rel_path.lower() in ignored_files:
+                         continue
                      
                      status_desc = 'unmodified'
                      for c_path, c_status in changed_files.items():
