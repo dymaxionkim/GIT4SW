@@ -303,10 +303,16 @@ class GitService:
                     status_code = line[:2]
                     filepath = line[3:].strip()
                     if filepath.startswith('"') and filepath.endswith('"'):
-                         filepath = filepath[1:-1]
+                        filepath = filepath[1:-1]
+                        try:
+                            import codecs
+                            b, _ = codecs.escape_decode(bytes(filepath, "utf-8"))
+                            filepath = b.decode("utf-8")
+                        except Exception:
+                            pass
                     
                     is_new = "?" in status_code
-                    is_mod = "M" in status_code or "A" in status_code or "D" in status_code
+                    is_mod = "M" in status_code or "A" in status_code or "D" in status_code or "R" in status_code
                     
                     if is_new:
                         changed_files[filepath] = "untracked"
@@ -340,7 +346,7 @@ class GitService:
                         text=True,
                         encoding="utf-8",
                         errors="ignore"
-                    )
+                     )
                     # git check-ignore outputs ignored paths separated by NUL
                     if result.stdout:
                         ignored_paths = set(
@@ -359,7 +365,11 @@ class GitService:
                      full_path = os.path.join(root, file)
                      rel_path = os.path.relpath(full_path, self.repo_path).replace("\\", "/")
                      
-                     status_desc = changed_files.get(rel_path, 'unmodified')
+                     status_desc = 'unmodified'
+                     for c_path, c_status in changed_files.items():
+                         if c_path.lower() == rel_path.lower():
+                             status_desc = c_status
+                             break
                      
                      # Case-insensitive lookup in locks
                      lock_info = None
