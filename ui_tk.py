@@ -4033,7 +4033,8 @@ class GIT4SWApp(tk.Tk):
                                 if success:
                                     import time
                                     time.sleep(1.5)
-                                    self.task_queue.put(('callback', None, self.refresh_file_list))
+                                    if self.bg_tasks_count == 0:
+                                        self.task_queue.put(('callback', None, self.refresh_file_list))
                                     
                             threading.Thread(target=run_lock, args=(rel_path,), daemon=True).start()
                 
@@ -4068,7 +4069,8 @@ class GIT4SWApp(tk.Tk):
                                 if success:
                                     import time
                                     time.sleep(1.5)
-                                    self.task_queue.put(('callback', None, self.refresh_file_list))
+                                    if self.bg_tasks_count == 0:
+                                        self.task_queue.put(('callback', None, self.refresh_file_list))
                                     
                             threading.Thread(target=run_unlock, args=(rel_path, matched_path), daemon=True).start()
                             
@@ -4089,7 +4091,10 @@ class GIT4SWApp(tk.Tk):
                 # Update status label
                 # If the set of open files changed (comparing normalized sets case-insensitively), trigger refresh
                 if curr_open_lower != last_open_lower:
-                    self.task_queue.put(('sw_status', status_text, self.refresh_file_list))
+                    if self.bg_tasks_count == 0:
+                        self.task_queue.put(('sw_status', status_text, self.refresh_file_list))
+                    else:
+                        self.task_queue.put(('sw_status', status_text, None))
                 else:
                     self.task_queue.put(('sw_status', status_text, None))
                 
@@ -4099,8 +4104,9 @@ class GIT4SWApp(tk.Tk):
             except Exception as e:
                 print(f"Error in SolidWorks background monitor loop: {e}")
                 
-            # Sleep for 4.0 seconds before next polling
-            threading.Event().wait(4.0)
+            # Dynamic polling interval: 6.0 seconds if SolidWorks is running, 12.0 seconds if not.
+            poll_interval = 6.0 if (self.sw_service._get_sw_app() is not None) else 12.0
+            threading.Event().wait(poll_interval)
 
     def destroy(self):
         self.sw_monitor_active = False
