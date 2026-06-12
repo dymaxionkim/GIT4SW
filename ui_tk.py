@@ -1712,19 +1712,19 @@ class GIT4SWApp(tk.Tk):
         if sort_method == "by Extension":
             filtered_files.sort(key=lambda f: (os.path.splitext(f['file'])[1].lower(), f['file'].lower()))
         elif sort_method == "by Status":
-            status_map = {
-                'modified': '🟢 Modified',
-                'untracked': '🔵 New File',
-                'unmodified': '⚪ Unmodified'
+            status_weights = {
+                'untracked': 0,   # "New File"
+                'modified': 1,    # "Modified"
+                'unmodified': 2   # "Unmodified"
             }
-            filtered_files.sort(key=lambda f: (status_map.get(f['status'], f['status']).lower(), f['file'].lower()))
+            filtered_files.sort(key=lambda f: (status_weights.get(f['status'], 9), f['file'].lower()))
         elif sort_method == "by Solidworks":
-            def get_sw_status(f):
+            def get_sw_weight(f):
                 for open_f in self.last_open_files:
                     if open_f.lower() == f['file'].lower():
-                        return "🟢 Open"
-                return "—"
-            filtered_files.sort(key=lambda f: (get_sw_status(f).lower(), f['file'].lower()))
+                        return 0  # "Open" first
+                return 1  # "—" next
+            filtered_files.sort(key=lambda f: (get_sw_weight(f), f['file'].lower()))
         elif sort_method == "by Locked":
             def get_locked_owner(f):
                 val = f.get('locked_by') if f.get('locked') else "—"
