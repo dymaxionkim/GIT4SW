@@ -50,6 +50,15 @@ class CustomFileTable(tk.Frame):
         self.treeview.tag_configure("slddrw", foreground="#dc2626")
         self.treeview.tag_configure("default_ext", foreground="#7c3aed")
         
+        # Bind keyboard shortcuts for selecting all items
+        self.treeview.bind("<Control-a>", self.select_all_files)
+        self.treeview.bind("<Control-A>", self.select_all_files)
+        self.treeview.bind("<Control-ae>", self.select_all_files)
+        
+    def select_all_files(self, event=None):
+        self.treeview.selection_set(self.treeview.get_children())
+        return "break"
+
     def get_children(self):
         return self.treeview.get_children()
         
@@ -144,115 +153,73 @@ class BranchSelectionDialog(tk.Toplevel):
 
 
 class MultiConflictResolutionDialog(tk.Toplevel):
-    def __init__(self, parent, conflicted_files, ours_label, theirs_label):
+    def __init__(self, parent, conflicted_files, ours_branch=None, theirs_branch=None, is_pull=False):
         super().__init__(parent)
-        self.title("Resolve Merge Conflicts")
-        self.geometry("680x480")
+        self.title("Conflicts")
+        self.geometry("600x420")
         self.configure(bg="#f3f4f6")
         self.transient(parent)
         self.grab_set()
         
-        self.result = None  # Dict {file: 'ours'|'theirs'} or None
-        self.resolutions = {}  # Dict {file: StringVar}
+        self.result = None
+        self.temp_resolutions = {}
         
-        # Title/Header
-        lbl = ttk.Label(self, text="Conflicts detected! Choose which version to adopt for each file:", 
-                        wraplength=640, justify="left", style="TLabel", font=("TkDefaultFont", 10, "bold"))
+        # Header
+        lbl = ttk.Label(self, text="Conflicts detected! Select one or more files and choose a version to adopt:", 
+                        wraplength=560, justify="left", style="TLabel", font=("TkDefaultFont", 10, "bold"))
         lbl.pack(padx=16, pady=12, fill="x")
         
-        # Scrollable container for files
-        container = ttk.Frame(self, style="Card.TFrame")
-        container.pack(padx=16, pady=4, fill="both", expand=True)
+        # Listbox Frame
+        list_frm = ttk.Frame(self, style="Card.TFrame")
+        list_frm.pack(padx=16, pady=4, fill="both", expand=True)
         
-        # Canvas and scrollbar for scrolling if many files
-        canvas = tk.Canvas(container, bg="#ffffff", bd=0, highlightthickness=0)
-        scrollbar = ttk.Scrollbar(container, orient="vertical", command=canvas.yview)
-        scrollable_frame = tk.Frame(canvas, bg="#ffffff")
-        
-        scrollable_frame.bind(
-            "<Configure>",
-            lambda e: canvas.configure(
-                scrollregion=canvas.bbox("all")
-            )
-        )
-        
-        canvas.create_window((0, 0), window=scrollable_frame, anchor="nw")
-        canvas.configure(yscrollcommand=scrollbar.set)
-        
-        canvas.pack(side="left", fill="both", expand=True)
+        scrollbar = ttk.Scrollbar(list_frm, orient="vertical")
         scrollbar.pack(side="right", fill="y")
         
-        # List of conflicted files
-        for idx, f in enumerate(conflicted_files):
-            row_frm = tk.Frame(scrollable_frame, bg="#ffffff")
-            row_frm.pack(fill="x", padx=12, pady=6)
-            
-            # File name
-            lbl_file = tk.Label(row_frm, text=f, bg="#ffffff", fg="#1f2937", font=("TkDefaultFont", 9), width=30, anchor="w", wraplength=220, justify="left")
-            lbl_file.pack(side="left", padx=(0, 10))
-            
-            # Choice Var (default to ours)
-            var = tk.StringVar(value="ours")
-            self.resolutions[f] = var
-            
-            # Toggle buttons (Radiobutton styled as buttons)
-            choice_frm = tk.Frame(row_frm, bg="#ffffff")
-            choice_frm.pack(side="left", fill="x", expand=True)
-            
-            rb_ours = tk.Radiobutton(
-                choice_frm, 
-                text=ours_label, 
-                value="ours", 
-                variable=var, 
-                indicatoron=False,
-                width=18,
-                padx=8,
-                pady=4,
-                bg="#f3f4f6",
-                fg="#1f2937",
-                selectcolor="#d1fae5",    # Green background when selected
-                activebackground="#e5e7eb",
-                relief="flat",
-                bd=1,
-                highlightthickness=0
-            )
-            rb_ours.pack(side="left", padx=4)
-            
-            rb_theirs = tk.Radiobutton(
-                choice_frm, 
-                text=theirs_label, 
-                value="theirs", 
-                variable=var, 
-                indicatoron=False,
-                width=18,
-                padx=8,
-                pady=4,
-                bg="#f3f4f6",
-                fg="#1f2937",
-                selectcolor="#ffe4e6",    # Rose/red background when selected
-                activebackground="#e5e7eb",
-                relief="flat",
-                bd=1,
-                highlightthickness=0
-            )
-            rb_theirs.pack(side="left", padx=4)
-            
-            # Divider between rows
-            if idx < len(conflicted_files) - 1:
-                row_div = tk.Frame(scrollable_frame, bg="#f3f4f6", height=1)
-                row_div.pack(fill="x", padx=12, pady=4)
-            
-        # Action Buttons Frame
-        btn_frm = ttk.Frame(self, style="TFrame")
-        btn_frm.pack(padx=16, pady=16, fill="x", side="bottom")
+        self.listbox = tk.Listbox(
+            list_frm,
+            selectmode="extended",
+            yscrollcommand=scrollbar.set,
+            bg="#ffffff",
+            fg="#1f2937",
+            selectbackground="#e5e7eb",
+            selectforeground="#1f2937",
+            bd=0,
+            highlightthickness=0,
+            font="TkDefaultFont"
+        )
+        for f in conflicted_files:
+            self.listbox.insert("end", f)
+        self.listbox.pack(side="left", fill="both", expand=True)
+        scrollbar.config(command=self.listbox.yview)
         
-        btn_ok = ttk.Button(btn_frm, text="Apply Resolution", style="Primary.TButton", command=self.on_ok)
-        btn_ok.pack(side="right", padx=(8, 0))
+        # Control Frame (Combo box + OK button)
+        control_frm = ttk.Frame(self, style="TFrame")
+        control_frm.pack(padx=16, pady=8, fill="x")
+        
+        lbl_adopt = ttk.Label(control_frm, text="Adopt version from:", style="TLabel")
+        lbl_adopt.pack(side="left", padx=(0, 8))
+        
+        if is_pull:
+            self.options = ["local", "remote"]
+        else:
+            self.options = [ours_branch if ours_branch else "local", theirs_branch if theirs_branch else "remote"]
+            
+        self.cb_choice = ttk.Combobox(control_frm, state="readonly", values=self.options, width=15)
+        self.cb_choice.pack(side="left", padx=(0, 8))
+        self.cb_choice.set(self.options[0])
+        
+        btn_ok = ttk.Button(control_frm, text="OK", style="Primary.TButton", command=self.on_ok)
+        btn_ok.pack(side="left")
+        
+        # Bottom/Action Buttons Frame
+        btn_frm = ttk.Frame(self, style="TFrame")
+        btn_frm.pack(padx=16, pady=12, fill="x", side="bottom")
         
         btn_cancel = ttk.Button(btn_frm, text="Cancel", command=self.on_cancel)
         btn_cancel.pack(side="right")
         
-        # Center the window relative to parent
+        # Center the window
         self.update_idletasks()
         x = parent.winfo_rootx() + (parent.winfo_width() - self.winfo_width()) // 2
         y = parent.winfo_rooty() + (parent.winfo_height() - self.winfo_height()) // 2
@@ -261,18 +228,54 @@ class MultiConflictResolutionDialog(tk.Toplevel):
         self.protocol("WM_DELETE_WINDOW", self.on_cancel)
         
     def on_ok(self):
-        self.result = {f: var.get() for f, var in self.resolutions.items()}
-        self.destroy()
-        
+        selected_indices = self.listbox.curselection()
+        if not selected_indices:
+            messagebox.showwarning("No Selection", "Please select one or more files from the list to resolve.")
+            return
+            
+        choice = self.cb_choice.get()
+        if choice in ("local", self.options[0]):
+            res_val = "ours"
+        else:
+            res_val = "theirs"
+            
+        selected_files = [self.listbox.get(i) for i in selected_indices]
+        for f in selected_files:
+            self.temp_resolutions[f] = res_val
+            
+        # Delete from listbox in reverse order
+        for index in sorted(selected_indices, reverse=True):
+            self.listbox.delete(index)
+            
+        if self.listbox.size() == 0:
+            self.result = self.temp_resolutions
+            self.destroy()
+            
     def on_cancel(self):
         self.result = None
         self.destroy()
+
+
+def queue_during_bg_tasks(method):
+    import functools
+    @functools.wraps(method)
+    def wrapper(self, *args, **kwargs):
+        def task():
+            method(self, *args, **kwargs)
+        if self.bg_tasks_count > 0:
+            action_name = method.__name__.replace("_", " ").title()
+            self.write_log(f"Working state: '{action_name}' queued and will start after the active process finishes.", "info")
+            self.pending_button_tasks.append(task)
+        else:
+            task()
+    return wrapper
 
 
 class GIT4SWApp(tk.Tk):
     def __init__(self, workspace_path):
         super().__init__()
         self.workspace_path = workspace_path
+        self.pending_button_tasks = []
         self.check_and_load_config()
         
         # Initialize Services
@@ -651,6 +654,7 @@ class GIT4SWApp(tk.Tk):
             self.write_log("ℹ️ No active Git processes found to terminate.", "info")
             
         # 5. Reset the background task counter and status indicator
+        self.pending_button_tasks.clear()
         self.bg_tasks_count = 0
         self.lbl_status_indicator.config(text="● Idle", fg="#10b981")
         self.update_terminate_btn_state(False)
@@ -881,6 +885,7 @@ class GIT4SWApp(tk.Tk):
             # Save a reference to the entry
             self.config_entries[key] = ent
 
+    @queue_during_bg_tasks
     def save_config_from_view(self):
         config_path = "config.json"
         
@@ -1338,6 +1343,7 @@ class GIT4SWApp(tk.Tk):
                 
         threading.Thread(target=run, args=(False,), daemon=True).start()
 
+    @queue_during_bg_tasks
     def make_my_branch(self):
         if getattr(self, 'is_switching_branch', False):
             self.write_log("Operation already in progress.", "warning")
@@ -1503,7 +1509,7 @@ class GIT4SWApp(tk.Tk):
         self.cb_path_filter.bind("<<ComboboxSelected>>", self.on_path_filter_selected)
         
         # Sort order combobox (placed to the left of path filter)
-        self.cb_sort_order = ttk.Combobox(header_frm, state="readonly", width=15, values=["by Name", "by Extension"])
+        self.cb_sort_order = ttk.Combobox(header_frm, state="readonly", width=15, values=["by Name", "by Extension", "by Status", "by Solidworks", "by Locked"])
         self.cb_sort_order.pack(side="right", padx=(0, 8))
         self.cb_sort_order.set("by Name")
         self.cb_sort_order.bind("<<ComboboxSelected>>", self.on_sort_order_selected)
@@ -1573,6 +1579,7 @@ class GIT4SWApp(tk.Tk):
         
         return view
 
+    @queue_during_bg_tasks
     def refresh_file_list(self):
         if getattr(self, 'is_refreshing_file_list', False):
             return
@@ -1704,6 +1711,25 @@ class GIT4SWApp(tk.Tk):
         sort_method = self.cb_sort_order.get()
         if sort_method == "by Extension":
             filtered_files.sort(key=lambda f: (os.path.splitext(f['file'])[1].lower(), os.path.basename(f['file']).lower(), f['file'].lower()))
+        elif sort_method == "by Status":
+            status_map = {
+                'modified': '🟢 Modified',
+                'untracked': '🔵 New File',
+                'unmodified': '⚪ Unmodified'
+            }
+            filtered_files.sort(key=lambda f: (status_map.get(f['status'], f['status']).lower(), os.path.basename(f['file']).lower()))
+        elif sort_method == "by Solidworks":
+            def get_sw_status(f):
+                for open_f in self.last_open_files:
+                    if open_f.lower() == f['file'].lower():
+                        return "🟢 Open"
+                return "—"
+            filtered_files.sort(key=lambda f: (get_sw_status(f).lower(), os.path.basename(f['file']).lower()))
+        elif sort_method == "by Locked":
+            def get_locked_owner(f):
+                val = f.get('locked_by') if f.get('locked') else "—"
+                return val if val else "—"
+            filtered_files.sort(key=lambda f: (get_locked_owner(f).lower(), os.path.basename(f['file']).lower()))
         else:  # "by Name"
             filtered_files.sort(key=lambda f: (os.path.basename(f['file']).lower(), f['file'].lower()))
             
@@ -1773,6 +1799,7 @@ class GIT4SWApp(tk.Tk):
             
         return self.sw_service.check_and_close_file(file_rel_path, self.workspace_path, thread_safe_prompt)
 
+    @queue_during_bg_tasks
     def lock_file(self):
         selected_items = self.tree.selection()
         if not selected_items:
@@ -1816,6 +1843,7 @@ class GIT4SWApp(tk.Tk):
                 
         threading.Thread(target=run, daemon=True).start()
 
+    @queue_during_bg_tasks
     def unlock_file(self):
         selected_items = self.tree.selection()
         if not selected_items:
@@ -1858,6 +1886,7 @@ class GIT4SWApp(tk.Tk):
                 
         threading.Thread(target=run, daemon=True).start()
 
+    @queue_during_bg_tasks
     def force_unlock_file(self):
         selected_items = self.tree.selection()
         if not selected_items:
@@ -1907,6 +1936,7 @@ class GIT4SWApp(tk.Tk):
                 
         threading.Thread(target=run, daemon=True).start()
 
+    @queue_during_bg_tasks
     def save_version(self):
         selected_items = self.tree.selection()
         if not selected_items:
@@ -1926,20 +1956,80 @@ class GIT4SWApp(tk.Tk):
             self.increment_tasks()
             success = False
             try:
-                # Run check_sw_open_state in worker thread
-                for file_rel_path in files_to_save:
-                    if not self.check_sw_open_state(file_rel_path):
+                # 1. Check open in SolidWorks
+                try:
+                    open_docs = self.sw_service.get_all_open_documents()
+                except Exception:
+                    open_docs = []
+                
+                repo_path_norm = os.path.abspath(self.workspace_path).replace("\\", "/")
+                current_open_files = set()
+                for doc in open_docs:
+                    filepath = doc['path']
+                    if filepath:
+                        filepath_norm = os.path.abspath(filepath).replace("\\", "/")
+                        if filepath_norm.lower().startswith(repo_path_norm.lower()):
+                            rel_path = filepath_norm[len(repo_path_norm):].strip("/")
+                            if rel_path:
+                                corrected_path = self.git_service.get_correct_filepath_casing(rel_path)
+                                current_open_files.add(corrected_path.lower())
+                                
+                open_targets = [f for f in files_to_save if f.lower() in current_open_files]
+                if open_targets:
+                    res_q = queue.Queue()
+                    def show_sw_warning():
+                        messagebox.showwarning(
+                            "Warning",
+                            "Warning: One or more target files are currently open in Solidworks. Upload cannot proceed."
+                        )
+                        res_q.put(True)
+                    self.task_queue.put(('callback', None, show_sw_warning))
+                    res_q.get()
+                    return
+                
+                # 2. Check locks
+                locks = self.git_service.get_lfs_locks()
+                locks_lower = {k.lower(): v for k, v in locks.items()}
+                
+                locked_by_others = []
+                for fp in files_to_save:
+                    if fp.lower() in locks_lower:
+                        if not locks_lower[fp.lower()]['is_ours']:
+                            locked_by_others.append(fp)
+                            
+                files_to_commit = list(files_to_save)
+                if locked_by_others:
+                    res_q = queue.Queue()
+                    def show_lock_warning():
+                        ans = messagebox.askyesno(
+                            "경고",
+                            "경고: 대상 파일 중 하나 이상이 현재 다른 계정에 의하여 Locked되어 있습니다. 이 파일들을 제외하고 진행하겠습니까?"
+                        )
+                        res_q.put(ans)
+                    self.task_queue.put(('callback', None, show_lock_warning))
+                    proceed = res_q.get()
+                    if not proceed:
                         return
-                        
+                    else:
+                        files_to_commit = [f for f in files_to_save if f not in locked_by_others]
+                        if not files_to_commit:
+                            res_q2 = queue.Queue()
+                            def show_empty_warning():
+                                messagebox.showinfo("No Files to Upload", "All target files were excluded. Upload cancelled.")
+                                res_q2.put(True)
+                            self.task_queue.put(('callback', None, show_empty_warning))
+                            res_q2.get()
+                            return
+                
                 import git
                 # 1. Stage selected files
                 rel_paths = []
-                for fp in files_to_save:
+                for fp in files_to_commit:
                     rel_path = self.git_service.get_correct_filepath_casing(fp)
                     rel_paths.append(rel_path)
                 
                 try:
-                    self.git_service.repo.index.add(rel_paths)
+                    self.git_service._run_lfs_cmd(["git", "add"] + rel_paths)
                 except Exception as e:
                     raise RuntimeError(f"Failed to add files to index: {e}")
                 
@@ -1955,8 +2045,15 @@ class GIT4SWApp(tk.Tk):
                 author = git.Actor(name, email)
                 
                 try:
-                    self.git_service.repo.index.commit(msg, author=author, committer=author)
-                    self.write_log("Saved changes locally.", "success")
+                    import git.exc
+                    try:
+                        self.git_service.repo.index.commit(msg, author=author, committer=author)
+                        self.write_log("Saved changes locally.", "success")
+                    except git.exc.HookExecutionError as e:
+                        if "post-commit" in str(e):
+                            self.write_log("Saved changes locally (post-commit hook failed/ignored).", "warning")
+                        else:
+                            raise
                 except Exception as e:
                     raise RuntimeError(f"Local commit failed: {e}")
                 
@@ -1974,8 +2071,7 @@ class GIT4SWApp(tk.Tk):
                             self.write_log(f"Conflicts pre-detected in {len(conflicted_files)} files! Showing resolution dialog...", "warning")
                             resolutions = self.prompt_multi_conflict_resolution(
                                 conflicted_files,
-                                ours_label="Keep Ours (Local)",
-                                theirs_label="Keep Theirs (Remote)"
+                                is_pull=True
                             )
                             if resolutions is None:
                                 self.write_log("Upload cancelled by user. Rolling back local commit...", "warning")
@@ -1986,7 +2082,22 @@ class GIT4SWApp(tk.Tk):
                             self.git_service.sync_pull_with_resolutions(resolutions)
                         else:
                             self.write_log("No conflicts detected. Performing standard pull...", "info")
-                            self.git_service.sync_pull_clean()
+                            try:
+                                self.git_service.sync_pull_clean()
+                            except MergeConflictError as mce:
+                                self.write_log("Merge conflict occurred during pull. Showing resolution dialog...", "warning")
+                                resolutions = self.prompt_multi_conflict_resolution(
+                                    mce.conflicted_files,
+                                    is_pull=True
+                                )
+                                if resolutions is None:
+                                    self.write_log("Upload cancelled by user. Aborting merge and rolling back local commit...", "warning")
+                                    self.git_service.abort_merge()
+                                    self.git_service._run_lfs_cmd(["git", "reset", "--soft", "HEAD~1"])
+                                    return
+                                
+                                self.write_log("Applying resolutions to complete sync...", "info")
+                                self.git_service.resolve_conflicts_and_commit(f"origin/{branch}", resolutions)
                             
                         # 3. Push to remote
                         self.write_log("Pushing committed changes to remote server...", "info")
@@ -1998,7 +2109,7 @@ class GIT4SWApp(tk.Tk):
                         raise sync_err
                         
                 # 4. Try to automatically unlock if they were ours
-                for file_rel_path in files_to_save:
+                for file_rel_path in files_to_commit:
                     try:
                         locks = self.git_service.get_lfs_locks()
                         matched_lock_path = None
@@ -2015,7 +2126,7 @@ class GIT4SWApp(tk.Tk):
                     self.txt_message.delete("1.0", tk.END)
                     self.cb_commit_msg.set("")
                     
-                self.task_queue.put(('success', f"Version saved and uploaded to server successfully for {len(files_to_save)} files!", on_done))
+                self.task_queue.put(('success', f"Version saved and uploaded to server successfully for {len(files_to_commit)} files!", on_done))
                 success = True
             except Exception as e:
                 self.task_queue.put(('error', f"Upload failed:\n{e}", None))
@@ -2029,6 +2140,7 @@ class GIT4SWApp(tk.Tk):
                 
         threading.Thread(target=run, daemon=True).start()
 
+    @queue_during_bg_tasks
     def save_all_versions(self):
         msg = self.txt_message.get("1.0", tk.END).strip()
         if not msg:
@@ -2042,73 +2154,113 @@ class GIT4SWApp(tk.Tk):
         def run():
             self.increment_tasks()
             try:
-                # Check if there are open SolidWorks files in this repo using cache first
-                if self.last_open_files:
-                    try:
-                        open_docs = self.sw_service.get_all_open_documents()
-                    except Exception:
-                        open_docs = []
-                        
-                    if open_docs:
-                        repo_path_norm = os.path.abspath(self.workspace_path).replace("\\", "/").lower()
-                        repo_open_docs = []
-                        for doc in open_docs:
-                            filepath = doc['path']
-                            if filepath:
-                                filepath_norm = os.path.abspath(filepath).replace("\\", "/").lower()
-                                if filepath_norm.startswith(repo_path_norm):
-                                    repo_open_docs.append(doc)
-                                    
-                        if repo_open_docs:
-                            res_q = queue.Queue()
-                            
-                            def show_prompt():
-                                file_list = "\n".join(
-                                    f"  • {doc['title']}" + (" (⚠️ Unsaved changes)" if doc['dirty'] else "")
-                                    for doc in repo_open_docs
-                                )
-                                ans = messagebox.askyesnocancel(
-                                    "SolidWorks Open Files Detected",
-                                    f"The following workspace files are open in SolidWorks:\n\n{file_list}\n\n"
-                                    f"[Yes] Save and close files\n"
-                                    f"[No] Close files without saving (discard changes)\n"
-                                    f"[Cancel] Cancel upload operation"
-                                )
-                                res_q.put(ans)
+                # Get all changed files in the repo
+                try:
+                    all_changed = []
+                    status_out = self.git_service._run_lfs_cmd(["git", "status", "--porcelain", "-u"])
+                    for line in status_out.splitlines():
+                        if len(line) >= 3:
+                            filepath = line[3:].strip().replace("\\", "/")
+                            if "\t" in filepath:
+                                filepath = filepath.split("\t")[0].replace("\\", "/")
+                            if filepath.startswith('"') and filepath.endswith('"'):
+                                filepath = filepath[1:-1]
+                                try:
+                                    import codecs
+                                    b, _ = codecs.escape_decode(bytes(filepath, "utf-8"))
+                                    filepath = b.decode("utf-8").replace("\\", "/")
+                                except Exception:
+                                    pass
+                            all_changed.append(filepath)
+                except Exception as e:
+                    self.task_queue.put(('error', f"Failed to get repository status: {e}", None))
+                    return
+                
+                if not all_changed:
+                    res_q = queue.Queue()
+                    def show_no_changes():
+                        messagebox.showinfo("No Changes", "No changes detected to upload.")
+                        res_q.put(True)
+                    self.task_queue.put(('callback', None, show_no_changes))
+                    res_q.get()
+                    return
+                
+                target_sw_files = [f for f in all_changed if os.path.splitext(f)[1].lower() in ('.sldprt', '.sldasm', '.slddrw')]
+                
+                # 1. Check open in SolidWorks
+                try:
+                    open_docs = self.sw_service.get_all_open_documents()
+                except Exception:
+                    open_docs = []
+                
+                repo_path_norm = os.path.abspath(self.workspace_path).replace("\\", "/")
+                current_open_files = set()
+                for doc in open_docs:
+                    filepath = doc['path']
+                    if filepath:
+                        filepath_norm = os.path.abspath(filepath).replace("\\", "/")
+                        if filepath_norm.lower().startswith(repo_path_norm.lower()):
+                            rel_path = filepath_norm[len(repo_path_norm):].strip("/")
+                            if rel_path:
+                                corrected_path = self.git_service.get_correct_filepath_casing(rel_path)
+                                current_open_files.add(corrected_path.lower())
                                 
-                            self.task_queue.put(('callback', None, show_prompt))
-                            ans = res_q.get() # block worker thread until user responds
+                open_targets = [f for f in target_sw_files if f.lower() in current_open_files]
+                if open_targets:
+                    res_q = queue.Queue()
+                    def show_sw_warning():
+                        messagebox.showwarning(
+                            "Warning",
+                            "Warning: One or more target files are currently open in Solidworks. Upload cannot proceed."
+                        )
+                        res_q.put(True)
+                    self.task_queue.put(('callback', None, show_sw_warning))
+                    res_q.get()
+                    return
+                
+                # 2. Check locks
+                locks = self.git_service.get_lfs_locks()
+                locks_lower = {k.lower(): v for k, v in locks.items()}
+                
+                locked_by_others = []
+                for fp in target_sw_files:
+                    if fp.lower() in locks_lower:
+                        if not locks_lower[fp.lower()]['is_ours']:
+                            locked_by_others.append(fp)
                             
-                            if ans is None:
-                                return # cancel
-                                
-                            sw = self.sw_service._get_sw_app()
-                            if sw:
-                                for doc in repo_open_docs:
-                                    doc_obj = doc.get('doc_obj')
-                                    if not doc_obj:
-                                        continue
-                                    try:
-                                        if ans is True: # Yes
-                                            try:
-                                                doc_obj.Save3(1, 0, 0)
-                                            except Exception:
-                                                try:
-                                                    doc_obj.Save()
-                                                except Exception:
-                                                    pass
-                                        sw.CloseDoc(doc['title'])
-                                    except Exception as ce:
-                                        print(f"DEBUG: Failed to close {doc['title']}: {ce}")
-
+                files_to_stage = list(all_changed)
+                if locked_by_others:
+                    res_q = queue.Queue()
+                    def show_lock_warning():
+                        ans = messagebox.askyesno(
+                            "경고",
+                            "경고: 대상 파일 중 하나 이상이 현재 다른 계정에 의하여 Locked되어 있습니다. 이 파일들을 제외하고 진행하겠습니까?"
+                        )
+                        res_q.put(ans)
+                    self.task_queue.put(('callback', None, show_lock_warning))
+                    proceed = res_q.get()
+                    if not proceed:
+                        return
+                    else:
+                        files_to_stage = [f for f in all_changed if f not in locked_by_others]
+                        if not files_to_stage:
+                            res_q2 = queue.Queue()
+                            def show_empty_warning():
+                                messagebox.showinfo("No Files to Upload", "All target files were excluded. Upload cancelled.")
+                                res_q2.put(True)
+                            self.task_queue.put(('callback', None, show_empty_warning))
+                            res_q2.get()
+                            return
+                
                 import git
                 if not self.git_service.is_git_repo():
                     raise RuntimeError("Not a git repository.")
                 repo = self.git_service.repo
                 
-                # 1. Stage all changes
-                self.write_log("Staging all changes via GitPython...", "info")
-                repo.git.add(all=True)
+                # 1. Stage the files
+                self.write_log("Staging changes via Git CLI...", "info")
+                for chunk in [files_to_stage[i:i+100] for i in range(0, len(files_to_stage), 100)]:
+                    self.git_service._run_lfs_cmd(["git", "add"] + chunk)
                 
                 # Get signature details from repo config or default
                 name = "SolidWorks Designer"
@@ -2124,8 +2276,16 @@ class GIT4SWApp(tk.Tk):
                 # 2. Commit locally first
                 self.write_log("Creating commit via GitPython...", "info")
                 try:
-                    commit = repo.index.commit(msg, author=author, committer=author)
-                    self.write_log(f"Created commit locally: {commit.hexsha[:7]}", "success")
+                    import git.exc
+                    try:
+                        commit = repo.index.commit(msg, author=author, committer=author)
+                        self.write_log(f"Created commit locally: {commit.hexsha[:7]}", "success")
+                    except git.exc.HookExecutionError as e:
+                        if "post-commit" in str(e):
+                            commit = repo.head.commit
+                            self.write_log(f"Created commit locally: {commit.hexsha[:7]} (post-commit hook failed/ignored)", "warning")
+                        else:
+                            raise
                 except Exception as e:
                     raise RuntimeError(f"Local commit failed: {e}")
                 
@@ -2143,8 +2303,7 @@ class GIT4SWApp(tk.Tk):
                             self.write_log(f"Conflicts pre-detected in {len(conflicted_files)} files! Showing resolution dialog...", "warning")
                             resolutions = self.prompt_multi_conflict_resolution(
                                 conflicted_files,
-                                ours_label="Keep Ours (Local)",
-                                theirs_label="Keep Theirs (Remote)"
+                                is_pull=True
                             )
                             if resolutions is None:
                                 self.write_log("Upload cancelled by user. Rolling back local commit...", "warning")
@@ -2155,7 +2314,22 @@ class GIT4SWApp(tk.Tk):
                             self.git_service.sync_pull_with_resolutions(resolutions)
                         else:
                             self.write_log("No conflicts detected. Performing standard pull...", "info")
-                            self.git_service.sync_pull_clean()
+                            try:
+                                self.git_service.sync_pull_clean()
+                            except MergeConflictError as mce:
+                                self.write_log("Merge conflict occurred during pull. Showing resolution dialog...", "warning")
+                                resolutions = self.prompt_multi_conflict_resolution(
+                                    mce.conflicted_files,
+                                    is_pull=True
+                                )
+                                if resolutions is None:
+                                    self.write_log("Upload cancelled by user. Aborting merge and rolling back local commit...", "warning")
+                                    self.git_service.abort_merge()
+                                    self.git_service._run_lfs_cmd(["git", "reset", "--soft", "HEAD~1"])
+                                    return
+                                
+                                self.write_log("Applying resolutions to complete sync...", "info")
+                                self.git_service.resolve_conflicts_and_commit(f"origin/{branch}", resolutions)
                             
                         # 4. Push to remote
                         self.write_log("Pushing committed changes to remote server...", "info")
@@ -2165,6 +2339,21 @@ class GIT4SWApp(tk.Tk):
                         self.write_log(f"Upload sync failed: {sync_err}. Rolling back local commit...", "error")
                         self.git_service._run_lfs_cmd(["git", "reset", "--soft", "HEAD~1"])
                         raise sync_err
+                
+                # Try to automatically unlock if they were ours
+                sw_committed = [f for f in files_to_stage if os.path.splitext(f)[1].lower() in ('.sldprt', '.sldasm', '.slddrw')]
+                for file_rel_path in sw_committed:
+                    try:
+                        locks = self.git_service.get_lfs_locks()
+                        matched_lock_path = None
+                        for l_path in locks:
+                            if l_path.lower() == file_rel_path.lower():
+                                matched_lock_path = l_path
+                                break
+                        if matched_lock_path and locks[matched_lock_path]['is_ours']:
+                            self.git_service.unlock_file(matched_lock_path)
+                    except Exception:
+                        pass
                 
                 def on_done():
                     self.txt_message.delete("1.0", tk.END)
@@ -2310,15 +2499,16 @@ class GIT4SWApp(tk.Tk):
         self.after(0, ask)
         return res_queue.get()
 
-    def prompt_multi_conflict_resolution(self, conflicted_files, ours_label="Keep Ours (Local)", theirs_label="Keep Theirs (Incoming)"):
+    def prompt_multi_conflict_resolution(self, conflicted_files, ours_branch=None, theirs_branch=None, is_pull=False):
         res_queue = queue.Queue()
         def ask():
-            dialog = MultiConflictResolutionDialog(self, conflicted_files, ours_label, theirs_label)
+            dialog = MultiConflictResolutionDialog(self, conflicted_files, ours_branch, theirs_branch, is_pull)
             self.wait_window(dialog)
             res_queue.put(dialog.result)
         self.after(0, ask)
         return res_queue.get()
 
+    @queue_during_bg_tasks
     def on_merge_all_branches_clicked(self):
         from tkinter import messagebox
         ans = messagebox.askyesno(
@@ -2456,8 +2646,9 @@ class GIT4SWApp(tk.Tk):
                         self.write_log(f"Conflicts pre-detected while merging '{b}' into main! Showing resolution dialog...", "warning")
                         resolutions = self.prompt_multi_conflict_resolution(
                             conflicted_files,
-                            ours_label="Keep Main (Local)",
-                            theirs_label=f"Keep Branch '{b}' (Incoming)"
+                            ours_branch="main",
+                            theirs_branch=b,
+                            is_pull=False
                         )
                         if resolutions is None:
                             self.write_log(f"Merge of branch '{b}' cancelled by user. Aborting...", "warning")
@@ -2468,8 +2659,25 @@ class GIT4SWApp(tk.Tk):
                         self.write_log(f"Branch '{b}' merged into main successfully with resolutions.", "success")
                     else:
                         self.write_log(f"No conflicts detected. Performing standard merge for branch '{b}'...", "info")
-                        self.git_service.merge_branch(b)
-                        self.write_log(f"Branch '{b}' merged into main successfully.", "success")
+                        try:
+                            self.git_service.merge_branch(b)
+                            self.write_log(f"Branch '{b}' merged into main successfully.", "success")
+                        except MergeConflictError as mce:
+                            self.write_log(f"Merge conflict occurred while merging '{b}' into main. Showing resolution dialog...", "warning")
+                            resolutions = self.prompt_multi_conflict_resolution(
+                                mce.conflicted_files,
+                                ours_branch="main",
+                                theirs_branch=b,
+                                is_pull=False
+                            )
+                            if resolutions is None:
+                                self.write_log(f"Merge of branch '{b}' cancelled by user. Aborting...", "warning")
+                                self.git_service.abort_merge()
+                                raise RuntimeError(f"Merge cancelled by user on branch '{b}'.")
+                                
+                            self.write_log("Applying resolutions to complete merge...", "info")
+                            self.git_service.resolve_conflicts_and_commit(b, resolutions)
+                            self.write_log(f"Branch '{b}' merged into main successfully with resolutions.", "success")
                         
                 # git push -u origin main
                 self.write_log("Pushing main branch to origin...", "info")
@@ -2505,6 +2713,7 @@ class GIT4SWApp(tk.Tk):
                 
         threading.Thread(target=run, daemon=True).start()
 
+    @queue_during_bg_tasks
     def on_make_repo_clicked(self):
         import subprocess
         
@@ -2711,6 +2920,7 @@ class GIT4SWApp(tk.Tk):
                 
         threading.Thread(target=run, daemon=True).start()
                 
+    @queue_during_bg_tasks
     def refresh_history(self):
         for item in self.hist_tree.get_children():
             self.hist_tree.delete(item)
@@ -2741,6 +2951,7 @@ class GIT4SWApp(tk.Tk):
             self.hist_tree.selection_set(item)
             self.restore_version()
 
+    @queue_during_bg_tasks
     def restore_version(self):
         selected_item = self.hist_tree.selection()
         if not selected_item:
@@ -2805,6 +3016,7 @@ class GIT4SWApp(tk.Tk):
                 
         threading.Thread(target=run, daemon=True).start()
 
+    @queue_during_bg_tasks
     def restore_latest(self):
         ans = messagebox.askyesno("Confirm Return", "Do you want to discard checked-out state and return files to latest master/main branch?")
         if not ans:
@@ -2832,6 +3044,7 @@ class GIT4SWApp(tk.Tk):
     # ==========================================
     # GENERAL ACTIONS & QUEUE PROCESSING
     # ==========================================
+    @queue_during_bg_tasks
     def sync_repository(self, on_success_callback=None, silent=False):
         # --- Step 1: Check for open SolidWorks files (runs in GUI thread) ---
         try:
@@ -2889,7 +3102,43 @@ class GIT4SWApp(tk.Tk):
             self.increment_tasks()
             try:
                 try:
-                    res = self.git_service.sync_pull()
+                    self.git_service._run_lfs_cmd(["git", "fetch", "origin"])
+                    branch = self.git_service.get_current_branch()
+                    if not branch:
+                        raise RuntimeError("Cannot sync/pull because you are not currently on a branch (detached HEAD).")
+                        
+                    conflicted_files = self.git_service.check_merge_conflicts(f"origin/{branch}")
+                    if conflicted_files:
+                        self.write_log(f"Conflicts pre-detected in {len(conflicted_files)} files! Showing resolution dialog...", "warning")
+                        resolutions = self.prompt_multi_conflict_resolution(
+                            conflicted_files,
+                            is_pull=True
+                        )
+                        if resolutions is None:
+                            self.write_log("Sync cancelled by user.", "warning")
+                            return
+                            
+                        self.write_log("Applying resolutions and completing sync...", "info")
+                        res = self.git_service.sync_pull_with_resolutions(resolutions)
+                    else:
+                        self.write_log("No conflicts detected. Performing standard pull...", "info")
+                        try:
+                            res = self.git_service.sync_pull_clean()
+                        except MergeConflictError as mce:
+                            self.write_log("Merge conflict occurred during pull. Showing resolution dialog...", "warning")
+                            resolutions = self.prompt_multi_conflict_resolution(
+                                mce.conflicted_files,
+                                is_pull=True
+                            )
+                            if resolutions is None:
+                                self.write_log("Sync cancelled by user. Aborting merge...", "warning")
+                                self.git_service.abort_merge()
+                                return
+                            
+                            self.write_log("Applying resolutions to complete sync...", "info")
+                            self.git_service.resolve_conflicts_and_commit(f"origin/{branch}", resolutions)
+                            res = "Sync complete after resolving conflicts."
+                        
                     def on_complete():
                         self.refresh_dashboard()
                         if on_success_callback:
@@ -2931,6 +3180,7 @@ class GIT4SWApp(tk.Tk):
         self.write_log("🤖 Auto Sync triggered...", "info")
         self.sync_repository(on_success_callback=lambda: self.merge_main_branch(confirm=False), silent=True)
 
+    @queue_during_bg_tasks
     def clone_repository(self):
         remote_url = self.ent_remote_url.get().strip()
         if not remote_url:
@@ -3044,6 +3294,7 @@ class GIT4SWApp(tk.Tk):
                 
         threading.Thread(target=run, daemon=True).start()
 
+    @queue_during_bg_tasks
     def merge_main_branch(self, confirm=True):
         """Merges the main branch into the current branch."""
         current = self.git_service.get_current_branch()
@@ -3083,8 +3334,9 @@ class GIT4SWApp(tk.Tk):
                         self.write_log(f"Conflicts pre-detected in {len(conflicted_files)} files! Showing resolution dialog...", "warning")
                         resolutions = self.prompt_multi_conflict_resolution(
                             conflicted_files,
-                            ours_label=f"Keep Current ({current})",
-                            theirs_label=f"Keep Source ({source})"
+                            ours_branch=current,
+                            theirs_branch=source,
+                            is_pull=False
                         )
                         if resolutions is None:
                             self.write_log("Merge cancelled by user.", "warning")
@@ -3095,7 +3347,24 @@ class GIT4SWApp(tk.Tk):
                         result = "Merge completed with resolutions."
                     else:
                         self.write_log("No conflicts detected. Performing standard merge...", "info")
-                        result = self.git_service.merge_branch(source)
+                        try:
+                            result = self.git_service.merge_branch(source)
+                        except MergeConflictError as mce:
+                            self.write_log("Merge conflict occurred during merge. Showing resolution dialog...", "warning")
+                            resolutions = self.prompt_multi_conflict_resolution(
+                                mce.conflicted_files,
+                                ours_branch=current,
+                                theirs_branch=source,
+                                is_pull=False
+                            )
+                            if resolutions is None:
+                                self.write_log("Merge cancelled by user. Aborting merge...", "warning")
+                                self.git_service.abort_merge()
+                                return
+                            
+                            self.write_log("Applying resolutions to complete merge...", "info")
+                            self.git_service.resolve_conflicts_and_commit(source, resolutions)
+                            result = "Merge completed with resolutions."
                     
                     # 1. Push current branch to remote
                     push_msg = ""
@@ -3122,6 +3391,7 @@ class GIT4SWApp(tk.Tk):
 
         threading.Thread(target=run, daemon=True).start()
 
+    @queue_during_bg_tasks
     def open_readme(self):
         """Opens the README.md in Windows text editor, copying from template if it doesn't exist."""
         readme_path = os.path.join(self.workspace_path, "README.md")
@@ -3146,16 +3416,79 @@ class GIT4SWApp(tk.Tk):
                 self.write_log("README.md template file not found in template directory.", "warning")
 
         if os.path.exists(readme_path):
-            import subprocess
-            try:
-                subprocess.Popen(["notepad.exe", os.path.abspath(readme_path)])
-                self.write_log("Opened README.md in Windows Text Editor.", "success")
-            except Exception as e:
-                self.write_log(f"Failed to open README.md: {e}", "error")
+            def run_editor():
+                self.increment_tasks()
+                try:
+                    import subprocess
+                    self.write_log("Opened README.md in Windows Text Editor.", "success")
+                    # Start notepad.exe and block until it is closed
+                    subprocess.run(["notepad.exe", os.path.abspath(readme_path)])
+                    self.write_log("README.md editing completed. Starting auto sync...", "info")
+                    
+                    # Git operations: add, commit, push
+                    rel_readme = os.path.relpath(readme_path, self.workspace_path).replace("\\", "/")
+                    
+                    # 1. git add
+                    self.git_service._run_lfs_cmd(["git", "add", rel_readme])
+                    
+                    # 2. check diff to see if there are changes
+                    try:
+                        self.git_service._run_lfs_cmd(["git", "diff", "--cached", "--quiet", rel_readme])
+                        has_changes = False
+                    except Exception:
+                        has_changes = True
+                        
+                    if not has_changes:
+                        self.write_log("No changes detected in README.md. Auto sync skipped.", "info")
+                        return
+                    
+                    # 3. git commit
+                    import git
+                    name = "SolidWorks Designer"
+                    email = "designer@example.com"
+                    try:
+                        reader = self.git_service.repo.config_reader()
+                        name = reader.get_value("user", "name", default="SolidWorks Designer")
+                        email = reader.get_value("user", "email", default="designer@example.com")
+                    except Exception:
+                        pass
+                    author = git.Actor(name, email)
+                    
+                    import git.exc
+                    try:
+                        self.git_service.repo.index.commit("Update README.md", author=author, committer=author)
+                        self.write_log("Saved README.md changes locally.", "success")
+                    except git.exc.HookExecutionError as e:
+                        if "post-commit" in str(e):
+                            self.write_log("Saved README.md changes locally (post-commit hook failed/ignored).", "warning")
+                        else:
+                            raise
+                    
+                    # 4. git push (if remote is configured)
+                    remote_url = self.git_service.get_remote_url()
+                    branch = self.git_service.get_current_branch()
+                    if remote_url and branch:
+                        self.write_log("Pushing README.md changes to remote server...", "info")
+                        self.git_service._run_lfs_cmd(["git", "push", "origin", branch])
+                        self.write_log("Successfully synchronized README.md to remote server.", "success")
+                    else:
+                        self.write_log("README.md committed locally (no remote configured or detached HEAD).", "info")
+                        
+                    # Refresh views on main thread
+                    self.task_queue.put(('callback', None, self.refresh_dashboard))
+                    self.task_queue.put(('callback', None, self.refresh_file_list))
+                    self.task_queue.put(('callback', None, self.refresh_history))
+                except Exception as e:
+                    self.write_log(f"README.md auto sync failed: {e}", "error")
+                finally:
+                    self.decrement_tasks()
+                    
+            threading.Thread(target=run_editor, daemon=True).start()
         else:
             self.write_log("README.md not found in the current workspace.", "warning")
             messagebox.showinfo("README.md Not Found", "README.md file does not exist in the current workspace.")
 
+    @queue_during_bg_tasks
     def open_workspace_in_explorer(self):
         """Opens the current workspace path in Windows Explorer."""
         if os.path.exists(self.workspace_path):
@@ -3168,6 +3501,7 @@ class GIT4SWApp(tk.Tk):
         else:
             self.write_log(f"Workspace path does not exist: {self.workspace_path}", "error")
 
+    @queue_during_bg_tasks
     def change_workspace(self):
         typed_path = self.ent_local_dir.get().strip()
         
@@ -3253,6 +3587,7 @@ class GIT4SWApp(tk.Tk):
                 return default_path
         return default_path
 
+    @queue_during_bg_tasks
     def open_external_viewer(self):
         files = self.get_selected_file_abs_paths()
         if not files:
@@ -3273,6 +3608,7 @@ class GIT4SWApp(tk.Tk):
         else:
             self.write_log(f"eDrawings executable not found at path: {path}. Please check config.json.", "error")
 
+    @queue_during_bg_tasks
     def open_solidworks(self):
         files = self.get_selected_file_abs_paths()
         if not files:
@@ -3351,6 +3687,7 @@ class GIT4SWApp(tk.Tk):
                 
         threading.Thread(target=run, daemon=True).start()
 
+    @queue_during_bg_tasks
     def discard_changes(self):
         selected_items = self.tree.selection()
         if not selected_items:
@@ -3565,6 +3902,9 @@ class GIT4SWApp(tk.Tk):
                     if self.bg_tasks_count == 0:
                         self.lbl_status_indicator.config(text="● Idle", fg="#10b981")
                         self.update_terminate_btn_state(False)
+                        if self.pending_button_tasks:
+                            next_task = self.pending_button_tasks.pop(0)
+                            self.after(10, next_task)
                 
                 # Only restore button states when no background tasks are running
                 if self.bg_tasks_count == 0:

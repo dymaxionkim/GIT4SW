@@ -61,6 +61,29 @@ def run_git_subprocess(cmd_args, cwd, check=True):
     return proc.returncode, stdout, stderr
 
 
+def parse_lfs_pointer_errors(err_str):
+    files = []
+    lines = err_str.splitlines()
+    found_marker = False
+    for line in lines:
+        if "should have been a pointer" in line or "should have been pointers" in line:
+            found_marker = True
+            if ":" in line:
+                after_colon = line.split(":", 1)[1].strip()
+                if after_colon:
+                    files.append(after_colon)
+            continue
+        if found_marker:
+            stripped = line.strip()
+            if not stripped:
+                continue
+            if line.startswith('\t') or line.startswith('   ') or line.startswith('  '):
+                files.append(stripped)
+            else:
+                break
+    return files
+
+
 class MergeConflictError(Exception):
     """Raised when git merge results in one or more conflicts."""
     def __init__(self, message, conflicted_files):
@@ -478,7 +501,7 @@ class GitService:
             rel_paths.append(rel_path)
             
         try:
-            self.repo.index.add(rel_paths)
+            self._run_lfs_cmd(["git", "add"] + rel_paths)
         except Exception as e:
             raise RuntimeError(f"Failed to add files to index: {e}")
             
@@ -492,7 +515,15 @@ class GitService:
             except Exception:
                 pass
             author = git.Actor(name, email)
-            self.repo.index.commit(commit_message, author=author, committer=author)
+            import git.exc
+            try:
+                self.repo.index.commit(commit_message, author=author, committer=author)
+            except git.exc.HookExecutionError as e:
+                if "post-commit" in str(e):
+                    # post-commit hook failure is ignored since the commit is already created
+                    pass
+                else:
+                    raise
         except Exception as e:
             raise RuntimeError(f"Commit failed: {e}")
             
@@ -801,11 +832,15 @@ class GitService:
             return result
         except Exception as e:
             err_str = str(e)
-            if "conflict" in err_str.lower():
-                conflicted = self.get_merge_conflicts()
+            conflicted = self.get_merge_conflicts()
+            if conflicted or "conflict" in err_str.lower() or "pointer" in err_str.lower():
+                lfs_files = parse_lfs_pointer_errors(err_str)
+                resolved_conflicts = conflicted if conflicted else lfs_files
+                if not resolved_conflicts:
+                    resolved_conflicts = [err_str]
                 raise MergeConflictError(
                     f"Merge conflict occurred while merging branch '{source_branch}'.",
-                    conflicted
+                    resolved_conflicts
                 )
             raise RuntimeError(f"Merge failed: {err_str}")
 
@@ -837,6 +872,27 @@ class GitService:
         self._load_repo()
         return result
 
+    def resolve_conflicts_and_commit(self, source_branch, resolutions):
+        """Resolves existing merge conflicts using the given resolutions dictionary and commits to finalize the merge."""
+        if not self.is_git_repo():
+            raise RuntimeError("Not a git repository.")
+        try:
+            conflicts = self.get_merge_conflicts()
+            if conflicts:
+                for f in conflicts:
+                    res = resolutions.get(f, "ours")
+                    if res == "ours":
+                        self._run_lfs_cmd(["git", "checkout", "--ours", "--", f])
+                    else:
+                        self._run_lfs_cmd(["git", "checkout", "--theirs", "--", f])
+                    self._run_lfs_cmd(["git", "add", f])
+                
+                self._run_lfs_cmd(["git", "commit", "-m", f"Merge branch '{source_branch}' (resolved conflicts)"])
+            self._load_repo()
+        except Exception as e:
+            self.abort_merge()
+            raise RuntimeError(f"Conflict resolution/commit failed: {e}")
+
     def abort_merge(self):
         """Aborts an in-progress merge and restores the pre-merge state."""
         try:
@@ -863,7 +919,6 @@ class GitService:
                 return []
                 
             # If exit code is non-zero, let's parse stdout
-            stdout = result.stdout
             lines = stdout.strip().split("\n")
             if len(lines) <= 1:
                 return []
@@ -917,9 +972,23 @@ class GitService:
             raise RuntimeError("Cannot sync/pull because you are not currently on a branch (detached HEAD).")
             
         self._run_lfs_cmd(["git", "fetch", "origin"])
-        res = self._run_lfs_cmd(["git", "merge", f"origin/{branch}", "--no-edit"])
-        self._load_repo()
-        return res
+        try:
+            res = self._run_lfs_cmd(["git", "merge", f"origin/{branch}", "--no-edit"])
+            self._load_repo()
+            return res
+        except Exception as e:
+            err_str = str(e)
+            conflicted = self.get_merge_conflicts()
+            if conflicted or "conflict" in err_str.lower() or "pointer" in err_str.lower():
+                lfs_files = parse_lfs_pointer_errors(err_str)
+                resolved_conflicts = conflicted if conflicted else lfs_files
+                if not resolved_conflicts:
+                    resolved_conflicts = [err_str]
+                raise MergeConflictError(
+                    f"Merge conflict occurred while pulling origin/{branch}.",
+                    resolved_conflicts
+                )
+            raise RuntimeError(f"Sync pull failed: {err_str}")
 
     def sync_pull_with_resolutions(self, resolutions):
         """Fetches and merges origin/<branch> resolving conflicts with the given resolutions."""
