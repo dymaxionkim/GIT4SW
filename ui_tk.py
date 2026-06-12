@@ -3988,13 +3988,16 @@ class GIT4SWApp(tk.Tk):
                                 corrected_path = self.git_service.get_correct_filepath_casing(rel_path)
                                 current_open_files.add(corrected_path)
                 
-                # 2. Fetch locks once for this loop to verify status
+                curr_open_lower = {f.lower() for f in current_open_files}
+                last_open_lower = {f.lower() for f in self.last_open_files}
+
+                # 2. Fetch locks only when the set of open files actually changes
                 locks = {}
-                try:
-                    if current_open_files or self.last_open_files:
+                if curr_open_lower != last_open_lower:
+                    try:
                         locks = self.git_service.get_lfs_locks()
-                except Exception as e:
-                    print(f"Error fetching LFS locks: {e}")
+                    except Exception as e:
+                        print(f"Error fetching LFS locks: {e}")
                 
                 locks_lower = {k.lower(): v for k, v in locks.items()}
                 
@@ -4025,7 +4028,7 @@ class GIT4SWApp(tk.Tk):
                                         success = True
                                     except Exception as e:
                                         self.task_queue.put(('silent_error', f"Auto-lock failed for {path_to_lock}: {e}", None))
-                                finally:
+                                  finally:
                                     self.decrement_tasks()
                                     
                                 if success:
@@ -4061,7 +4064,7 @@ class GIT4SWApp(tk.Tk):
                                         success = True
                                     except Exception as e:
                                         self.task_queue.put(('silent_error', f"Auto-unlock failed for {path_to_unlock}: {e}", None))
-                                finally:
+                                  finally:
                                     self.decrement_tasks()
                                     
                                 if success:
@@ -4087,8 +4090,6 @@ class GIT4SWApp(tk.Tk):
                 
                 # Update status label
                 # If the set of open files changed (comparing normalized sets case-insensitively), trigger refresh
-                curr_open_lower = {f.lower() for f in current_open_files}
-                last_open_lower = {f.lower() for f in self.last_open_files}
                 if curr_open_lower != last_open_lower:
                     self.task_queue.put(('sw_status', status_text, self.refresh_file_list))
                 else:
@@ -4100,8 +4101,8 @@ class GIT4SWApp(tk.Tk):
             except Exception as e:
                 print(f"Error in SolidWorks background monitor loop: {e}")
                 
-            # Sleep for 2.5 seconds before next polling
-            threading.Event().wait(2.5)
+            # Sleep for 4.0 seconds before next polling
+            threading.Event().wait(4.0)
 
     def destroy(self):
         self.sw_monitor_active = False
