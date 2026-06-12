@@ -875,12 +875,12 @@ class GIT4SWApp(tk.Tk):
             
             # Label
             lbl = ttk.Label(self.config_fields_frame, text=f"{display_name}:", font=("TkDefaultFont", 9, "bold"), anchor="w", background="#ffffff")
-            lbl.grid(row=row_idx, column=0, padx=(0, 10), pady=8, sticky="w")
+            lbl.grid(row=row_idx, column=0, padx=(0, 10), pady=3, sticky="w")
             
             # Entry widget
             ent = ttk.Entry(self.config_fields_frame)
             ent.insert(0, str(val))
-            ent.grid(row=row_idx, column=1, padx=0, pady=8, sticky="ew")
+            ent.grid(row=row_idx, column=1, padx=0, pady=3, sticky="ew")
             
             # Save a reference to the entry
             self.config_entries[key] = ent
