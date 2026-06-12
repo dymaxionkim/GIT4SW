@@ -15,5 +15,7 @@ Key Features:
 - Dashboard "README.md" quick open/edit button (template-fallback auto-generation)
 - Maintainer "Make" repository auto configuration redirect and dashboard view switch
 - Modern color-coded file extension lists and aesthetic sidebar tabs
+- Auto Sync on startup and workspace change (sequential fetch/merge main)
+
 
 Developed using Google Antigravity-IDE.

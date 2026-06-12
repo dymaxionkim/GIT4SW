@@ -28,6 +28,8 @@ The Dashboard is the central cockpit of the application, showing repository conf
   - Downloads and applies (pulls) the latest changes from the remote server for the active branch.
 • Merge main branch into current branch (Button)
   - Merges updates from the shared 'main' (or 'master') branch into your developer branch. It automatically commits, pushes the merged branch back to the remote server, and safely switches the workspace back to your original developer branch.
+• Auto Sync (Checkbox)
+  - Toggles automated synchronization. When checked (ON), the application automatically executes "Get Latest Version (Sync)" followed by "Merge main branch into current branch" sequentially whenever the application starts or the workspace/repository is changed.
 • Live Monitor (Card & Status Panel)
   - Displays real-time status of SolidWorks and repository metrics:
     - SolidWorks Status: Shows whether SolidWorks is currently running (Active or Inactive).

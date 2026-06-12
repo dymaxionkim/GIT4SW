@@ -18,6 +18,7 @@ SolidWorks로 설계 작업을 진행할 때 도면(`.slddrw`), 파트(`.sldprt`
   - **"Merge all branches into main" 기능**: 관리자(Maintainer) 모드에서 여러 협업 개발 브랜치를 `main` 브랜치로 일괄 비동기 머지 및 충돌 해결 옵션(Ours/Theirs 선택 모달)을 제공합니다.
 * **실시간 Git 프로세스 강제 종료 (Terminate 버튼)**: System Log 패널에서 실행 중인 Git 명령(서브 프로세스 트리)을 즉시 안전하게 강제 종료할 수 있는 Terminate 버튼을 제공합니다. 백그라운드 프로세스가 없을 때는 비활성화(색상이 연한 핑크색으로 표시)되어 불필요한 작동을 제한하고, 동작 시에만 활성화(빨간색)됩니다.
 * **대시보드 내 README.md 바로가기 버튼**: 대시보드의 Active Branch 영역 우측에 README.md 전용 버튼을 배치하여, 클릭 시 즉시 윈도우 메모장(notepad.exe)으로 README.md 파일을 편집할 수 있습니다. 로컬 저장소에 파일이 없는 경우, 프로그램 템플릿의 `template/README.md`를 자동으로 로컬 저장소에 생성하고 반영한 뒤 메모장을 띄워 줍니다.
+* **자동 동기화 (Auto Sync) 기능**: 대시보드 동기화(Synchronization) 카테고리에 Auto Sync 체크박스를 추가하여, 프로그램 구동 시 또는 저장소 스위칭/클론/신규 생성 완료 직후 자동으로 원격 업데이트를 가져오는 "Get Latest Version (Sync)" 작업과 "Merge main branch into current branch" 작업을 순차적으로 연달아 처리할 수 있도록 지원합니다.
 * **Maintainer "Make" 저장소 자동 등록 및 화면 전환**: Maintainer 모드에서 새로운 저장소 생성(Make) 완료 시, 자동으로 신규 로컬 경로 및 원격 주소 설정을 대시보드와 환경설정에 연동 등록하고 대시보드 뷰로 즉시 자동 전환해 줍니다.
 * **과거 버전 탐색 및 복원**: 전체 커밋 이력을 그래프 정렬하여 보여주며, 특정 이력을 더블클릭하는 것만으로 안전하게 해당 버전 시점으로 워크스페이스를 되돌립니다 (Standard Detached HEAD 상태 유지).
 * **비차단 비동기 UI 모델**: 커밋, 브랜치 푸시, 원격 LFS 상태 쿼리 등의 긴 작업을 수행할 때 화면이 굳지 않도록 모든 동작을 백그라운드 다중 스레드로 분할 처리하며 하단 `System Log` 상태 인디케이터(● Working / ● Idle)와 실시간 로그를 연계해 직관적인 상태를 표시합니다.

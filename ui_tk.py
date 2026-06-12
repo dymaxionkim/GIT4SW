@@ -303,6 +303,10 @@ class GIT4SWApp(tk.Tk):
                     
         self.configure(bg="#f3f4f6")
         
+        # Stored auto sync configuration
+        config_data = self.load_config_data()
+        self.auto_sync_var = tk.BooleanVar(value=config_data.get("auto_sync", False))
+        
         self.setup_styles()
         self.init_ui()
         
@@ -317,6 +321,9 @@ class GIT4SWApp(tk.Tk):
         
         # Read queue regularly
         self.after(100, self.process_queue)
+        
+        # Trigger Auto Sync after UI load
+        self.after(500, self.trigger_auto_sync_if_enabled)
         
     def setup_styles(self):
         style = ttk.Style(self)
@@ -852,7 +859,7 @@ class GIT4SWApp(tk.Tk):
         ]
         
         for k in config_data.keys():
-            if k != "workspace_path" and k not in keys_order:
+            if k not in ("workspace_path", "auto_sync") and k not in keys_order:
                 keys_order.append(k)
                 
         for row_idx, key in enumerate(keys_order):
@@ -913,6 +920,7 @@ class GIT4SWApp(tk.Tk):
             self.refresh_dashboard()
             self.refresh_file_list()
             self.refresh_history()
+            self.trigger_auto_sync_if_enabled()
             
         except Exception as e:
             self.write_log(f"Failed to save configuration: {e}", "error")
@@ -1108,6 +1116,22 @@ class GIT4SWApp(tk.Tk):
 
         self.btn_merge = ttk.Button(sync_btn_frm, text="Merge main branch into current branch", style="Primary.TButton", command=self.merge_main_branch)
         self.btn_merge.pack(side="left")
+        
+        self.chk_auto_sync = tk.Checkbutton(
+            sync_btn_frm,
+            text="Auto Sync",
+            variable=self.auto_sync_var,
+            command=self.on_auto_sync_changed,
+            bg="#ffffff",
+            fg="#1f2937",
+            selectcolor="#ffffff",
+            activebackground="#ffffff",
+            activeforeground="#1f2937",
+            font=("TkDefaultFont", 9, "bold"),
+            bd=0,
+            padx=10
+        )
+        self.chk_auto_sync.pack(side="left", padx=(12, 0))
 
         # SolidWorks Monitor Card
         sw_card = ttk.Frame(view, style="Card.TFrame")
@@ -2672,6 +2696,7 @@ class GIT4SWApp(tk.Tk):
                     
                     # Switch view to Dashboard so the user sees the newly set repository path and clean remote URL
                     self.switch_view(0)
+                    self.trigger_auto_sync_if_enabled()
                     
                 self.task_queue.put(('success', f"Repository '{repo_name}' created successfully!", on_done))
                 
@@ -2811,7 +2836,7 @@ class GIT4SWApp(tk.Tk):
     # ==========================================
     # GENERAL ACTIONS & QUEUE PROCESSING
     # ==========================================
-    def sync_repository(self):
+    def sync_repository(self, on_success_callback=None, silent=False):
         # --- Step 1: Check for open SolidWorks files (runs in GUI thread) ---
         try:
             open_docs = self.sw_service.get_all_open_documents()
@@ -2819,6 +2844,10 @@ class GIT4SWApp(tk.Tk):
             open_docs = []
 
         if open_docs:
+            if silent:
+                self.write_log("Auto Sync aborted: SolidWorks files are currently open.", "warning")
+                return
+                
             # Build file list summary for the dialog
             file_list = "\n".join(
                 f"  • {doc['title']}" + (" (⚠️ Unsaved changes)" if doc['dirty'] else "")
@@ -2865,13 +2894,46 @@ class GIT4SWApp(tk.Tk):
             try:
                 try:
                     res = self.git_service.sync_pull()
-                    self.task_queue.put(('success', f"Synchronization complete:\n{res}", self.refresh_dashboard))
+                    def on_complete():
+                        self.refresh_dashboard()
+                        if on_success_callback:
+                            on_success_callback()
+                    self.task_queue.put(('success', f"Synchronization complete:\n{res}", on_complete))
                 except Exception as e:
                     self.task_queue.put(('error', f"Sync failed:\n{e}", None))
             finally:
                 self.decrement_tasks()
                 
         threading.Thread(target=run, daemon=True).start()
+
+    def on_auto_sync_changed(self):
+        val = self.auto_sync_var.get()
+        config_path = "config.json"
+        config_data = {}
+        if os.path.exists(config_path):
+            try:
+                with open(config_path, "r", encoding="utf-8") as f:
+                    config_data = json.load(f)
+            except Exception:
+                pass
+        config_data["auto_sync"] = val
+        try:
+            with open(config_path, "w", encoding="utf-8") as f:
+                json.dump(config_data, f, indent=4)
+            self.write_log(f"Auto Sync set to {'ON' if val else 'OFF'}", "info")
+        except Exception as e:
+            self.write_log(f"Failed to save auto sync state: {e}", "error")
+
+    def trigger_auto_sync_if_enabled(self):
+        if not self.auto_sync_var.get():
+            return
+        if not self.git_service or not self.git_service.is_git_repo():
+            return
+        if self.btn_sync.instate(['disabled']):
+            return
+            
+        self.write_log("🤖 Auto Sync triggered...", "info")
+        self.sync_repository(on_success_callback=lambda: self.merge_main_branch(confirm=False), silent=True)
 
     def clone_repository(self):
         remote_url = self.ent_remote_url.get().strip()
@@ -2965,6 +3027,7 @@ class GIT4SWApp(tk.Tk):
                         self.refresh_file_list()
                         self.refresh_history()
                         self.write_log(f"Clone completed successfully and workspace updated to: {local_dir}", "success")
+                        self.trigger_auto_sync_if_enabled()
                         
                     self.task_queue.put(('success', f"Clone complete successfully!\n{clean_res}", on_success))
                 except Exception as e:
@@ -2985,7 +3048,7 @@ class GIT4SWApp(tk.Tk):
                 
         threading.Thread(target=run, daemon=True).start()
 
-    def merge_main_branch(self):
+    def merge_main_branch(self, confirm=True):
         """Merges the main branch into the current branch."""
         current = self.git_service.get_current_branch()
         if not current:
@@ -3005,12 +3068,13 @@ class GIT4SWApp(tk.Tk):
             self.write_log("Local 'main' or 'master' branch does not exist.", "error")
             return
 
-        ans = messagebox.askyesno(
-            "Confirm Merge",
-            f"Are you sure you want to merge branch '{source}' into current branch '{current}'?"
-        )
-        if not ans:
-            return
+        if confirm:
+            ans = messagebox.askyesno(
+                "Confirm Merge",
+                f"Are you sure you want to merge branch '{source}' into current branch '{current}'?"
+            )
+            if not ans:
+                return
 
         self.btn_merge.state(["disabled"])
 
@@ -3134,6 +3198,7 @@ class GIT4SWApp(tk.Tk):
             self.refresh_file_list()
             self.refresh_history()
             self.write_log(f"Switched project workspace to: {self.workspace_path}", "success")
+            self.trigger_auto_sync_if_enabled()
         else:
             # If user cancelled, ensure the entry has the current valid workspace path
             self.ent_local_dir.delete(0, tk.END)
