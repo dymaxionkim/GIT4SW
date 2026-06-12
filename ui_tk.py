@@ -1710,26 +1710,26 @@ class GIT4SWApp(tk.Tk):
         # 2. Sort filtered_files
         sort_method = self.cb_sort_order.get()
         if sort_method == "by Extension":
-            filtered_files.sort(key=lambda f: (os.path.splitext(f['file'])[1].lower(), os.path.basename(f['file']).lower(), f['file'].lower()))
+            filtered_files.sort(key=lambda f: (os.path.splitext(f['file'])[1].lower(), f['file'].lower()))
         elif sort_method == "by Status":
             status_map = {
                 'modified': '🟢 Modified',
                 'untracked': '🔵 New File',
                 'unmodified': '⚪ Unmodified'
             }
-            filtered_files.sort(key=lambda f: (status_map.get(f['status'], f['status']).lower(), os.path.basename(f['file']).lower()))
+            filtered_files.sort(key=lambda f: (status_map.get(f['status'], f['status']).lower(), f['file'].lower()))
         elif sort_method == "by Solidworks":
             def get_sw_status(f):
                 for open_f in self.last_open_files:
                     if open_f.lower() == f['file'].lower():
                         return "🟢 Open"
                 return "—"
-            filtered_files.sort(key=lambda f: (get_sw_status(f).lower(), os.path.basename(f['file']).lower()))
+            filtered_files.sort(key=lambda f: (get_sw_status(f).lower(), f['file'].lower()))
         elif sort_method == "by Locked":
             def get_locked_owner(f):
                 val = f.get('locked_by') if f.get('locked') else "—"
                 return val if val else "—"
-            filtered_files.sort(key=lambda f: (get_locked_owner(f).lower(), os.path.basename(f['file']).lower()))
+            filtered_files.sort(key=lambda f: (get_locked_owner(f).lower(), f['file'].lower()))
         else:  # "by Name"
             filtered_files.sort(key=lambda f: (os.path.basename(f['file']).lower(), f['file'].lower()))
             
