@@ -1,3 +1,6 @@
+GIT4SW - SolidWorks Git Version Control Client
+==============================================
+
 Core Engine: GitPython, Git CLI & Git LFS, Solidworks & eDrawings
 Developer: dhkima@higenrnm.com
 License: GNU GPLv3

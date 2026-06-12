@@ -986,12 +986,6 @@ class GIT4SWApp(tk.Tk):
         container = tk.Frame(card, bg="#ffffff")
         container.pack(fill="both", expand=True, padx=16, pady=16)
         
-        lbl_app_name = tk.Label(container, text="GIT4SW", fg="#059669", bg="#ffffff", font=("TkDefaultFont", 24, "bold"))
-        lbl_app_name.pack(anchor="w", pady=(0, 4))
-        
-        lbl_subtitle = tk.Label(container, text="SolidWorks Git Version Control Client", fg="#4b5563", bg="#ffffff", font=("TkDefaultFont", 12, "italic"))
-        lbl_subtitle.pack(anchor="w", pady=(0, 20))
-        
         txt_about = tk.Text(container, bg="#ffffff", fg="#1f2937", font="TkDefaultFont", wrap="word", relief="flat")
         
         # Configure hyperlink tag
