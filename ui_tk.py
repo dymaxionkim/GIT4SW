@@ -947,8 +947,9 @@ class GIT4SWApp(tk.Tk):
         lbl_card_title.pack(anchor="w", padx=16, pady=(12, 8))
         
         # Text/Instructions Container
-        container = tk.Frame(card, bg="#ffffff")
+        container = tk.Frame(card, bg="#ffffff", height=380)
         container.pack(fill="both", expand=True, padx=16, pady=(0, 16))
+        container.pack_propagate(False)
         
         # Load help text from file
         script_dir = os.path.dirname(os.path.abspath(__file__))
@@ -963,7 +964,7 @@ class GIT4SWApp(tk.Tk):
         else:
             help_text = "help.txt file not found."
             
-        txt_help = tk.Text(container, bg="#ffffff", fg="#1f2937", font="TkDefaultFont", wrap="word", relief="flat")
+        txt_help = tk.Text(container, bg="#ffffff", fg="#1f2937", font="TkDefaultFont", wrap="word", relief="flat", height=15)
         txt_help.insert("1.0", help_text)
         txt_help.config(state="disabled")
         
@@ -988,10 +989,11 @@ class GIT4SWApp(tk.Tk):
         card.pack(fill="both", expand=True, padx=16, pady=4)
         
         # Text/Instructions Container
-        container = tk.Frame(card, bg="#ffffff")
+        container = tk.Frame(card, bg="#ffffff", height=380)
         container.pack(fill="both", expand=True, padx=16, pady=16)
+        container.pack_propagate(False)
         
-        txt_about = tk.Text(container, bg="#ffffff", fg="#1f2937", font="TkDefaultFont", wrap="word", relief="flat")
+        txt_about = tk.Text(container, bg="#ffffff", fg="#1f2937", font="TkDefaultFont", wrap="word", relief="flat", height=15)
         
         # Configure hyperlink tag
         txt_about.tag_config("link", foreground="#2563eb", underline=1)
