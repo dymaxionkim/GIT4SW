@@ -1545,6 +1545,16 @@ class GIT4SWApp(tk.Tk):
         self.btn_solidworks = ttk.Button(actions_frm, text="Solidworks", style="Primary.TButton", command=self.open_solidworks)
         self.btn_solidworks.pack(side="left", padx=4)
         
+        self.lbl_selected_count = ttk.Label(actions_frm, text="(Selected files: 0)", style="TLabel")
+        self.lbl_selected_count.pack(side="left", padx=8)
+        
+        # Bind tree selection event to update selected file count
+        def update_selected_count(event=None):
+            count = len(self.tree.selection())
+            self.lbl_selected_count.config(text=f"(Selected files: {count})")
+            
+        self.tree.treeview.bind("<<TreeviewSelect>>", update_selected_count)
+        
         # Save Version Card (Commit form)
         save_card = ttk.Frame(main_panel, style="Card.TFrame")
         save_card.pack(fill="x", pady=(6, 0))
@@ -1759,6 +1769,11 @@ class GIT4SWApp(tk.Tk):
             
             if file_info['file'] in selected_paths:
                 self.tree.selection_add(new_item)
+
+        # Update the selected count label
+        if hasattr(self, 'lbl_selected_count'):
+            count = len(self.tree.selection())
+            self.lbl_selected_count.config(text=f"(Selected files: {count})")
 
 
 
