@@ -120,7 +120,7 @@ class GitService:
 
         try:
             _, stdout, stderr = run_git_subprocess(cmd_args, self.repo_path, check=check)
-            return stdout.strip()
+            return stdout.rstrip()
         except subprocess.CalledProcessError as e:
             err_msg = e.stderr.strip() if e.stderr else str(e)
             raise RuntimeError(f"Git CLI command {' '.join(cmd_args)} failed: {err_msg}")
@@ -301,20 +301,25 @@ class GitService:
             for line in status_out.splitlines():
                 if len(line) >= 3:
                     status_code = line[:2]
-                    filepath = line[3:].strip()
+                    filepath = line[3:].strip().replace("\\", "/")
                     if "\t" in filepath:
-                        filepath = filepath.split("\t")[0]
+                        filepath = filepath.split("\t")[0].replace("\\", "/")
                     if filepath.startswith('"') and filepath.endswith('"'):
                         filepath = filepath[1:-1]
                         try:
                             import codecs
                             b, _ = codecs.escape_decode(bytes(filepath, "utf-8"))
-                            filepath = b.decode("utf-8")
+                            filepath = b.decode("utf-8").replace("\\", "/")
                         except Exception:
                             pass
                     
-                    is_new = "?" in status_code
-                    is_mod = "M" in status_code or "A" in status_code or "D" in status_code or "R" in status_code
+                    is_unmerged = status_code in {'DD', 'AA', 'UU', 'AU', 'UD', 'UA', 'DU'}
+                    if is_unmerged:
+                        is_new = False
+                        is_mod = True
+                    else:
+                        is_new = "?" in status_code or status_code.startswith("A")
+                        is_mod = any(c in status_code for c in "MDRTC") and not status_code.startswith("A")
                     
                     if is_new:
                         changed_files[filepath] = "untracked"
