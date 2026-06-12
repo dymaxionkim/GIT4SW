@@ -11,6 +11,9 @@ Key Features:
 - Automatic background Git LFS lock acquisition and release
 - Complete revision history traversal & Detached HEAD checkout
 - Bulk actions (checkout, merge, pull/push) with background task queues
+- Log panel "Terminate" button to safely kill active subprocess trees (dynamic red/pink status styling)
+- Dashboard "README.md" quick open/edit button (template-fallback auto-generation)
+- Maintainer "Make" repository auto configuration redirect and dashboard view switch
 - Modern color-coded file extension lists and aesthetic sidebar tabs
 
 Developed using Google Antigravity-IDE.

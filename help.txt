@@ -22,6 +22,8 @@ The Dashboard is the central cockpit of the application, showing repository conf
   - Displays the currently checked-out branch. Selecting a different branch from this dropdown automatically switches (checkouts) the workspace to that branch.
 • Make my branch (Button)
   - Resolves your identity from your git/GitHub configuration, automatically creates a new local and remote developer branch under your username, and switches to it. This keeps your work isolated and prevents direct modification conflicts on the 'main' branch.
+• README.md (Button)
+  - Opens the README.md file of your active local repository in the Windows Text Editor (Notepad). If the file does not exist locally, the client automatically copies and initializes it from the program's README.md template.
 • Get Latest Version (Sync) (Button)
   - Downloads and applies (pulls) the latest changes from the remote server for the active branch.
 • Merge main branch into current branch (Button)
@@ -86,7 +88,7 @@ Dedicated to project administrators/maintainers to oversee integration and initi
 • Merge all branches into main (Button)
   - Fetches all remote branches, pulls them locally, resolves conflicts according to your choices, merges them all into 'main', pushes the updated 'main' back to remote origin, and returns the repository back to the original developer branch.
 • Repository Name (Entry) & Create New CAD Repository (Button)
-  - Enter a repository name and click to automatically create a private repository on GitHub, initialize it locally, apply Git LFS configuration, assign locked file extensions (.sldprt, .sldasm, .slddrw), set up remote tracking, and push the initial commit.
+  - Enter a repository name and click "Make" to automatically create a private repository on GitHub, initialize it locally, apply Git LFS configuration, assign locked file extensions (.sldprt, .sldasm, .slddrw), set up remote tracking, and push the initial commit. Upon successful creation, the client automatically updates the Dashboard workspace configuration and redirects you to the Dashboard view.
 
 ----------------------------------------------------------
 5. CONFIG MODE
@@ -99,6 +101,14 @@ Configure system and application paths to ensure integration runs smoothly.
   - Saves all configured values to config.json and re-initializes Git and COM connections.
 
 ----------------------------------------------------------
-6. ABOUT MODE
+6. SYSTEM LOG & PROCESS TERMINATION
 ----------------------------------------------------------
-Displays details about GIT4SW versions, core engine components, developer contact, repository link, and GPLv3 licensing terms.
+At the bottom of the client window, the System Log displays timestamped info, success, warning, or error logs about ongoing operations.
+
+• Status Indicator
+  - Displays a green dot and "● Idle" when no background tasks are running, and a red dot and "● Working" when operations are active.
+• Terminate (Button)
+  - Allows you to forcefully abort and terminate any ongoing background Git operations. It recursively terminates all spawned child subprocess trees on Windows and restores the client buttons to their default active states.
+  - The button is visually disabled (faded pink color) when the status is "Idle" and turns fully active (red background) only when background tasks are running.
+• Clear (Button)
+  - Empties the current text log window.

@@ -8,7 +8,7 @@ import queue
 import json
 import webbrowser
 
-from git_service import GitService, MergeConflictError
+from git_service import GitService, MergeConflictError, run_git_subprocess
 from sw_monitor import SolidWorksMonitorService
 
 
@@ -355,8 +355,8 @@ class GIT4SWApp(tk.Tk):
 
         style.configure("Danger.TButton", padding=6, background="#ef4444", foreground="#ffffff", borderwidth=0)
         style.map("Danger.TButton",
-                  background=[("active", "#dc2626"), ("disabled", "#f3f4f6")],
-                  foreground=[("active", "#ffffff"), ("disabled", "#f3f4f6")])
+                  background=[("active", "#dc2626"), ("disabled", "#fee2e2")],
+                  foreground=[("active", "#ffffff"), ("disabled", "#f87171")])
 
         # Treeview (Modern styling)
         style.configure("Treeview", 
@@ -440,6 +440,19 @@ class GIT4SWApp(tk.Tk):
         
         btn_clear_log = ttk.Button(log_header, text="Clear", width=8, command=self.clear_log)
         btn_clear_log.pack(side="right")
+        
+        self.btn_terminate = tk.Button(
+            log_header,
+            text="Terminate",
+            command=self.terminate_git_operations,
+            font=("TkDefaultFont", 9, "bold"),
+            bd=0,
+            relief="flat",
+            padx=12,
+            pady=3
+        )
+        self.btn_terminate.pack(side="right", padx=(0, 8))
+        self.update_terminate_btn_state(False)
         
         # Status indicator: Red = Working/Busy, Green = Idle
         self.lbl_status_indicator = tk.Label(log_header, text="● Idle", fg="#10b981", bg="#ffffff", font="TkDefaultFont")
@@ -566,6 +579,108 @@ class GIT4SWApp(tk.Tk):
         self.txt_log.config(state="normal")
         self.txt_log.delete("1.0", "end")
         self.txt_log.config(state="disabled")
+
+    def update_terminate_btn_state(self, is_enabled):
+        if not hasattr(self, 'btn_terminate'):
+            return
+        if is_enabled:
+            self.btn_terminate.config(
+                state="normal",
+                bg="#ef4444",      # Vibrant red background
+                fg="#ffffff",      # White text
+                activebackground="#dc2626",
+                activeforeground="#ffffff",
+                cursor="hand2"
+            )
+        else:
+            self.btn_terminate.config(
+                state="disabled",
+                bg="#fee2e2",      # Very light red/pink background (visually light/disabled)
+                fg="#f87171",      # Light red text
+                cursor=""
+            )
+
+    def terminate_git_operations(self):
+        self.write_log("🔴 Terminating active Git operations...", "warning")
+        
+        import os
+        import subprocess
+        
+        terminated_pids = []
+        
+        # 1. Terminate manually tracked Popen processes from git_service
+        try:
+            from git_service import terminate_all_processes
+            pids = terminate_all_processes()
+            terminated_pids.extend(pids)
+        except Exception as e:
+            print(f"Error terminating tracked processes: {e}")
+            
+        # 2. Terminate any child processes of the current process via taskkill
+        try:
+            parent_pid = os.getpid()
+            cmd = ["powershell", "-NoProfile", "-Command", 
+                   f"Get-CimInstance Win32_Process -Filter 'ParentProcessId = {parent_pid}' | Select-Object -ExpandProperty ProcessId"]
+            res = subprocess.run(cmd, capture_output=True, text=True, check=False)
+            
+            for line in res.stdout.strip().splitlines():
+                line = line.strip()
+                if line.isdigit():
+                    child_pid = int(line)
+                    # Forcefully terminate child process and all its children recursively
+                    subprocess.run(["taskkill", "/F", "/T", "/PID", str(child_pid)], capture_output=True, check=False)
+                    terminated_pids.append(child_pid)
+        except Exception as e:
+            print(f"Error terminating child processes via taskkill: {e}")
+            
+        # 3. Clean up the set of terminated PIDs
+        terminated_pids = sorted(list(set(terminated_pids)))
+        
+        # 4. Print results
+        if terminated_pids:
+            pids_str = ", ".join(map(str, terminated_pids))
+            self.write_log(f"🟢 Terminated {len(terminated_pids)} active subprocess tree(s) (PIDs: {pids_str}).", "success")
+        else:
+            self.write_log("ℹ️ No active Git processes found to terminate.", "info")
+            
+        # 5. Reset the background task counter and status indicator
+        self.bg_tasks_count = 0
+        self.lbl_status_indicator.config(text="● Idle", fg="#10b981")
+        self.update_terminate_btn_state(False)
+        
+        # Re-enable all UI buttons
+        is_repo = self.git_service.is_git_repo()
+        self.btn_lock.config(text="Lock (Checkout)")
+        if is_repo:
+            self.btn_lock.state(["!disabled"])
+            self.btn_unlock.state(["!disabled"])
+            self.btn_force_unlock.state(["!disabled"])
+            self.btn_save_ver.state(["!disabled"])
+            self.btn_save_all.state(["!disabled"])
+            self.btn_sync.state(["!disabled"])
+            self.btn_merge.state(["!disabled"])
+            self.btn_discard.state(["!disabled"])
+        else:
+            self.btn_lock.state(["disabled"])
+            self.btn_unlock.state(["disabled"])
+            self.btn_force_unlock.state(["disabled"])
+            self.btn_save_ver.state(["disabled"])
+            self.btn_save_all.state(["disabled"])
+            self.btn_sync.state(["disabled"])
+            self.btn_merge.state(["disabled"])
+            self.btn_discard.state(["disabled"])
+            
+        self.btn_save_ver.config(text="Upload Selected File Version")
+        self.btn_save_all.config(text="Upload Every Files Version")
+        self.btn_sync.config(text="Get Latest Version (Sync)")
+        self.btn_restore.state(["!disabled"])
+        self.btn_restore_latest.state(["!disabled"])
+        self.btn_edrawings.state(["!disabled"])
+        self.btn_solidworks.state(["!disabled"])
+        
+        # Refresh dashboard and file list
+        self.refresh_dashboard()
+        self.refresh_file_list()
 
     def update_repo_branch_info(self):
         if not self.git_service or not self.git_service.is_git_repo():
@@ -972,6 +1087,9 @@ class GIT4SWApp(tk.Tk):
         self.btn_make_my_branch = ttk.Button(branch_frm, text="Make my branch", command=self.make_my_branch, style="MakeBranch.TButton")
         self.btn_make_my_branch.pack(side="left")
         
+        self.btn_readme = ttk.Button(branch_frm, text="README.md", command=self.open_readme, width=18)
+        self.btn_readme.pack(side="right")
+        
         # Sync Card
         sync_card = ttk.Frame(view, style="Card.TFrame")
         sync_card.pack(fill="x", padx=16, pady=4)
@@ -1020,7 +1138,9 @@ class GIT4SWApp(tk.Tk):
             url = self.git_service.get_remote_url()
             self.ent_remote_url.delete(0, tk.END)
             if url:
-                self.ent_remote_url.insert(0, url)
+                import re
+                clean_url = re.sub(r'^(https?://)[^@/]+@', r'\1', url)
+                self.ent_remote_url.insert(0, clean_url)
             self.btn_sync.state(["!disabled"])
             self.btn_clone.state(["!disabled"])
             # [수정] 비활성화 시 전용 스타일 강제 적용
@@ -2403,6 +2523,9 @@ class GIT4SWApp(tk.Tk):
             self.write_log(f"Error: Local repository path already exists: {local_repo_path}", "error")
             return
             
+        hooks_path = os.path.join(local_repo_path, ".git", "hooks")
+        disabled_hooks_path = os.path.join(local_repo_path, ".git", "hooks.disabled")
+            
         self.write_log(f"🚀 Starting repository creation: {repo_name}", "info")
         self.increment_tasks()
         
@@ -2450,11 +2573,23 @@ class GIT4SWApp(tk.Tk):
                 
                 # 7. Initialize Git LFS in the repository via CLI subprocess
                 self.write_log("Initializing Git LFS in cloned repository...", "info")
-                res = subprocess.run(["git", "lfs", "install"], cwd=local_repo_path, capture_output=True, text=True)
-                if res.returncode != 0:
-                    self.write_log(f"Warning: git lfs install failed: {res.stderr}", "warning")
+                returncode, stdout, stderr = run_git_subprocess(["git", "lfs", "install"], cwd=local_repo_path, check=False)
+                if returncode != 0:
+                    self.write_log(f"Warning: git lfs install failed: {stderr}", "warning")
                 else:
                     self.write_log("Git LFS initialized successfully.", "success")
+                    
+                # Temporarily disable ALL git hooks by renaming the hooks folder to prevent hook execution failures (e.g. WSL path errors)
+                if os.path.exists(hooks_path):
+                    try:
+                        os.rename(hooks_path, disabled_hooks_path)
+                        self.write_log("Temporarily disabled Git hooks for initial setup.", "info")
+                    except Exception as he:
+                        self.write_log(f"Warning: Failed to temporarily rename hooks folder: {he}", "warning")
+                    
+                # Disable hooks temporarily during initial setup commits to prevent hook errors
+                with repo.config_writer() as writer:
+                    writer.set_value("core", "hooksPath", "/dev/null")
                     
                 # 8. Copy template files recursively
                 self.write_log("Copying template files to workspace...", "info")
@@ -2483,9 +2618,9 @@ class GIT4SWApp(tk.Tk):
                     pass
                     
                 self.write_log("Pushing main branch to origin...", "info")
-                res_push = subprocess.run(["git", "push", "-u", "origin", "main"], cwd=local_repo_path, capture_output=True, text=True)
-                if res_push.returncode != 0:
-                    raise RuntimeError(f"Failed to push main branch: {res_push.stderr}")
+                returncode, stdout, stderr = run_git_subprocess(["git", "push", "-u", "origin", "main"], cwd=local_repo_path, check=False)
+                if returncode != 0:
+                    raise RuntimeError(f"Failed to push main branch: {stderr}")
                 self.write_log("Successfully pushed initial commit to main branch.", "success")
                 
                 # 12. Create and switch to developer branch
@@ -2498,10 +2633,22 @@ class GIT4SWApp(tk.Tk):
                 repo.index.commit("Initial commit on this branch", author=author, committer=author)
                 
                 self.write_log(f"Pushing developer branch '{username}' to origin...", "info")
-                res_push_dev = subprocess.run(["git", "push", "-u", "origin", username], cwd=local_repo_path, capture_output=True, text=True)
-                if res_push_dev.returncode != 0:
-                    raise RuntimeError(f"Failed to push developer branch: {res_push_dev.stderr}")
+                returncode, stdout, stderr = run_git_subprocess(["git", "push", "-u", "origin", username], cwd=local_repo_path, check=False)
+                if returncode != 0:
+                    raise RuntimeError(f"Failed to push developer branch: {stderr}")
                 self.write_log(f"Successfully pushed branch '{username}' to origin.", "success")
+                
+                # Restore Git hooks folder for normal development operations
+                if os.path.exists(disabled_hooks_path):
+                    try:
+                        os.rename(disabled_hooks_path, hooks_path)
+                        self.write_log("Re-enabled Git hooks for future operations.", "info")
+                    except Exception as he:
+                        self.write_log(f"Warning: Failed to restore hooks folder: {he}", "warning")
+                
+                # Re-enable hooks for normal development operations
+                with repo.config_writer() as writer:
+                    writer.remove_option("core", "hooksPath")
                 
                 # 14. Save new workspace path to config.json
                 self.write_log("Updating workspace path in config...", "info")
@@ -2523,15 +2670,26 @@ class GIT4SWApp(tk.Tk):
                     self.load_branches_in_combo()
                     self.write_log(f"🎉 Maintainer setup complete! Workspace switched to: {local_repo_path}", "success")
                     
+                    # Switch view to Dashboard so the user sees the newly set repository path and clean remote URL
+                    self.switch_view(0)
+                    
                 self.task_queue.put(('success', f"Repository '{repo_name}' created successfully!", on_done))
                 
             except Exception as e:
+                try:
+                    if os.path.exists(disabled_hooks_path):
+                        os.rename(disabled_hooks_path, hooks_path)
+                    if 'repo' in locals() and repo:
+                        with repo.config_writer() as writer:
+                            writer.remove_option("core", "hooksPath")
+                except Exception:
+                    pass
                 self.task_queue.put(('error', f"Maintainer setup failed:\n{e}", None))
             finally:
                 self.decrement_tasks()
                 
         threading.Thread(target=run, daemon=True).start()
-
+                
     def refresh_history(self):
         for item in self.hist_tree.get_children():
             self.hist_tree.delete(item)
@@ -2903,6 +3061,40 @@ class GIT4SWApp(tk.Tk):
                 self.decrement_tasks()
 
         threading.Thread(target=run, daemon=True).start()
+
+    def open_readme(self):
+        """Opens the README.md in Windows text editor, copying from template if it doesn't exist."""
+        readme_path = os.path.join(self.workspace_path, "README.md")
+        if not os.path.exists(readme_path):
+            readme_path = os.path.join(self.workspace_path, "readme.md")
+            if not os.path.exists(readme_path):
+                readme_path = os.path.join(self.workspace_path, "README.MD")
+                
+        if not os.path.exists(readme_path):
+            script_dir = os.path.dirname(os.path.abspath(__file__))
+            template_readme = os.path.join(script_dir, "template", "README.md")
+            if os.path.exists(template_readme):
+                import shutil
+                try:
+                    target_path = os.path.join(self.workspace_path, "README.md")
+                    shutil.copy2(template_readme, target_path)
+                    self.write_log("Created README.md in workspace from template file.", "success")
+                    readme_path = target_path
+                except Exception as copy_err:
+                    self.write_log(f"Failed to copy template README.md to workspace: {copy_err}", "error")
+            else:
+                self.write_log("README.md template file not found in template directory.", "warning")
+
+        if os.path.exists(readme_path):
+            import subprocess
+            try:
+                subprocess.Popen(["notepad.exe", os.path.abspath(readme_path)])
+                self.write_log("Opened README.md in Windows Text Editor.", "success")
+            except Exception as e:
+                self.write_log(f"Failed to open README.md: {e}", "error")
+        else:
+            self.write_log("README.md not found in the current workspace.", "warning")
+            messagebox.showinfo("README.md Not Found", "README.md file does not exist in the current workspace.")
 
     def open_workspace_in_explorer(self):
         """Opens the current workspace path in Windows Explorer."""
@@ -3306,10 +3498,12 @@ class GIT4SWApp(tk.Tk):
                 if msg_type == 'bg_task_start':
                     self.bg_tasks_count += 1
                     self.lbl_status_indicator.config(text="● Working", fg="#ef4444")
+                    self.update_terminate_btn_state(True)
                 elif msg_type == 'bg_task_end':
                     self.bg_tasks_count = max(0, self.bg_tasks_count - 1)
                     if self.bg_tasks_count == 0:
                         self.lbl_status_indicator.config(text="● Idle", fg="#10b981")
+                        self.update_terminate_btn_state(False)
                 
                 # Only restore button states when no background tasks are running
                 if self.bg_tasks_count == 0:

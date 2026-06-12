@@ -3,6 +3,62 @@ import subprocess
 import re
 import datetime
 import git
+import threading
+
+active_processes = set()
+active_processes_lock = threading.Lock()
+
+def register_process(proc):
+    with active_processes_lock:
+        active_processes.add(proc)
+
+def deregister_process(proc):
+    with active_processes_lock:
+        active_processes.discard(proc)
+
+def terminate_all_processes():
+    terminated = []
+    with active_processes_lock:
+        for proc in list(active_processes):
+            try:
+                proc.terminate()
+                terminated.append(proc.pid)
+            except Exception:
+                pass
+    return terminated
+
+def run_git_subprocess(cmd_args, cwd, check=True):
+    import json
+    args = list(cmd_args)
+    if args and args[0] == "git":
+        try:
+            if os.path.exists("config.json"):
+                with open("config.json", "r", encoding="utf-8") as f:
+                    config = json.load(f)
+                    git_path = config.get("git_path")
+                    if git_path and os.path.exists(git_path):
+                        args[0] = git_path
+        except Exception:
+            pass
+
+    proc = subprocess.Popen(
+        args,
+        cwd=cwd,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        encoding="utf-8",
+        errors="ignore"
+    )
+    register_process(proc)
+    try:
+        stdout, stderr = proc.communicate()
+    finally:
+        deregister_process(proc)
+
+    if check and proc.returncode != 0:
+        raise subprocess.CalledProcessError(proc.returncode, args, output=stdout, stderr=stderr)
+    return proc.returncode, stdout, stderr
 
 
 class MergeConflictError(Exception):
@@ -63,16 +119,8 @@ class GitService:
             cmd_args[0] = self.git_path
 
         try:
-            result = subprocess.run(
-                cmd_args,
-                cwd=self.repo_path,
-                capture_output=True,
-                text=True,
-                check=check,
-                encoding="utf-8",
-                errors="ignore"
-            )
-            return result.stdout.strip()
+            _, stdout, stderr = run_git_subprocess(cmd_args, self.repo_path, check=check)
+            return stdout.strip()
         except subprocess.CalledProcessError as e:
             err_msg = e.stderr.strip() if e.stderr else str(e)
             raise RuntimeError(f"Git CLI command {' '.join(cmd_args)} failed: {err_msg}")
@@ -95,17 +143,9 @@ class GitService:
             cmd_args[0] = self.git_path
 
         try:
-            result = subprocess.run(
-                cmd_args,
-                cwd=parent_dir,
-                capture_output=True,
-                text=True,
-                check=True,
-                encoding="utf-8",
-                errors="ignore"
-            )
+            _, stdout, stderr = run_git_subprocess(cmd_args, parent_dir, check=True)
             self._load_repo()
-            return result.stdout.strip()
+            return stdout.strip()
         except subprocess.CalledProcessError as e:
             err_msg = e.stderr.strip() if e.stderr else str(e)
             raise RuntimeError(f"Git clone failed: {err_msg}")
@@ -800,16 +840,9 @@ class GitService:
             cmd_args[0] = self.git_path
             
         try:
-            result = subprocess.run(
-                cmd_args,
-                cwd=self.repo_path,
-                capture_output=True,
-                text=True,
-                encoding="utf-8",
-                errors="ignore"
-            )
+            returncode, stdout, stderr = run_git_subprocess(cmd_args, self.repo_path, check=False)
             # If exit code is 0, no conflicts
-            if result.returncode == 0:
+            if returncode == 0:
                 return []
                 
             # If exit code is non-zero, let's parse stdout
