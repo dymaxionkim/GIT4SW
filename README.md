@@ -1,14 +1,16 @@
-# GIT4SW: SolidWorks Git Version Control Client
+# GIT4SW: SolidWorks Github Version Control Client
 
 ## 필요성
 
 * SolidWorks로 설계 작업을 진행할 때 도면(`.slddrw`), 파트(`.sldprt`), 어셈블리(`.sldasm`) 등의 3D CAD 바이너리 파일은, 일반 텍스트 코딩 작업과 다르게 Git에서 코드 차원 병합(Merge)이 불가능하여, 다자간 협업 시 덮어쓰기나 변경점 소실 등의 심각한 문제가 수시로 발생합니다.
-* **GIT4SW**는 이러한 비정형 CAD 파일들의 다자간 동시 수정으로 발생할 수 있는 버전 엉킴과 충돌을 원천 예방하기 위해 고안된 **SolidWorks 전용 Git 버전 관리 데스크톱 클라이언트**입니다. 
+* **GIT4SW**는 이러한 비정형 CAD 파일들의 다자간 동시 수정으로 발생할 수 있는 버전 엉킴과 충돌을 원천 예방하기 위해 고안된 **SolidWorks 전용 Github 연동 버전 관리 데스크톱 클라이언트**입니다. 
 * 표준 Git 브랜치 워크플로우에 **Git LFS(Large File Storage) Lock 메커니즘**을 결합하여, 특정 사용자가 파일을 수정하는 동안 다른 사용자가 동일한 파일을 덮어쓰지 못하도록 사전에 완벽 차단해 줍니다.
 
 ![](GIT4SW.png)
 
-[https://youtu.be/SGs7_w_s2pI](https://youtu.be/SGs7_w_s2pI)
+![](GIT4SW_02.png)
+
+* Demo Movie : [https://youtu.be/SGs7_w_s2pI](https://youtu.be/SGs7_w_s2pI)
 
 ---
 
@@ -58,10 +60,6 @@
   > ```powershell
   > scoop install git git-lfs uv
   > ```
-* **Python 라이브러리 의존성** (`pyproject.toml`에 내장):
-  - `gitpython >= 3.1.43` (Git 제어 백엔드)
-  - `pygithub >= 2.9.1` (GitHub API 통신)
-  - `pywin32 >= 306` (SolidWorks COM 연결 모니터링)
 
 ---
 
@@ -94,7 +92,7 @@
 * **Edrawings Path**: 외부 eDrawings 도면 미리보기 실행 파일(`eDrawings.exe`)의 절대 경로입니다. 파일 매니저에서 eDrawings 버튼 클릭 시 사용됩니다.
   - *예*: `C:\Program Files\SOLIDWORKS Corp\eDrawings\eDrawings.exe`
 * **Github Token**: 사용자의 개인 개발용 원격 브랜치를 생성하거나, Maintainer 모드에서 원격 비공개(Private) 저장소를 자동 퍼블리싱할 때 인증용으로 사용할 GitHub 개인 액세스 토큰(Personal Access Token)입니다.
-  - *예*: `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`
+  - *예*: `ghp_**********************************`
 * **Default Local Path**: 신규 저장소 생성 및 원격 클론 작업 시 기본으로 사용할 로컬 부모 디렉터리 경로입니다.
   - *예*: `C:\Users\dhkima\github`
 * **Organization Name**: 관리자 모드에서 신규 비공개 저장소를 자동 개설할 대상 GitHub 조직(Organization)의 이름입니다.
