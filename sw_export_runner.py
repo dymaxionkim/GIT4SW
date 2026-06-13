@@ -18,16 +18,39 @@ def close_all_documents_without_saving(swApp):
         if docs:
             for doc in docs:
                 try:
+                    names_to_try = []
+                    path_name = doc.GetPathName()
+                    if path_name:
+                        names_to_try.append(path_name)
+                        names_to_try.append(os.path.basename(path_name))
+                        
                     title = doc.GetTitle()
-                    swApp.QuitDoc(title)
+                    if title:
+                        names_to_try.append(title)
+                        if " - " in title:
+                            names_to_try.append(title.split(" - ")[0])
+                            
+                    # Remove empty and duplicates
+                    seen = set()
+                    unique_names = [x for x in names_to_try if x and not (x in seen or seen.add(x))]
+                    
+                    for name in unique_names:
+                        try:
+                            swApp.QuitDoc(name)
+                        except:
+                            try:
+                                swApp.CloseDoc(name)
+                            except:
+                                pass
                 except Exception as doc_e:
                     print(f"Error quitting doc: {doc_e}")
     except Exception as e:
         print(f"Error getting documents: {e}")
         
-    # Fallback to CloseAllDocuments if needed
+    # We do NOT use CloseAllDocuments(True) because it prompts the user.
+    # Instead, we use CloseAllDocuments(False) to close clean documents.
     try:
-        swApp.CloseAllDocuments(True)
+        swApp.CloseAllDocuments(False)
     except:
         pass
 
