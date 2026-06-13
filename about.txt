@@ -1,25 +1,32 @@
-GIT4SW - SolidWorks Git Version Control Client
+GIT4SW - Github Client for SolidWorks Users
 ==============================================
 
-* Core Engine: GitPython, Git CLI & Git LFS, Solidworks & eDrawings
 * Developer: dymaxion.kim@gmail.com
-* License: GNU GPLv3
 * Repository https://codeberg.org/dymaxionkim/GIT4SW
 * Movie : https://youtu.be/SGs7_w_s2pI
 
-
-# Description:
+## Description
 GIT4SW is an agentic CAD version control desktop client developed specifically for SolidWorks designers. By combining standard Git branch workflows with Git LFS locking mechanisms, GIT4SW offers concurrent conflict-free CAD collaboration while preventing overwrites and version drift in large 3D model files.
 
-# Key Features:
-- COM-based real-time SolidWorks document tracking
-- Automatic background Git LFS lock acquisition and release
-- Complete revision history traversal & Detached HEAD checkout
-- Bulk actions (checkout, merge, pull/push) with background task queues
-- Log panel "Terminate" button to safely kill active subprocess trees (dynamic red/pink status styling)
-- Dashboard "README.md" quick open/edit button (template-fallback auto-generation)
-- Maintainer "Make" repository auto configuration redirect and dashboard view switch
-- Modern color-coded file extension lists and aesthetic sidebar tabs
-- Auto Sync on startup and workspace change (sequential fetch/merge main)
+## Key Features
+* COM-based real-time SolidWorks document tracking
+* Automatic background Git LFS lock acquisition and release
+* Complete revision history traversal & Detached HEAD checkout
+* Bulk actions (checkout, merge, pull/push) with background task queues
+* Log panel "Terminate" button to safely kill active subprocess trees (dynamic red/pink status styling)
+* Dashboard "README.md" quick open/edit button (template-fallback auto-generation)
+* Maintainer "Make" repository auto configuration redirect and dashboard view switch
+* Modern color-coded file extension lists and aesthetic sidebar tabs
+* Auto Sync on startup and workspace change (sequential fetch/merge main)
 
+## Concept
+* Simple PDM for Solidworks users in individual or small team environments.
+* Configured to connect to GitHub. Currently, there are no plans to support other Git services.
+* Manages only the minimum essential files. The rest are excluded from management.
+* Acceptable not to know how to use Git.
+* Naturally guides users to follow standardized repository management methods.
+
+## Acknowledgement
+* Core Engine: GitPython, Git CLI & Git LFS, Solidworks & eDrawings
 * Developed using Google Antigravity-IDE.
+* License: GNU GPLv3
