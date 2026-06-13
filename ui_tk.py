@@ -7,6 +7,8 @@ import threading
 import queue
 import json
 import webbrowser
+import subprocess
+import time
 
 from git_service import GitService, MergeConflictError, run_git_subprocess
 from sw_monitor import SolidWorksMonitorService
@@ -394,6 +396,7 @@ class GIT4SWApp(tk.Tk):
                         background=card_color, 
                         fieldbackground=card_color, 
                         foreground=text_color,
+                        font="TkDefaultFont",
                         rowheight=20)
         style.map("Treeview", 
                   background=[("selected", "#e5e7eb")],
@@ -401,6 +404,7 @@ class GIT4SWApp(tk.Tk):
         style.configure("Treeview.Heading", 
                         background="#f3f4f6", 
                         foreground="#374151", 
+                        font="TkDefaultFont",
                         borderwidth=1,
                         relief="flat")
 
@@ -1582,6 +1586,9 @@ class GIT4SWApp(tk.Tk):
         
         self.btn_solidworks = ttk.Button(actions_frm, text="Solidworks", style="Primary.TButton", command=self.open_solidworks)
         self.btn_solidworks.pack(side="left", padx=4)
+        
+        self.btn_export = ttk.Button(actions_frm, text="EXPORT", style="Primary.TButton", command=self.open_export_dialog)
+        self.btn_export.pack(side="left", padx=4)
         
         self.lbl_selected_count = ttk.Label(actions_frm, text="Selected files: 0", style="TLabel")
         self.lbl_selected_count.pack(side="right", padx=8)
@@ -3892,6 +3899,282 @@ class GIT4SWApp(tk.Tk):
                 self.write_log("\n".join(errors), "error")
         else:
             self.write_log(f"eDrawings executable not found at path: {path}. Please check config.json.", "error")
+
+    def open_export_dialog(self):
+        # Create toplevel popup
+        pop = tk.Toplevel(self)
+        pop.title("Solidworks EXPORT")
+        pop.geometry("420x370")
+        pop.resizable(False, False)
+        
+        # Apply window background color matching main GUI
+        pop.configure(bg="#f3f4f6")
+        
+        # Center the window relative to self
+        pop.transient(self)
+        pop.grab_set()
+        
+        # Format label frame using standard tk.LabelFrame to perfectly match the bg color
+        lf = tk.LabelFrame(pop, text="Export Format (Multiple Selection)", bg="#f3f4f6", fg="#059669", font="TkDefaultFont", relief="groove")
+        lf.pack(fill="x", padx=20, pady=(10, 5))
+        
+        # Checkbuttons for multiple selection with bg alignment
+        pdf_var = tk.BooleanVar(value=True)
+        dxf_var = tk.BooleanVar(value=False)
+        step_var = tk.BooleanVar(value=False)
+        step_asm_var = tk.BooleanVar(value=False)
+        
+        cb_pdf = tk.Checkbutton(lf, text="PDF (.slddrw)", variable=pdf_var, bg="#f3f4f6", activebackground="#f3f4f6", selectcolor="#ffffff", fg="#1f2937", font="TkDefaultFont")
+        cb_pdf.pack(anchor="w", padx=15, pady=2)
+        
+        cb_dxf = tk.Checkbutton(lf, text="DXF (.slddrw)", variable=dxf_var, bg="#f3f4f6", activebackground="#f3f4f6", selectcolor="#ffffff", fg="#1f2937", font="TkDefaultFont")
+        cb_dxf.pack(anchor="w", padx=15, pady=2)
+        
+        cb_step = tk.Checkbutton(lf, text="STEP (.sldprt)", variable=step_var, bg="#f3f4f6", activebackground="#f3f4f6", selectcolor="#ffffff", fg="#1f2937", font="TkDefaultFont")
+        cb_step.pack(anchor="w", padx=15, pady=2)
+        
+        cb_step_asm = tk.Checkbutton(lf, text="STEP_ASM (.sldasm)", variable=step_asm_var, bg="#f3f4f6", activebackground="#f3f4f6", selectcolor="#ffffff", fg="#1f2937", font="TkDefaultFont")
+        cb_step_asm.pack(anchor="w", padx=15, pady=2)
+        
+        # Input Frame
+        input_frm = ttk.Frame(pop, style="TFrame")
+        input_frm.pack(fill="x", padx=20, pady=2)
+        
+        # PREFIX entry
+        lbl_prefix = ttk.Label(input_frm, text="PREFIX:", style="TLabel", font="TkDefaultFont")
+        lbl_prefix.pack(anchor="w", pady=(2, 1))
+        ent_prefix = ttk.Entry(input_frm, font="TkDefaultFont")
+        ent_prefix.pack(fill="x", pady=(0, 6))
+        
+        # OUTPUT_DIR entry
+        lbl_out_dir = ttk.Label(input_frm, text="OUTPUT_DIR:", style="TLabel", font="TkDefaultFont")
+        lbl_out_dir.pack(anchor="w", pady=(2, 1))
+        ent_out_dir = ttk.Entry(input_frm, font="TkDefaultFont")
+        ent_out_dir.pack(fill="x", pady=(0, 2))
+        ent_out_dir.insert(0, "2D")
+        
+        def get_filtered_files_list():
+            # Get current prefix and checked formats
+            prefix_val = ent_prefix.get().strip()
+            if prefix_val == "*" or prefix_val == "":
+                prefix_val = ""
+                
+            formats = []
+            if pdf_var.get(): formats.append("PDF")
+            if dxf_var.get(): formats.append("DXF")
+            if step_var.get(): formats.append("STEP")
+            if step_asm_var.get(): formats.append("STEP_ASM")
+            
+            # Retrieve currently displayed files from the file table treeview
+            visible_files = []
+            for item in self.tree.get_children():
+                vals = self.tree.item(item, 'values')
+                if vals:
+                    visible_files.append(vals[0])
+            
+            if not visible_files:
+                return [], formats
+                
+            final_list = []
+            
+            for f_rel in visible_files:
+                f_lower = f_rel.lower()
+                base_name = os.path.basename(f_rel)
+                
+                # Check format requirements
+                match = False
+                if f_lower.endswith(".slddrw") and ("PDF" in formats or "DXF" in formats):
+                    match = True
+                elif f_lower.endswith(".sldprt") and "STEP" in formats:
+                    match = True
+                elif f_lower.endswith(".sldasm") and "STEP_ASM" in formats:
+                    match = True
+                    
+                if match:
+                    if prefix_val == "" or base_name.startswith(prefix_val):
+                        final_list.append(f_rel)
+                        
+            return final_list, formats
+
+        def start_action():
+            filtered_files, formats = get_filtered_files_list()
+            if not formats:
+                messagebox.showerror("Error", "Please select at least one format to export.")
+                return
+                
+            if not filtered_files:
+                messagebox.showwarning("Warning", "No matching files found to export.")
+                return
+                
+            prefix_val = ent_prefix.get().strip()
+            out_dir_val = ent_out_dir.get().strip()
+            if not out_dir_val:
+                out_dir_val = "2D"
+                
+            # Create job dictionary
+            job_data = {
+                "workspace_path": self.workspace_path,
+                "formats": formats,
+                "prefix": prefix_val,
+                "output_dir": out_dir_val,
+                "files": filtered_files
+            }
+            
+            # Temporary file path
+            job_file_name = f"export_job_{int(time.time())}.json"
+            job_path = os.path.join(self.workspace_path, job_file_name)
+            
+            try:
+                with open(job_path, "w", encoding="utf-8") as f:
+                    json.dump(job_data, f, indent=4)
+            except Exception as io_err:
+                messagebox.showerror("Error", f"Failed to create job configuration: {io_err}")
+                return
+                
+            # Launch background runner process
+            try:
+                script_dir = os.path.dirname(os.path.abspath(__file__))
+                runner_path = os.path.join(script_dir, "sw_export_runner.py")
+                
+                # Run subprocess
+                proc = subprocess.Popen([sys.executable, runner_path, job_path])
+                self.export_process = proc
+                self.write_log(f"🚀 Started background export process (Formats: {formats}, Prefix: '{prefix_val}', OutDir: '{out_dir_val}').", "info")
+                
+                # Start monitoring
+                self.after(500, lambda: self.check_export_process(job_path))
+            except Exception as run_err:
+                messagebox.showerror("Error", f"Failed to start background export process: {run_err}")
+                if os.path.exists(job_path):
+                    try:
+                        os.remove(job_path)
+                    except:
+                        pass
+                return
+                
+            pop.destroy()
+            
+        def info_action():
+            filtered_files, formats = get_filtered_files_list()
+            
+            # Calculate counts
+            count_slddrw = 0
+            count_sldprt = 0
+            count_sldasm = 0
+            for f in filtered_files:
+                f_lower = f.lower()
+                if f_lower.endswith(".slddrw"):
+                    count_slddrw += 1
+                elif f_lower.endswith(".sldprt"):
+                    count_sldprt += 1
+                elif f_lower.endswith(".sldasm"):
+                    count_sldasm += 1
+            
+            # Sort file list by extension
+            filtered_files.sort(key=lambda x: (os.path.splitext(x)[1].lower(), x.lower()))
+            
+            # Open INFO dialog window
+            info_pop = tk.Toplevel(pop)
+            info_pop.title("EXPORT Target Files Information")
+            info_pop.geometry("600x550")
+            info_pop.resizable(False, False)
+            info_pop.configure(bg="#f3f4f6")
+            info_pop.transient(pop)
+            info_pop.grab_set()
+            
+            # Title Card / Header
+            header_card = ttk.Frame(info_pop, style="Card.TFrame")
+            header_card.pack(fill="x", padx=15, pady=(15, 10))
+            
+            lbl_info_title = ttk.Label(header_card, text="Target Summary Statistics", style="TLabel", font="TkDefaultFont", background="#ffffff")
+            lbl_info_title.pack(anchor="w", padx=10, pady=(6, 2))
+            
+            stat_text = (
+                f"• Drawings (.slddrw): {count_slddrw} files\n"
+                f"• Parts (.sldprt): {count_sldprt} files\n"
+                f"• Assemblies (.sldasm): {count_sldasm} files\n"
+                f"• Total Matched Targets: {len(filtered_files)} files"
+            )
+            lbl_stats = ttk.Label(header_card, text=stat_text, style="Card.TLabel", justify="left", font="TkDefaultFont")
+            lbl_stats.pack(anchor="w", padx=10, pady=(2, 8))
+            
+            # Table Card
+            table_card = ttk.Frame(info_pop, style="Card.TFrame")
+            table_card.pack(fill="both", expand=True, padx=15, pady=5)
+            
+            lbl_tbl_title = ttk.Label(table_card, text="Detailed Files List", style="TLabel", font="TkDefaultFont", background="#ffffff")
+            lbl_tbl_title.pack(anchor="w", padx=10, pady=(6, 2))
+            
+            # Scrollable Treeview
+            tbl_container = ttk.Frame(table_card, style="TFrame")
+            tbl_container.pack(fill="both", expand=True, padx=10, pady=(2, 10))
+            
+            # Single column: path (type is removed)
+            tree = ttk.Treeview(tbl_container, columns=("path",), show="headings", selectmode="none")
+            tree.heading("path", text="Relative File Path", anchor="w")
+            tree.column("path", width=480, anchor="w")
+            
+            # Setup tags for color coding matching CustomFileTable
+            tree.tag_configure("sldprt", foreground="#059669")
+            tree.tag_configure("sldasm", foreground="#d97706")
+            tree.tag_configure("slddrw", foreground="#dc2626")
+            tree.tag_configure("default_ext", foreground="#7c3aed")
+            
+            # Scrollbar
+            sb = ttk.Scrollbar(tbl_container, orient="vertical", command=tree.yview)
+            tree.configure(yscrollcommand=sb.set)
+            
+            tree.pack(side="left", fill="both", expand=True)
+            sb.pack(side="right", fill="y")
+            
+            # Insert items with extension tag
+            for f in filtered_files:
+                ext_lower = os.path.splitext(f)[1].lower()
+                if ext_lower == ".sldprt":
+                    tag = "sldprt"
+                elif ext_lower == ".sldasm":
+                    tag = "sldasm"
+                elif ext_lower == ".slddrw":
+                    tag = "slddrw"
+                else:
+                    tag = "default_ext"
+                    
+                tree.insert("", "end", values=(f,), tags=(tag,))
+                
+            # Close button
+            btn_close = ttk.Button(info_pop, text="Close", command=info_pop.destroy)
+            btn_close.pack(pady=15)
+
+        # Buttons Panel
+        btn_frm = ttk.Frame(pop, style="TFrame")
+        btn_frm.pack(fill="x", pady=(10, 15), padx=20)
+        
+        btn_start = ttk.Button(btn_frm, text="Start", style="Primary.TButton", command=start_action)
+        btn_start.pack(side="left", expand=True, fill="x", padx=(0, 5))
+        
+        btn_info = ttk.Button(btn_frm, text="INFO", style="TButton", command=info_action)
+        btn_info.pack(side="left", expand=True, fill="x", padx=5)
+        
+        btn_cancel = ttk.Button(btn_frm, text="Cancel", style="TButton", command=pop.destroy)
+        btn_cancel.pack(side="right", expand=True, fill="x", padx=(5, 0))
+
+    def check_export_process(self, job_path):
+        if hasattr(self, 'export_process') and self.export_process:
+            poll = self.export_process.poll()
+            if poll is None:
+                # Still running, check again in 500ms
+                self.after(500, lambda: self.check_export_process(job_path))
+            else:
+                self.export_process = None
+                # Clean up job file
+                if os.path.exists(job_path):
+                    try:
+                        os.remove(job_path)
+                    except:
+                        pass
+                # Show completed dialog
+                messagebox.showinfo("Export Complete", "Solidworks export process has completed!")
+                self.write_log("✅ Background export process finished successfully.", "success")
 
     @queue_during_bg_tasks
     def open_solidworks(self):

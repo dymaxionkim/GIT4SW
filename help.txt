@@ -76,6 +76,15 @@ The File Manager provides file-level checkout, checking-in, and local modificati
   - Opens the selected CAD file in the eDrawings application for quick, lightweight viewing.
 • Solidworks (Button)
   - Opens the selected CAD file in the active instance of SolidWorks.
+• EXPORT (Button)
+  - Launches a compact dialog window to perform bulk conversion of drawings (.slddrw), parts (.sldprt), and assemblies (.sldasm) to various formats (PDF, DXF, STEP, STEP_ASM).
+  - Supports multi-selection of formats, custom file name prefix filters (PREFIX), and target subdirectory configurations (OUTPUT_DIR, defaults to "2D").
+  - The dialog runs completely asynchronously in a separate background python process so the main client interface remains fully responsive.
+  - Inside the dialog, clicking the **INFO** button opens a details modal displaying summary counts and a color-coded relative paths list of files matching your active export rules, sorted by file extension. The window is dynamically sized (600x550) to fully display the list and "Close" button.
+  - Conversion Quality Features:
+    - Drawings saved to PDF are forced to Black & White (swPDFExportInColor set to False) with High Quality rendering, and automatically respect your SolidWorks document properties' custom line weights/pen tables (swPDFExportUseCurrentPrintLineWeights set to True).
+    - Parts and Assemblies saved to STEP are forced to the AP214 standard (supporting colors) with color appearances and textures preserved (swStepExportAppearances set to True).
+    - Original SolidWorks user preferences are automatically restored back to their custom values once the batch conversion finishes.
 • Version Description (Text Box)
   - Enter a brief description (commit message) describing what changes you made to the files.
 • Upload Selected File Version (Button)
