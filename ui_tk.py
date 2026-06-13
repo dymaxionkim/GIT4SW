@@ -4006,6 +4006,27 @@ class GIT4SWApp(tk.Tk):
                 messagebox.showwarning("Warning", "No matching files found to export.")
                 return
                 
+            # Check if any of the target files are currently open in SolidWorks
+            open_in_sw_targets = []
+            for f_rel in filtered_files:
+                f_rel_lower = f_rel.lower().replace("\\", "/")
+                for open_f in self.last_open_files:
+                    if open_f.lower().replace("\\", "/") == f_rel_lower:
+                        open_in_sw_targets.append(f_rel)
+                        break
+                        
+            if open_in_sw_targets:
+                targets_str = "\n".join(open_in_sw_targets[:10])
+                if len(open_in_sw_targets) > 10:
+                    targets_str += f"\n... and {len(open_in_sw_targets) - 10} more files."
+                    
+                messagebox.showwarning(
+                    "Solidworks File Open Alert",
+                    f"The following target files are currently open in SolidWorks. "
+                    f"Please close them in SolidWorks before exporting:\n\n{targets_str}"
+                )
+                return
+                
             prefix_val = ent_prefix.get().strip()
             out_dir_val = ent_out_dir.get().strip()
             if not out_dir_val:
