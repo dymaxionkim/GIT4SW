@@ -472,7 +472,21 @@ class GIT4SWApp(tk.Tk):
         
 
         
-        btn_clear_log = ttk.Button(log_header, text="Clear", width=8, command=self.clear_log)
+        btn_clear_log = tk.Button(
+            log_header,
+            text="Clear",
+            command=self.clear_log,
+            font=("TkDefaultFont", 9, "bold"),
+            bg="#e5e7eb",
+            fg="#1f2937",
+            activebackground="#d1d5db",
+            activeforeground="#111827",
+            bd=0,
+            relief="flat",
+            padx=12,
+            pady=3,
+            cursor="hand2"
+        )
         btn_clear_log.pack(side="right")
         
         self.btn_terminate = tk.Button(
