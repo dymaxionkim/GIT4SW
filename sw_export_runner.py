@@ -12,47 +12,24 @@ except ImportError:
     WIN32_AVAILABLE = False
 
 def close_all_documents_without_saving(swApp):
+    # Close all documents including unsaved ones without prompting (discards changes)
     try:
-        # Get all open documents (GetDocuments is a property tuple in PyWin32)
-        docs = swApp.GetDocuments
-        if docs:
-            for doc in docs:
-                try:
-                    names_to_try = []
-                    path_name = doc.GetPathName()
-                    if path_name:
-                        names_to_try.append(path_name)
-                        names_to_try.append(os.path.basename(path_name))
-                        
-                    title = doc.GetTitle()
-                    if title:
-                        names_to_try.append(title)
-                        if " - " in title:
-                            names_to_try.append(title.split(" - ")[0])
-                            
-                    # Remove empty and duplicates
-                    seen = set()
-                    unique_names = [x for x in names_to_try if x and not (x in seen or seen.add(x))]
-                    
-                    for name in unique_names:
-                        try:
-                            swApp.QuitDoc(name)
-                        except:
-                            try:
-                                swApp.CloseDoc(name)
-                            except:
-                                pass
-                except Exception as doc_e:
-                    print(f"Error quitting doc: {doc_e}")
+        swApp.CloseAllDocuments(True)
     except Exception as e:
-        print(f"Error getting documents: {e}")
-        
-    # We do NOT use CloseAllDocuments(True) because it prompts the user.
-    # Instead, we use CloseAllDocuments(False) to close clean documents.
-    try:
-        swApp.CloseAllDocuments(False)
-    except:
-        pass
+        print(f"Error calling CloseAllDocuments(True): {e}")
+        # Fallback to manual close using QuitDoc if CloseAllDocuments fails
+        try:
+            docs = swApp.GetDocuments
+            if docs:
+                for doc in docs:
+                    try:
+                        title = doc.GetTitle()
+                        if title:
+                            swApp.QuitDoc(title)
+                    except:
+                        pass
+        except Exception as fallback_e:
+            print(f"Fallback manual close failed: {fallback_e}")
 
 def run_export(job_file):
     if not WIN32_AVAILABLE:
@@ -308,6 +285,14 @@ def run_export(job_file):
                 print(f"Could not terminate SolidWorks PID {sw_pid}: {kill_e}")
                 
         pythoncom.CoUninitialize()
+        
+        # Clean up job file
+        try:
+            if os.path.exists(job_file):
+                os.remove(job_file)
+                print(f"Successfully cleaned up temporary job file: {job_file}")
+        except Exception as cleanup_e:
+            print(f"Failed to remove job file {job_file}: {cleanup_e}")
 
 if __name__ == "__main__":
     if len(sys.argv) < 2:
