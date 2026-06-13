@@ -1023,11 +1023,16 @@ class GIT4SWApp(tk.Tk):
         
         txt_about = tk.Text(container, bg="#ffffff", fg="#1f2937", font="TkDefaultFont", wrap="word", relief="flat", height=15)
         
-        # Configure hyperlink tag
-        txt_about.tag_config("link", foreground="#2563eb", underline=1)
-        txt_about.tag_bind("link", "<Button-1>", lambda e: webbrowser.open_new("https://codeberg.org/dymaxionkim/GIT4SW"))
-        txt_about.tag_bind("link", "<Enter>", lambda e: txt_about.config(cursor="hand2"))
-        txt_about.tag_bind("link", "<Leave>", lambda e: txt_about.config(cursor=""))
+        # Configure hyperlink tags
+        txt_about.tag_config("link1", foreground="#2563eb", underline=1)
+        txt_about.tag_bind("link1", "<Button-1>", lambda e: webbrowser.open_new("https://codeberg.org/dymaxionkim/GIT4SW"))
+        txt_about.tag_bind("link1", "<Enter>", lambda e: txt_about.config(cursor="hand2"))
+        txt_about.tag_bind("link1", "<Leave>", lambda e: txt_about.config(cursor=""))
+
+        txt_about.tag_config("link2", foreground="#2563eb", underline=1)
+        txt_about.tag_bind("link2", "<Button-1>", lambda e: webbrowser.open_new("https://youtu.be/SGs7_w_s2pI"))
+        txt_about.tag_bind("link2", "<Enter>", lambda e: txt_about.config(cursor="hand2"))
+        txt_about.tag_bind("link2", "<Leave>", lambda e: txt_about.config(cursor=""))
         
         # Load about text from file
         script_dir = os.path.dirname(os.path.abspath(__file__))
@@ -1044,16 +1049,20 @@ class GIT4SWApp(tk.Tk):
             
         txt_about.insert("1.0", about_text)
         
-        # Search for link URL and apply tag to make it clickable
-        link_url = "https://codeberg.org/dymaxionkim/GIT4SW"
-        start_idx = "1.0"
-        while True:
-            pos = txt_about.search(link_url, start_idx, stopindex=tk.END)
-            if not pos:
-                break
-            end_pos = f"{pos} + {len(link_url)}c"
-            txt_about.tag_add("link", pos, end_pos)
-            start_idx = end_pos
+        # Search for link URLs and apply tags to make them clickable
+        links_info = [
+            ("https://codeberg.org/dymaxionkim/GIT4SW", "link1"),
+            ("https://youtu.be/SGs7_w_s2pI", "link2")
+        ]
+        for link_url, tag_name in links_info:
+            start_idx = "1.0"
+            while True:
+                pos = txt_about.search(link_url, start_idx, stopindex=tk.END)
+                if not pos:
+                    break
+                end_pos = f"{pos} + {len(link_url)}c"
+                txt_about.tag_add(tag_name, pos, end_pos)
+                start_idx = end_pos
         txt_about.config(state="disabled")
         
         scrollbar = ttk.Scrollbar(container, orient="vertical", command=txt_about.yview)

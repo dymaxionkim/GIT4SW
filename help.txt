@@ -55,6 +55,11 @@ The File Manager provides file-level checkout, checking-in, and local modificati
     - 'by Solidworks' groups files with 'Open' status first.
     - All sorting modes utilize the full relative File Path as the secondary alphabetical sorting key.
     - Ignored files defined in .gitignore (detected via git ls-files) are filtered out and will not be displayed.
+• CAD File Preview Canvas (Sidebar)
+  - Displays a 4:3 ratio (180x135) thumbnail image of the selected SolidWorks file (.sldprt, .sldasm, .slddrw) in the sidebar. This preview automatically extracts thumbnails using a hybrid of OLE parsing and Windows Shell COM interfaces, making it compatible with SolidWorks 2026 and newer formats.
+  - The preview is active ONLY in File Manager mode and when exactly one CAD file is selected.
+• Click-to-Copy (Canvas Interaction)
+  - Clicking the CAD preview canvas (mouse cursor changes to a hand shape) copies the high-resolution bitmap data of the thumbnail to the Windows system clipboard (CF_DIB). This allows you to immediately paste the image into PowerPoint, Word, Paint, or chat apps using Ctrl+V.
 • Refresh (Button)
   - Reloads files, queries LFS lock database, and updates SolidWorks open documents instantly.
 • Open (Button)
@@ -86,9 +91,9 @@ The File Manager provides file-level checkout, checking-in, and local modificati
 The History Log lets you browse previous revisions and audit modifications.
 
 • Revision List (Table)
-  - Shows a log of all past commits (Commit Hash, Author, Date, Message) for the active branch.
-• Commit Details (Text Area)
-  - Displays detailed file modifications, diffs, and detailed notes for the selected commit.
+  - Shows a log of all past commits (Commit Hash, Author, Date, Message) for the active branch. The current checkout version's row is highlighted in Bold text and themed Green color (#059669).
+• Graph (Button)
+  - Located at the bottom right corner of the screen. Clicking it opens a separate Windows command terminal displaying the ASCII-drawn commit tree using "git log --graph --oneline --all --decorate", matching your custom git executable path.
 
 ----------------------------------------------------------
 4. MAINTAINER MODE
