@@ -307,20 +307,21 @@ class GitService:
             
         return "/".join(corrected_parts)
 
-    def get_status(self):
+    def get_status(self, locks=None):
         """
         Scans workspace directory files and merges Git status with LFS lock status.
         """
         if not self.is_git_repo():
             return []
 
-        # 1. Fetch LFS locks
-        locks = self.get_lfs_locks()
+        # 1. Fetch LFS locks if not provided
+        if locks is None:
+            locks = self.get_lfs_locks()
         
         # 1.5 Fetch ignored files to exclude them from the file list
         ignored_files = set()
         try:
-            ignored_out = self._run_lfs_cmd(["git", "ls-files", "--others", "--ignored", "--exclude-standard"])
+            ignored_out = self._run_lfs_cmd(["git", "-c", "core.quotepath=false", "ls-files", "--others", "--ignored", "--exclude-standard"])
             for line in ignored_out.splitlines():
                 line = line.strip()
                 if not line:
@@ -340,7 +341,7 @@ class GitService:
         # 2. Get status via git status --porcelain
         changed_files = {}
         try:
-            status_out = self._run_lfs_cmd(["git", "status", "--porcelain", "-u"])
+            status_out = self._run_lfs_cmd(["git", "-c", "core.quotepath=false", "status", "--porcelain", "-u"])
             for line in status_out.splitlines():
                 if len(line) >= 3:
                     status_code = line[:2]
@@ -372,76 +373,56 @@ class GitService:
             pass
             
         sw_files = []
-        for root, dirs, files in os.walk(self.repo_path):
-            # Always skip .git directory
-            if '.git' in dirs:
-                dirs.remove('.git')
-
-            # Filter out directories ignored by .gitignore
-            if dirs:
-                try:
-                    # Construct relative paths with forward slashes and trailing slashes for git check-ignore
-                    rel_dir_paths = []
-                    for d in dirs:
-                        rel_path = os.path.relpath(os.path.join(root, d), self.repo_path).replace("\\", "/")
-                        rel_dir_paths.append(rel_path + "/")
-                        
-                    cmd_args = ["git", "check-ignore", "-z"] + rel_dir_paths
-                    if cmd_args[0] == "git" and self.git_path and os.path.exists(self.git_path):
-                        cmd_args[0] = self.git_path
-                    result = subprocess.run(
-                        cmd_args,
-                        cwd=self.repo_path,
-                        capture_output=True,
-                        text=True,
-                        encoding="utf-8",
-                        errors="ignore"
-                     )
-                    # git check-ignore outputs ignored paths separated by NUL
-                    if result.stdout:
-                        ignored_paths = set(
-                            p for p in result.stdout.split('\0') if p
-                        )
-                        dirs[:] = [
-                            d for d in dirs
-                            if (os.path.relpath(os.path.join(root, d), self.repo_path).replace("\\", "/") + "/") not in ignored_paths
-                        ]
-                except Exception:
-                    pass
-
-            for file in files:
-                ext = os.path.splitext(file)[1].lower()
+        try:
+            cmd_args = ["git", "-c", "core.quotepath=false", "ls-files", "-co", "--exclude-standard"]
+            ls_out = self._run_lfs_cmd(cmd_args)
+            for line in ls_out.splitlines():
+                line = line.strip()
+                if not line:
+                    continue
+                if line.startswith('"') and line.endswith('"'):
+                    line = line[1:-1]
+                    try:
+                        import codecs
+                        b, _ = codecs.escape_decode(bytes(line, "utf-8"))
+                        line = b.decode("utf-8")
+                    except Exception:
+                        pass
+                
+                rel_path = line.replace("\\", "/")
+                ext = os.path.splitext(rel_path)[1].lower()
                 if ext in [".sldprt", ".sldasm", ".slddrw"]:
-                     full_path = os.path.join(root, file)
-                     rel_path = os.path.relpath(full_path, self.repo_path).replace("\\", "/")
-                     
-                     if rel_path.lower() in ignored_files:
-                         continue
-                     
-                     status_desc = 'unmodified'
-                     for c_path, c_status in changed_files.items():
-                         if c_path.lower() == rel_path.lower():
-                             status_desc = c_status
-                             break
-                     
-                     # Case-insensitive lookup in locks
-                     lock_info = None
-                     for l_path, l_val in locks.items():
-                         if l_path.lower() == rel_path.lower():
-                             lock_info = l_val
-                             break
-                     locked = lock_info is not None
-                     locked_by = lock_info['owner'] if locked else None
-                     is_our_lock = lock_info['is_ours'] if locked else False
-                     
-                     sw_files.append({
-                         'file': rel_path,
-                         'type': ext,
-                         'status': status_desc,
-                         'locked': locked,
-                         'locked_by': locked_by,
-                         'is_our_lock': is_our_lock
-                     })
+                    if rel_path.lower() in ignored_files:
+                        continue
+                    
+                    full_path = os.path.join(self.repo_path, rel_path)
+                    if os.path.exists(full_path):
+                        status_desc = 'unmodified'
+                        for c_path, c_status in changed_files.items():
+                            if c_path.lower() == rel_path.lower():
+                                status_desc = c_status
+                                break
+                        
+                        # Case-insensitive lookup in locks
+                        lock_info = None
+                        for l_path, l_val in locks.items():
+                            if l_path.lower() == rel_path.lower():
+                                lock_info = l_val
+                                break
+                        locked = lock_info is not None
+                        locked_by = lock_info['owner'] if locked else None
+                        is_our_lock = lock_info['is_ours'] if locked else False
+                        
+                        sw_files.append({
+                            'file': rel_path,
+                            'type': ext,
+                            'status': status_desc,
+                            'locked': locked,
+                            'locked_by': locked_by,
+                            'is_our_lock': is_our_lock
+                        })
+        except Exception as e:
+            print(f"Error querying files with git ls-files: {e}")
                      
         return sw_files
 

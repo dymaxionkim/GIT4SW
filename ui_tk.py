@@ -1639,9 +1639,28 @@ class GIT4SWApp(tk.Tk):
         self.is_refreshing_file_list = True
         self.increment_tasks()
 
+        # Carry over previous lock info to prevent visual flickering
+        old_locks = {}
+        if getattr(self, 'files_data', None):
+            for f in self.files_data:
+                old_locks[f['file'].lower().replace("\\", "/")] = {
+                    'locked': f.get('locked', False),
+                    'locked_by': f.get('locked_by', None),
+                    'is_our_lock': f.get('is_our_lock', False)
+                }
+
         def run():
             try:
-                files_data = self.git_service.get_status()
+                # 1. Fetch file list locally using locks={} to avoid network calls
+                files_data = self.git_service.get_status(locks={})
+                
+                # Carry over previous lock info
+                for f in files_data:
+                    f_path_lower = f['file'].lower().replace("\\", "/")
+                    if f_path_lower in old_locks:
+                        f['locked'] = old_locks[f_path_lower]['locked']
+                        f['locked_by'] = old_locks[f_path_lower]['locked_by']
+                        f['is_our_lock'] = old_locks[f_path_lower]['is_our_lock']
                 
                 def update_gui():
                     self.files_data = files_data
@@ -1663,6 +1682,37 @@ class GIT4SWApp(tk.Tk):
                     self.populate_file_table()
                             
                 self.task_queue.put(('callback', None, update_gui))
+                
+                # 2. Trigger asynchronous background remote lock fetch
+                def fetch_remote_locks():
+                    try:
+                        remote_locks = self.git_service.get_lfs_locks()
+                        
+                        def update_locks_gui():
+                            if not getattr(self, 'files_data', None):
+                                return
+                            
+                            locks_lower = {k.lower().replace("\\", "/"): v for k, v in remote_locks.items()}
+                            
+                            for f in self.files_data:
+                                f_path_lower = f['file'].lower().replace("\\", "/")
+                                if f_path_lower in locks_lower:
+                                    f['locked'] = True
+                                    f['locked_by'] = locks_lower[f_path_lower]['owner']
+                                    f['is_our_lock'] = locks_lower[f_path_lower]['is_ours']
+                                else:
+                                    f['locked'] = False
+                                    f['locked_by'] = None
+                                    f['is_our_lock'] = False
+                                    
+                            self.populate_file_table()
+                            
+                        self.task_queue.put(('callback', None, update_locks_gui))
+                    except Exception as le:
+                        print(f"Background locks fetch failed: {le}")
+                
+                threading.Thread(target=fetch_remote_locks, daemon=True).start()
+                
             except Exception as e:
                 def on_error():
                     self.write_log(f"Failed to load file list: {e}", "error")
