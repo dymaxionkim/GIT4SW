@@ -688,7 +688,7 @@ class GIT4SWApp(tk.Tk):
         
         # Re-enable all UI buttons
         is_repo = self.git_service.is_git_repo()
-        self.btn_lock.config(text="Lock (Checkout)")
+        self.btn_lock.config(text="Lock")
         if is_repo:
             self.btn_lock.state(["!disabled"])
             self.btn_unlock.state(["!disabled"])
@@ -1565,7 +1565,7 @@ class GIT4SWApp(tk.Tk):
         actions_frm = ttk.Frame(main_panel)
         actions_frm.pack(fill="x", pady=6)
         
-        self.btn_lock = ttk.Button(actions_frm, text="Lock (Checkout)", style="Primary.TButton", command=self.lock_file)
+        self.btn_lock = ttk.Button(actions_frm, text="Lock", style="Primary.TButton", command=self.lock_file)
         self.btn_lock.pack(side="left", padx=4)
         
         self.btn_unlock = ttk.Button(actions_frm, text="Unlock File", command=self.unlock_file)
@@ -4145,7 +4145,7 @@ class GIT4SWApp(tk.Tk):
                 # Only restore button states when no background tasks are running
                 if self.bg_tasks_count == 0:
                     is_repo = self.git_service.is_git_repo()
-                    self.btn_lock.config(text="Lock (Checkout)")
+                    self.btn_lock.config(text="Lock")
                     if is_repo:
                         self.btn_lock.state(["!disabled"])
                         self.btn_unlock.state(["!disabled"])
