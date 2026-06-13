@@ -3106,7 +3106,7 @@ class GIT4SWApp(tk.Tk):
             if os.path.exists(self.git_service.git_path):
                 git_exe = self.git_service.git_path
 
-        cmd_str = f'start "Git-Graph" cmd /K ""{git_exe}" log --graph --oneline --all --decorate"'
+        cmd_str = f'start "Git-Graph" cmd /K ""{git_exe}" log --graph --all --decorate"'
         import subprocess
         try:
             subprocess.Popen(cmd_str, shell=True, cwd=self.workspace_path)
