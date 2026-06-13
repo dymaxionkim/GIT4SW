@@ -64,8 +64,8 @@ The File Manager provides file-level checkout, checking-in, and local modificati
   - Reloads files, queries LFS lock database, and updates SolidWorks open documents instantly.
 • Open (Button)
   - Opens the current workspace folder in Windows File Explorer.
-• Lock (Checkout) (Button)
-  - Checks out the selected files and acquires LFS locks on them to prevent other designers from overwriting your work. (Locks are also automatically acquired when you open files in SolidWorks).
+• Lock (Button)
+  - Acquires LFS locks on the selected files to prevent other designers from overwriting your work. (Locks are also automatically acquired when you open files in SolidWorks).
 • Unlock File (Button)
   - Manually releases your LFS locks on the selected files.
 • Force Unlock (Button)
