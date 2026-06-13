@@ -470,7 +470,7 @@ class GitService:
                     continue
                 parts = re.split(r'\t|\s{2,}', line)
                 if len(parts) >= 2:
-                    file_path = parts[0].strip()
+                    file_path = parts[0].strip().replace("\\", "/")
                     owner_info = parts[1].strip()
                     owner_name = re.sub(r'\s*\(ID:.*$', '', owner_info)
                     
