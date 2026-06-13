@@ -1533,7 +1533,7 @@ class GIT4SWApp(tk.Tk):
         # Header Row
         header_frm = ttk.Frame(main_panel)
         header_frm.pack(fill="x", pady=(0, 6))
-        lbl_file_title = ttk.Label(header_frm, text="File Checkout & Check-in", style="Title.TLabel")
+        lbl_file_title = ttk.Label(header_frm, text="File Check", style="Title.TLabel")
         lbl_file_title.pack(side="left")
         btn_refresh = ttk.Button(header_frm, text="Refresh", command=self.refresh_file_list)
         btn_refresh.pack(side="right")
@@ -1541,7 +1541,7 @@ class GIT4SWApp(tk.Tk):
         btn_open.pack(side="right", padx=(0, 8))
         
         # Path filter combobox (placed to the left of "Open" button)
-        self.cb_path_filter = ttk.Combobox(header_frm, state="readonly", width=25)
+        self.cb_path_filter = ttk.Combobox(header_frm, state="readonly", width=70)
         self.cb_path_filter.pack(side="right", padx=(0, 8))
         self.cb_path_filter.config(values=["All Files"])
         self.cb_path_filter.set("All Files")
