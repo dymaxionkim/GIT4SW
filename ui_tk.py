@@ -11,6 +11,26 @@ import webbrowser
 from git_service import GitService, MergeConflictError, run_git_subprocess
 from sw_monitor import SolidWorksMonitorService
 
+# IShellItemImageFactory interface definition for CAD thumbnail extraction
+try:
+    from comtypes import GUID, IUnknown, COMMETHOD, HRESULT
+    from ctypes import POINTER
+    from ctypes.wintypes import SIZE, UINT, HBITMAP
+
+    class IShellItemImageFactory(IUnknown):
+        _case_insensitive_ = True
+        _iid_ = GUID('{bcc18b79-ba16-442f-80c4-8a59c30c463b}')
+        _idlflags_ = []
+
+    IShellItemImageFactory._methods_ = [
+        COMMETHOD([], HRESULT, 'GetImage',
+                  (['in'], SIZE, 'size'),
+                  (['in'], UINT, 'flags'),
+                  (['out'], POINTER(HBITMAP), 'phbm')),
+    ]
+except Exception:
+    IShellItemImageFactory = None
+
 
 class CustomFileTable(tk.Frame):
     def __init__(self, parent):
@@ -276,6 +296,7 @@ class GIT4SWApp(tk.Tk):
         super().__init__()
         self.workspace_path = workspace_path
         self.pending_button_tasks = []
+        self.current_view_index = 0
         self.check_and_load_config()
         
         # Initialize Services
@@ -503,6 +524,12 @@ class GIT4SWApp(tk.Tk):
         self.btn_history = tk.Button(sidebar, text=" History log", fg="#374151", bg="#e5e7eb", activebackground="#d1d5db", activeforeground="#111827",
                                 font=self.sidebar_font, bd=0, anchor="w", padx=20, command=lambda: self.switch_view(2))
         self.btn_history.pack(fill="x", pady=4)
+        
+        # Preview Canvas Container (4:3 ratio) - hidden by default
+        self.preview_container = tk.Frame(sidebar, bg="#ffffff", bd=0)
+        self.preview_canvas = tk.Canvas(self.preview_container, width=180, height=135, bg="#ffffff", bd=0, highlightthickness=0, cursor="hand2")
+        self.preview_canvas.pack(fill="both", expand=True)
+        self.preview_canvas.bind("<Button-1>", self.on_preview_clicked)
                
         self.btn_about = tk.Button(sidebar, text=" About", fg="#374151", bg="#e5e7eb", activebackground="#d1d5db", activeforeground="#111827",
                                font=self.sidebar_font, bd=0, anchor="w", padx=20, command=lambda: self.switch_view(6))
@@ -719,6 +746,7 @@ class GIT4SWApp(tk.Tk):
         self.task_queue.put(('bg_task_end', None, None))
 
     def switch_view(self, index):
+        self.current_view_index = index
         # Update sidebar button colors based on active view
         buttons = {
             0: self.btn_dash,
@@ -749,6 +777,9 @@ class GIT4SWApp(tk.Tk):
                     self.refresh_config_view()
             else:
                 view.pack_forget()
+
+        # Refresh CAD preview
+        self.on_file_selected_change()
 
     def check_and_load_config(self):
         config_path = "config.json"
@@ -1551,6 +1582,7 @@ class GIT4SWApp(tk.Tk):
         def update_selected_count(event=None):
             count = len(self.tree.selection())
             self.lbl_selected_count.config(text=f"(Selected files: {count})")
+            self.on_file_selected_change()
             
         self.tree.treeview.bind("<<TreeviewSelect>>", update_selected_count)
         
@@ -3072,6 +3104,147 @@ class GIT4SWApp(tk.Tk):
             self.write_log("Successfully launched Git Graph terminal.", "success")
         except Exception as e:
             self.write_log(f"Failed to launch Git Graph terminal: {e}", "error")
+
+    def on_file_selected_change(self):
+        if getattr(self, 'current_view_index', 0) != 1:
+            self.preview_container.pack_forget()
+            self._current_preview_image = None
+            return
+
+        selected_items = self.tree.selection()
+        if len(selected_items) == 1:
+            values = self.tree.item(selected_items[0], 'values')
+            if values:
+                filepath = values[0]
+                ext = os.path.splitext(filepath)[1].lower()
+                if ext in ('.sldprt', '.sldasm', '.slddrw'):
+                    full_path = os.path.join(self.workspace_path, filepath)
+                    self.show_cad_thumbnail(full_path)
+                    return
+
+        self.preview_container.pack_forget()
+        self._current_preview_image = None
+
+    def show_cad_thumbnail(self, full_path):
+        import threading
+        if not hasattr(self, '_preview_request_id'):
+            self._preview_request_id = 0
+        self._preview_request_id += 1
+        req_id = self._preview_request_id
+
+        def bg_extract():
+            try:
+                import comtypes
+                comtypes.CoInitialize()
+                try:
+                    img = self.extract_cad_thumbnail(full_path)
+                    if img and req_id == self._preview_request_id:
+                        self.after(0, lambda: self.display_thumbnail_in_canvas(img))
+                    elif not img and req_id == self._preview_request_id:
+                        self.after(0, lambda: self.preview_container.pack_forget())
+                        self._current_preview_image = None
+                finally:
+                    comtypes.CoUninitialize()
+            except Exception:
+                if req_id == self._preview_request_id:
+                    self.after(0, lambda: self.preview_container.pack_forget())
+                    self._current_preview_image = None
+
+        threading.Thread(target=bg_extract, daemon=True).start()
+
+    def extract_cad_thumbnail(self, full_path):
+        import os
+        if not os.path.exists(full_path):
+            return None
+
+        # 1. Try legacy OLE preview extraction
+        try:
+            import olefile
+            if olefile.isOleFile(full_path):
+                with olefile.OleFileIO(full_path) as ole:
+                    png_stream = None
+                    for stream in ole.listdir():
+                        if len(stream) > 0 and stream[-1].lower() == 'previewpng':
+                            png_stream = stream
+                            break
+                    if png_stream:
+                        data = ole.openstream(png_stream).read()
+                        from PIL import Image
+                        import io
+                        img = Image.open(io.BytesIO(data))
+                        return img.copy()
+        except Exception:
+            pass
+
+        # 2. Try Windows Shell COM extraction
+        if IShellItemImageFactory is not None:
+            try:
+                from ctypes import POINTER, byref, cast, windll
+                from ctypes.wintypes import SIZE, HANDLE, HBITMAP
+                import win32ui
+                import win32gui
+                from PIL import Image
+
+                shell32 = windll.shell32
+                SIIGBF_RESIZETOFIT = 0x00000000
+
+                h_siif = HANDLE()
+                # Use standard Windows backslash path format
+                full_path_win = os.path.abspath(full_path).replace('/', '\\')
+                hr = shell32.SHCreateItemFromParsingName(full_path_win, None, byref(IShellItemImageFactory._iid_), byref(h_siif))
+                if hr >= 0:
+                    shell_item_factory = cast(h_siif, POINTER(IShellItemImageFactory))
+                    h_bitmap = shell_item_factory.GetImage(SIZE(256, 256), SIIGBF_RESIZETOFIT)
+                    if h_bitmap:
+                        bmp = win32ui.CreateBitmapFromHandle(h_bitmap)
+                        bmp_info = bmp.GetInfo()
+                        w = bmp_info['bmWidth']
+                        h = bmp_info['bmHeight']
+                        bmp_str = bmp.GetBitmapBits(True)
+                        img = Image.frombuffer('RGB', (w, h), bmp_str, 'raw', 'BGRX', 0, 1)
+                        img_copy = img.copy()
+                        win32gui.DeleteObject(h_bitmap)
+                        return img_copy
+            except Exception:
+                pass
+
+        return None
+
+    def display_thumbnail_in_canvas(self, img):
+        from PIL import ImageTk, Image
+        self._current_preview_image = img.copy()
+        
+        img_scaled = img.resize((180, 135), Image.Resampling.LANCZOS)
+        self._preview_photo = ImageTk.PhotoImage(img_scaled)
+        self.preview_canvas.delete("all")
+        self.preview_canvas.create_image(0, 0, anchor="nw", image=self._preview_photo)
+        try:
+            self.preview_container.pack(fill="x", padx=10, pady=(12, 4), after=self.btn_history)
+        except Exception:
+            self.preview_container.pack(fill="x", padx=10, pady=(12, 4))
+
+    def on_preview_clicked(self, event=None):
+        if hasattr(self, '_current_preview_image') and self._current_preview_image:
+            try:
+                import io
+                import win32clipboard
+                
+                # Convert PIL Image to DIB bytes
+                output = io.BytesIO()
+                self._current_preview_image.convert("RGB").save(output, "BMP")
+                data = output.getvalue()[14:]  # Remove the 14-byte BMP file header
+                output.close()
+                
+                win32clipboard.OpenClipboard()
+                try:
+                    win32clipboard.EmptyClipboard()
+                    win32clipboard.SetClipboardData(win32clipboard.CF_DIB, data)
+                finally:
+                    win32clipboard.CloseClipboard()
+                    
+                self.write_log("Copied thumbnail image to clipboard.", "success")
+            except Exception as e:
+                self.write_log(f"Failed to copy image to clipboard: {e}", "error")
 
     # ==========================================
     # GENERAL ACTIONS & QUEUE PROCESSING
