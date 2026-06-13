@@ -11,6 +11,26 @@ try:
 except ImportError:
     WIN32_AVAILABLE = False
 
+def close_all_documents_without_saving(swApp):
+    try:
+        # Get all open documents (GetDocuments is a property tuple in PyWin32)
+        docs = swApp.GetDocuments
+        if docs:
+            for doc in docs:
+                try:
+                    title = doc.GetTitle()
+                    swApp.QuitDoc(title)
+                except Exception as doc_e:
+                    print(f"Error quitting doc: {doc_e}")
+    except Exception as e:
+        print(f"Error getting documents: {e}")
+        
+    # Fallback to CloseAllDocuments if needed
+    try:
+        swApp.CloseAllDocuments(True)
+    except:
+        pass
+
 def run_export(job_file):
     if not WIN32_AVAILABLE:
         print("Error: PyWin32 is not installed or not running on Windows.")
@@ -101,6 +121,7 @@ def run_export(job_file):
         try:
             swApp.SetUserPreferenceToggle(11, False)  # swDxfIssuingWarning
             swApp.SetUserPreferenceToggle(143, False) # swDxfMappingFileEnabled
+            swApp.SetUserPreferenceToggle(15, True)   # swExtRefNoPromptOrSave (Don't prompt to save read-only referenced docs)
         except Exception as pref_e:
             print(f"Failed to set user preferences: {pref_e}")
 
@@ -212,13 +233,10 @@ def run_export(job_file):
                     else:
                         print(f"Failed to save {dest_file_path} (SaveAs3 code: {result})")
                         
-                    swApp.CloseAllDocuments(True)
+                    close_all_documents_without_saving(swApp)
                 except Exception as file_e:
                     print(f"Error processing {file_abs}: {file_e}")
-                    try:
-                        swApp.CloseAllDocuments(True)
-                    except:
-                        pass
+                    close_all_documents_without_saving(swApp)
                         
             # Restore preferences for the active format after processing all files
             if active_fmt == "PDF":
@@ -244,6 +262,7 @@ def run_export(job_file):
         try:
             swApp.SetUserPreferenceToggle(11, True)
             swApp.SetUserPreferenceToggle(143, True)
+            swApp.SetUserPreferenceToggle(15, False)
         except:
             pass
 
