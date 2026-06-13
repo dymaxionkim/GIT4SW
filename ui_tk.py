@@ -513,15 +513,15 @@ class GIT4SWApp(tk.Tk):
         self.sidebar_font = tkfont.Font(family=default_f.cget("family"), size=new_size, weight="bold")
         
         # Sidebar Menu Buttons
-        self.btn_dash = tk.Button(sidebar, text=" Dashboard", fg="#374151", bg="#e5e7eb", activebackground="#d1d5db", activeforeground="#111827",
+        self.btn_dash = tk.Button(sidebar, text=" 📊 Dashboard", fg="#374151", bg="#e5e7eb", activebackground="#d1d5db", activeforeground="#111827",
                                font=self.sidebar_font, bd=0, anchor="w", padx=20, command=lambda: self.switch_view(0))
         self.btn_dash.pack(fill="x", pady=(24, 4))
         
-        self.btn_files = tk.Button(sidebar, text=" File Manager", fg="#374151", bg="#e5e7eb", activebackground="#d1d5db", activeforeground="#111827",
+        self.btn_files = tk.Button(sidebar, text=" 📁 File Manager", fg="#374151", bg="#e5e7eb", activebackground="#d1d5db", activeforeground="#111827",
                                font=self.sidebar_font, bd=0, anchor="w", padx=20, command=lambda: self.switch_view(1))
         self.btn_files.pack(fill="x", pady=4)
         
-        self.btn_history = tk.Button(sidebar, text=" History log", fg="#374151", bg="#e5e7eb", activebackground="#d1d5db", activeforeground="#111827",
+        self.btn_history = tk.Button(sidebar, text=" 📜 History log", fg="#374151", bg="#e5e7eb", activebackground="#d1d5db", activeforeground="#111827",
                                 font=self.sidebar_font, bd=0, anchor="w", padx=20, command=lambda: self.switch_view(2))
         self.btn_history.pack(fill="x", pady=4)
         
@@ -531,19 +531,19 @@ class GIT4SWApp(tk.Tk):
         self.preview_canvas.pack(fill="both", expand=True)
         self.preview_canvas.bind("<Button-1>", self.on_preview_clicked)
                
-        self.btn_about = tk.Button(sidebar, text=" About", fg="#374151", bg="#e5e7eb", activebackground="#d1d5db", activeforeground="#111827",
+        self.btn_about = tk.Button(sidebar, text=" 💬 About", fg="#374151", bg="#e5e7eb", activebackground="#d1d5db", activeforeground="#111827",
                                font=self.sidebar_font, bd=0, anchor="w", padx=20, command=lambda: self.switch_view(6))
         self.btn_about.pack(fill="x", side="bottom", pady=(4, 24))
 
-        self.btn_help = tk.Button(sidebar, text=" Help", fg="#374151", bg="#e5e7eb", activebackground="#d1d5db", activeforeground="#111827",
+        self.btn_help = tk.Button(sidebar, text=" 💡 Help", fg="#374151", bg="#e5e7eb", activebackground="#d1d5db", activeforeground="#111827",
                                font=self.sidebar_font, bd=0, anchor="w", padx=20, command=lambda: self.switch_view(5))
         self.btn_help.pack(fill="x", side="bottom", pady=4)
 
-        self.btn_config = tk.Button(sidebar, text=" Config", fg="#374151", bg="#e5e7eb", activebackground="#d1d5db", activeforeground="#111827",
+        self.btn_config = tk.Button(sidebar, text=" ⚙️ Config", fg="#374151", bg="#e5e7eb", activebackground="#d1d5db", activeforeground="#111827",
                                 font=self.sidebar_font, bd=0, anchor="w", padx=20, command=lambda: self.switch_view(4))
         self.btn_config.pack(fill="x", side="bottom", pady=4)
 
-        self.btn_maintainer = tk.Button(sidebar, text=" Maintainer", fg="#374151", bg="#e5e7eb", activebackground="#d1d5db", activeforeground="#111827",
+        self.btn_maintainer = tk.Button(sidebar, text=" 👤 Maintainer", fg="#374151", bg="#e5e7eb", activebackground="#d1d5db", activeforeground="#111827",
                                     font=self.sidebar_font, bd=0, anchor="w", padx=20, command=lambda: self.switch_view(3))
         self.btn_maintainer.pack(fill="x", side="bottom", pady=4)
         
