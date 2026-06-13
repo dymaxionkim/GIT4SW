@@ -2414,7 +2414,7 @@ class GIT4SWApp(tk.Tk):
         default_font = tkfont.nametofont("TkDefaultFont")
         bold_font = default_font.copy()
         bold_font.configure(weight="bold")
-        self.hist_tree.tag_configure("current_commit", font=bold_font)
+        self.hist_tree.tag_configure("current_commit", font=bold_font, foreground="#059669")
         self.hist_tree.bind("<Double-1>", self.on_history_double_click)
         
         vsb = ttk.Scrollbar(table_frm, orient="vertical", command=self.hist_tree.yview)
@@ -2431,6 +2431,9 @@ class GIT4SWApp(tk.Tk):
         
         self.btn_restore_latest = ttk.Button(actions_frm, text="Return to Latest Version", command=self.restore_latest)
         self.btn_restore_latest.pack(side="left", padx=4)
+        
+        self.btn_graph = ttk.Button(actions_frm, text="Graph", command=self.show_git_graph)
+        self.btn_graph.pack(side="right", padx=4)
         
         return view
 
@@ -3051,6 +3054,24 @@ class GIT4SWApp(tk.Tk):
                 self.decrement_tasks()
                 
         threading.Thread(target=run, daemon=True).start()
+
+    def show_git_graph(self):
+        if not self.git_service.is_git_repo():
+            messagebox.showwarning("No Repository", "Current workspace is not a valid Git repository.")
+            return
+
+        git_exe = "git"
+        if hasattr(self, 'git_service') and self.git_service and getattr(self.git_service, 'git_path', None):
+            if os.path.exists(self.git_service.git_path):
+                git_exe = self.git_service.git_path
+
+        cmd_str = f'start "Git-Graph" cmd /K ""{git_exe}" log --graph --oneline --all --decorate"'
+        import subprocess
+        try:
+            subprocess.Popen(cmd_str, shell=True, cwd=self.workspace_path)
+            self.write_log("Successfully launched Git Graph terminal.", "success")
+        except Exception as e:
+            self.write_log(f"Failed to launch Git Graph terminal: {e}", "error")
 
     # ==========================================
     # GENERAL ACTIONS & QUEUE PROCESSING
