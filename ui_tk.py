@@ -310,7 +310,7 @@ class GIT4SWApp(tk.Tk):
         self.is_switching_branch = False
         self.bg_tasks_count = 0
         
-        self.title("GIT4SW - SolidWorks Git Client (Tkinter)")
+        self.title("GIT4SW")
         self.geometry("1100x600")
         
         # Set window icon
@@ -466,8 +466,7 @@ class GIT4SWApp(tk.Tk):
         lbl_log_title = ttk.Label(log_header, text="System Log", style="CardTitle.TLabel")
         lbl_log_title.pack(side="left")
         
-        self.lbl_repo_branch_info = tk.Label(log_header, text="", fg="#059669", bg="#ffffff", font=("TkDefaultFont", 10, "bold"))
-        self.lbl_repo_branch_info.pack(side="left", padx=(12, 0))
+
         
         btn_clear_log = ttk.Button(log_header, text="Clear", width=8, command=self.clear_log)
         btn_clear_log.pack(side="right")
@@ -722,7 +721,7 @@ class GIT4SWApp(tk.Tk):
 
     def update_repo_branch_info(self):
         if not self.git_service or not self.git_service.is_git_repo():
-            self.lbl_repo_branch_info.config(text="")
+            self.title("GIT4SW")
             return
             
         repo_name = os.path.basename(self.workspace_path)
@@ -737,7 +736,7 @@ class GIT4SWApp(tk.Tk):
             else:
                 branch_name = "Unknown"
                 
-        self.lbl_repo_branch_info.config(text=f"({repo_name} @ {branch_name})")
+        self.title(f"{repo_name} @ {branch_name}")
 
     def increment_tasks(self):
         self.task_queue.put(('bg_task_start', None, None))
