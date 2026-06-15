@@ -134,3 +134,26 @@
 ### 4.3 관리자 기능 (Maintainer Mode)
 * **저장소 생성 및 배포 (Make New Repository)**: 신규 CAD 관리용 프로젝트를 기획 시, 저장소 이름을 입력하고 **[Make]** 버튼을 실행하면 GitHub 조직 하위에 Private 저장소를 생성하고 템플릿 파일(`.gitattributes`, `.gitignore`)을 주입한 뒤 main/user 브랜치 배포까지의 모든 과정을 자동으로 마칩니다. 완료 후 생성된 저장소 정보로 대시보드가 즉시 자동 갱신되며 대시보드로 이동합니다.
 * **일괄 병합 (Merge all branches into main)**: 프로젝트 리더가 개발 브랜치들의 모든 진척 상황을 병합하려 할 때 실행합니다. 병합 도중 충돌(Conflict)이 감치되면 Ours(main 유지) 또는 Theirs(개발 브랜치 이식)를 묻는 팝업 다이어로그를 띄워 백그라운드 스레드에서 안전하고 순차적으로 병합 처리를 진행해 줍니다.
+
+### 4.4 트러블슈팅
+
+#### 4.4.1 git 자격증명이 안될 경우
+
+* 일단 GIT4SW를 종료
+
+* 윈도우 시스템의 '자격 증명 관리자'를 실행하고, 'Windows 자격 증명'의 '일반 자격 증명' 중에서 `git:https://github.com` 항목을 삭제
+
+* 터미널에서 아래 명령을 순서대로 수행
+
+```
+git credential-manager unconfigure
+git config --global --unset credential.helper
+git credential-manager configure
+```
+
+* GIT4SW 재실행
+
+* github 자격증명 팝업창이 뜨면, '계정/비밀번호'로 증명하지 말고, 반드시 'Token'을 선택하고 토큰값을 복사해 넣을 것
+
+* github 자격증명 팝업창이 한 번 뿐만 아니라 2~3번 정도 더 뜰 수 있음.  모두 Token 입력하면 됨
+
