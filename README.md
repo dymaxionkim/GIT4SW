@@ -1,10 +1,12 @@
 # GIT4SW: SolidWorks Github Version Control Client
 
-## 필요성
+[README_ko.md](README_ko.md)
 
-* SolidWorks로 설계 작업을 진행할 때 도면(`.slddrw`), 파트(`.sldprt`), 어셈블리(`.sldasm`) 등의 3D CAD 바이너리 파일은, 일반 텍스트 코딩 작업과 다르게 Git에서 코드 차원 병합(Merge)이 불가능하여, 다자간 협업 시 덮어쓰기나 변경점 소실 등의 심각한 문제가 수시로 발생합니다.
-* **GIT4SW**는 이러한 비정형 CAD 파일들의 다자간 동시 수정으로 발생할 수 있는 버전 엉킴과 충돌을 원천 예방하기 위해 고안된 **SolidWorks 전용 Github 연동 버전 관리 데스크톱 클라이언트**입니다. 
-* 표준 Git 브랜치 워크플로우에 **Git LFS(Large File Storage) Lock 메커니즘**을 결합하여, 특정 사용자가 파일을 수정하는 동안 다른 사용자가 동일한 파일을 덮어쓰지 못하도록 사전에 완벽 차단해 줍니다.
+## Necessity
+
+* When performing design work with SolidWorks, 3D CAD binary files such as drawings (`.slddrw`), parts (`.sldprt`), and assemblies (`.sldasm`) cannot be merged at the code level in Git, unlike general text coding tasks. This frequently causes serious issues like overwriting or loss of changes during multi-user collaboration.
+* **GIT4SW** is a **SolidWorks-exclusive GitHub integrated version control desktop client** designed to fundamentally prevent version entanglement and conflicts that can occur due to simultaneous modification of these unstructured CAD files by multiple users.
+* By combining the standard Git branch workflow with the **Git LFS (Large File Storage) Lock mechanism**, it completely blocks other users from overwriting a file while a specific user is modifying it.
 
 ![](GIT4SW.png)
 
@@ -14,146 +16,142 @@
 
 ---
 
-## 1. 주요 기능 및 특징
+## 1. Key Features and Characteristics
 
-* **실시간 SolidWorks API 연동 모니터링**: 백그라운드 스레드가 활성화된 SolidWorks 창의 문서 개체들을 주기적으로 추적하여, 사용자가 CAD 파일을 여는 즉시 자동으로 원격 LFS Lock을 획득하고, 창을 닫으면 자동으로 Lock을 반납(Release)합니다.
-* **작업 안전성 및 업로드 예방 기능**:
-  - 브랜치를 전환하거나 싱크를 마칠 때 SolidWorks에 미저장된 변경사항이 있는 경우, 파일 파손 및 락 충돌을 방지하기 위해 사용자에게 먼저 변경사항을 저장하고 닫을 것인지 다이얼로그 팝업을 통해 유도하여 데이터를 안전하게 조율합니다.
-  - **업로드 시 안전 검사**: 버전을 업로드할 때 대상 파일 중 SolidWorks에서 열려 있는 파일이 있으면 경고 팝업과 함께 작업을 차단합니다. 또한 본인 외에 다른 계정이 잠근(Locked) 파일이 포함된 경우, Yes/No 경고창을 통해 해당 파일들만 제외하고 진행할지 여부를 선택할 수 있습니다.
-* **직관적인 확장자별 색상 구분 및 정렬**:
-  - 파일 테이블의 확장자별 색상 구분(파트: 초록 `#059669`, 어셈블리: 주황 `#d97706`, 도면: 빨강 `#dc2626`)으로 시인성을 극대화했습니다.
-  - **정렬 옵션 강화**: 파일 목록 정렬 방법을 선택하는 콤보박스에 `by Status`, `by Solidworks`, `by Locked` 등이 추가되었으며, `by Status` 선택 시 **New File -> Modified -> Unmodified** 순서로, `by Solidworks` 선택 시 **Open 상태 파일이 최상단**에 위치합니다. 모든 정렬은 1차 정렬 기준 완료 후 전체 상대 파일 경로(`File Path`) 기준의 2차 알파벳 정렬이 일괄 적용됩니다.
-  - **단축키 지원**: File Manager 파일 목록에서 `Ctrl+A`, `Ctrl+a`, `Ctrl+ㅁ` 입력 시 전체 파일이 일괄 선택(Selected)됩니다.
-  - **실시간 CAD 썸네일 이미지 미리보기**: File Manager 파일 목록에서 정확히 1개의 솔리드웍스 파일(`.sldprt`, `.sldasm`, `.slddrw`)을 선택한 경우, 좌측 사이드바 `History log` 버튼 아래에 4:3 비율(180x135)의 테두리 없는 프리뷰 영역으로 CAD 썸네일 이미지를 자동으로 추출 및 표출합니다. (추출 작업은 백그라운드 스레드로 비동기 처리되어 UI를 얼리지 않으며, OLE 구조 직접 해독 및 Windows Shell COM 인터페이스 하이브리드 추출을 동시 지원하여 솔리드웍스 2026 등 최신 버전 파일도 완벽하게 미리보기합니다.)
-  - **썸네일 클립보드 복사**: 표출된 썸네일 이미지를 마우스로 클릭(마우스 커서가 손가락 모양으로 변경됨)하면 해당 썸네일 비트맵 데이터가 윈도우 시스템 클립보드로 즉시 복사되어 파워포인트, 워드, 메신저 등에 `Ctrl+V`로 바로 붙여넣기할 수 있습니다.
-* **유연한 브랜치 관리 및 원격 배포**:
-  - **"Make my branch" 기능**: 사용자의 GitHub 계정 명칭을 조회하여 즉시 개인 개발용 원격 브랜치를 자동 생성하고 업스트림을 동기화하여 main 브랜치를 해치지 않고 안전하게 작업하도록 돕습니다.
-  - **"Merge all branches into main" 기능**: 관리자(Maintainer) 모드에서 여러 협업 개발 브랜치를 `main` 브랜치로 일괄 비동기 머지 및 충돌 해결 옵션(Ours/Theirs 선택 모달)을 제공합니다.
-* **백그라운드 순차 큐잉 및 실시간 프로세스 강제 종료 (Terminate 버튼)**:
-  - **순차 버튼 실행 큐**: 백그라운드 프로세스가 실행 중("Working")일 때 다른 액션 버튼을 누르면 작업이 대기 큐에 적재되고, 현재 작업이 완전히 완료된 후에 순차적으로 시작됩니다.
-  - **Git 프로세스 강제 종료**: System Log 패널에서 실행 중인 Git 서브 프로세스 트리를 즉시 안전하게 강제 종료할 수 있는 Terminate 버튼을 제공하며, 종료 시 대기 중인 모든 큐도 자동 소거됩니다.
-* **대시보드 내 README.md 바로가기 및 자동 싱크**: 대시보드의 Active Branch 영역 우측에 README.md 전용 편집 버튼을 제공합니다. 편집 완료 후 메모장이 종료되면, 변경된 README.md 파일이 자동으로 원격 Git 저장소에 커밋 및 푸시(git add, commit, push)됩니다. 로컬 저장소에 파일이 없는 경우, 프로그램 템플릿의 `template/README.md`를 자동으로 로컬 저장소에 생성하고 반영한 뒤 메모장을 띄워 줍니다.
-* **자동 동기화 (Auto Sync) 기능**: 대시보드 동기화(Synchronization) 카테고리에 Auto Sync 체크박스를 추가하여, 프로그램 구동 시 또는 저장소 스위칭/클론/신규 생성 완료 직후 자동으로 원격 업데이트를 가져오는 "Get Latest Version (Sync)" 작업과 "Merge main branch into current branch" 작업을 순차적으로 연달아 처리할 수 있도록 지원합니다.
-* **강력한 충돌 해결 팝업 (LFS 포인터 오류 대응)**:
-  - Sync/Merge/Upload 중 충돌이 발생하면 시스템 폰트로 렌더링된 다중 선택 대화상자가 표시되어 마우스 및 Ctrl/Shift 조합으로 여러 파일을 선택한 뒤 일괄 덮어쓰기 해소(Local/Remote 또는 브랜치명 기준)를 수행할 수 있습니다.
-  - Git LFS 포인터 불일치로 인해 git merge가 실패하는 상황에서도 예외를 감지하여 충돌 대화상자를 안정적으로 띄우고 처리합니다.
-* **Maintainer "Make" 저장소 자동 등록 및 화면 전환**: Maintainer 모드에서 새로운 저장소 생성(Make) 완료 시, 자동으로 신규 로컬 경로 및 원격 주소 설정을 대시보드와 환경설정에 연동 등록하고 대시보드 뷰로 즉시 자동 전환해 줍니다.
-* **과거 버전 탐색 및 복원**: 전체 커밋 이력을 리스트로 보여주며, 특정 이력을 더블클릭하는 것만으로 안전하게 해당 버전 시점으로 워크스페이스를 되돌립니다 (Standard Detached HEAD 상태 유지). 현재 체크아웃된 버전의 이력 행은 UI 테마의 초록색 글씨색상과 굵은 폰트(Bold)로 선명하게 표시됩니다.
-* **Git 이력 시각화 (Graph 버튼)**: Version History Log 화면 우측 맨 끝에 **[Graph]** 버튼을 제공합니다. 버튼을 클릭하면 독립된 별도의 윈도우 터미널(cmd)이 실행되면서 `git log --graph --oneline --all --decorate` 명령이 작동하여 전체 브랜치의 커밋 계통도를 ASCII 그래픽으로 한눈에 시각화해 줍니다. 이때 실행되는 Git 경로는 `config.json`에 환경설정된 커스텀 `git.exe` 경로를 자동 추적하여 동작합니다.
-* **비차단 비동기 UI 모델**: 커밋, 브랜치 푸시, 원격 LFS 상태 쿼리 등의 긴 작업을 수행할 때 화면이 굳지 않도록 모든 동작을 백그라운드 다중 스레드로 분할 처리하며 하단 `System Log` 상태 인디케이터(● Working / ● Idle)와 실시간 로그를 연계해 직관적인 상태를 표시합니다.
-* **독자적인 실행기 경로 설정**: `config.json`을 통해 `git.exe`와 `git-lfs.exe` 실행 경로를 각각 완벽하게 커스터마이징하여, GitPython 엔진이 Scoop과 같이 특수한 환경의 독립된 실행기를 그대로 호출해 동작하도록 연동합니다.
-* **GitHub (github.com) 원격 저장소 전용**: 본 프로그램은 `PyGithub` API 라이브러리를 통해 원격 브랜치 갱신, 관리자용 신규 저장소 생성 및 연동 배포 기능을 수행하므로, **github.com 원격 저장소 서비스 사용**을 전제로 하여 긴밀하게 설계되었습니다.
-* **백그라운드 SolidWorks 대량 일괄 변환 (EXPORT 버튼)**:
-  - File Manager 탭의 파일 목록 옆에 **[EXPORT]** 버튼이 신규로 제공됩니다.
-  - 이 버튼을 누르면 직관적으로 디자인된 팝업 대화상자가 활성화되며, 대상 파일(파트 `.sldprt`, 어셈블리 `.sldasm`, 도면 `.slddrw`)들을 다양한 규격(**PDF, DXF, STEP, STEP_ASM**)으로 일괄 비동기 변환할 수 있습니다.
-  - **다중 포맷 동시 선택 지원**: 체크버튼을 통해 여러 포맷을 동시 선택하여 한 번의 실행으로 순차 변환할 수 있으며, 접두사(`PREFIX` 필터링) 설정과 출력 하위 폴더(`OUTPUT_DIR`, 기본값 `2D`) 설정이 가능합니다.
-  - **실시간 INFO 정보 조회**: **[INFO]** 버튼을 통해 현재 변환 대상이 될 드로잉, 파트, 어셈블리의 파일 개수 요약 통계와 전체 상대 경로 목록을 테이블 형식으로 미리 볼 수 있습니다. (테이블은 확장자명 기준으로 정렬되며, 메인 파일 매니저와 동일하게 확장자별 컬러 태그가 적용되어 한눈에 확인하기 좋습니다.)
-  - **안전한 무중단 백그라운드 구동**: 팝업창에서 Start 버튼 실행 시 백그라운드로 독립된 SolidWorks 변환 전용 서브프로세스가 실행되므로, 변환 작업 중에도 메인 프로그램 UI를 끊김 없이 그대로 계속 사용할 수 있습니다.
-  - **정밀한 CAD 변환 품질 제어**:
-    - **PDF 출력**: 흑백(Black & White) 변환 및 고품질 라인 출력을 강제 적용하며, 도면 properties의 펜 테이블(굵기 등)이 출력물에 그대로 정확히 반영되도록 프린터 라인 웨이트 옵션을 자동 제어합니다.
-    - **STEP/STEP_ASM 출력**: CAD 파일의 컬러 정보(Appearances)와 색상 텍스처 데이터가 온전히 함께 추출되도록 AP214 프로토콜 표준 형식을 강제 지정합니다.
-    - **자동 시스템 복원**: 일괄 변환이 완료되면 솔리드웍스 System Options에 설정된 사용자의 원래 preference 기본값들을 자동으로 안전하게 원복 복구해 주며, 완료 시 알림 대화상자가 사용자에게 표출됩니다.
+* **Real-time SolidWorks API Integration Monitoring**: A background thread periodically tracks document objects in the active SolidWorks window. It automatically acquires a remote LFS Lock as soon as the user opens a CAD file and automatically releases the Lock when the window is closed.
+* **Work Safety and Upload Prevention Features**:
+  - When switching branches or completing a sync, if there are unsaved changes in SolidWorks, it guides the user via a dialog popup to save and close changes first to prevent file corruption and lock conflicts, ensuring safe data coordination.
+  - **Safety Check During Upload**: If any of the target files for version upload are currently open in SolidWorks, it blocks the operation with a warning popup. Additionally, if a file locked by someone other than the user is included, users can choose whether to proceed by excluding only those specific files via a Yes/No warning window.
+* **Intuitive Color-coding and Sorting by Extension**:
+  - Maximized visibility through extension-based color coding in the file table (Part: Green `#059669`, Assembly: Orange `#d97706`, Drawing: Red `#dc2626`).
+  - **Enhanced Sorting Options**: A combo box for selecting file list sorting methods has been added with options like `by Status`, `by Solidworks`, and `by Locked`. When `by Status` is selected, files are sorted in the order of **New File -> Modified -> Unmodified**. When `by Solidworks` is selected, **Open files are positioned at the top**. All sorting applies a primary sort criterion followed by a uniform secondary alphabetical sort based on the relative file path (`File Path`).
+  - **Shortcut Support**: Pressing `Ctrl+A`, `Ctrl+a`, or `Ctrl+ㅁ` in the File Manager list selects all files at once.
+  - **Real-time CAD Thumbnail Preview**: When exactly one SolidWorks file (`.sldprt`, `.sldasm`, `.slddrw`) is selected in the File Manager list, a CAD thumbnail image is automatically extracted and displayed in a borderless preview area (4:3 ratio, 180x135) below the `History log` button in the left sidebar. (Extraction is processed asynchronously via a background thread to prevent UI freezing and supports both direct OLE structure decoding and Windows Shell COM interface hybrid extraction, ensuring perfect previews even for the latest versions like SolidWorks 2026.)
+  - **Thumbnail Clipboard Copy**: Clicking on the displayed thumbnail image (the cursor changes to a hand icon) immediately copies the thumbnail bitmap data to the Windows system clipboard, allowing it to be pasted into PowerPoint, Word, or messengers via `Ctrl+V`.
+* **Flexible Branch Management and Remote Deployment**:
+  - **"Make my branch" function**: Retrieves the user's GitHub account name to automatically create a dedicated remote branch for personal development and synchronizes the upstream, helping users work safely without affecting the `main` branch.
+  - **"Merge all branches into main" function**: In Maintainer mode, it provides bulk asynchronous merging of multiple collaborative development branches into the `main` branch along with conflict resolution options (Ours/Theirs selection modal).
+* **Background Sequential Queuing and Real-time Process Termination (Terminate button)**:
+  - **Sequential Button Execution Queue**: If another action button is clicked while a background process is running ("Working"), the task is added to a waiting queue and starts sequentially after the current task is completely finished.
+  - **Git Process Force Termination**: Provides a Terminate button in the System Log panel that can immediately and safely force-terminate the running Git subprocess tree; when terminated, all pending tasks in the queue are also automatically cleared.
+* **README.md Shortcut and Auto-sync in Dashboard**: A dedicated README.md edit button is provided to the right of the Active Branch area on the dashboard. Upon finishing editing and closing Notepad, the modified `README.md` file is automatically committed and pushed to the remote Git repository (`git add`, `commit`, `push`). If the file does not exist in the local repository, it automatically creates and applies it from the program template's `template/README.md` before opening Notepad.
+* **Auto Sync Function**: An Auto Sync checkbox has been added to the Synchronization category on the dashboard. This enables sequential processing of "Get Latest Version (Sync)" and "Merge main branch into current branch" tasks automatically upon program startup or immediately after repository switching, cloning, or new creation.
+* **Powerful Conflict Resolution Popup (LFS Pointer Error Response)**:
+  - If a conflict occurs during Sync/Merge/Upload, a multi-selection dialog rendered with system fonts is displayed. Users can select multiple files using the mouse and Ctrl/Shift combinations to perform bulk overwrite resolution (based on Local/Remote or branch name).
+  - Even in situations where `git merge` fails due to Git LFS pointer mismatches, it detects the exception, reliably brings up the conflict dialog, and handles it.
+* **Maintainer "Make" Repository Auto-registration and Screen Transition**: In Maintainer mode, when a new repository creation (Make) is completed, it automatically registers the new local path and remote address in the Dashboard and Configuration settings and immediately transitions to the Dashboard view.
+* **Past Version Exploration and Restoration**: Displays the entire commit history as a list, allowing users to safely revert the workspace to a specific version just by double-clicking an entry (maintaining Standard Detached HEAD state). The history row for the currently checked-out version is clearly indicated with the UI theme's green text color and bold font.
+* **Git History Visualization (Graph button)**: A **[Graph]** button is provided at the far right of the Version History Log screen. Clicking it executes a separate windowed terminal (cmd) running the `git log --graph --oneline --all --decorate` command to visualize the entire branch's commit lineage as an ASCII graphic at a glance. The executed Git path automatically tracks the custom `git.exe` path configured in `config.json`.
+* **Non-blocking Asynchronous UI Model**: To prevent the screen from freezing during long tasks such as commits, branch pushes, or remote LFS status queries, all operations are split into background multi-threads. An intuitive status is displayed via the bottom `System Log` status indicator (● Working / ● Idle) linked with real-time logs.
+* **Independent Executor Path Configuration**: Through `config.json`, both `git.exe` and `git-lfs.exe` execution paths can be perfectly customized, allowing the GitPython engine to call independent executables in special environments like Scoop.
+* **Exclusive for GitHub (github.com) Remote Repositories**: This program performs remote branch updates, administrator new repository creation, and integrated deployment via the `PyGithub` API library; therefore, it is tightly designed under the premise of using **github.com remote repository services**.
+* **Background Bulk SolidWorks Conversion (EXPORT button)**:
+  - A new **[EXPORT]** button is provided next to the file list in the File Manager tab.
+  - Clicking this button activates an intuitively designed popup dialog, allowing target files (Part `.sldprt`, Assembly `.sldasm`, Drawing `.slddrw`) to be converted asynchronously in bulk into various specifications (**PDF, DXF, STEP, STEP_ASM**).
+  - **Support for Simultaneous Multiple Format Selection**: Multiple formats can be selected via checkboxes for sequential conversion in a single execution. Prefix (`PREFIX` filtering) settings and output subdirectory (`OUTPUT_DIR`, default `2D`) settings are also possible.
+  - **Real-time INFO Inquiry**: Through the **[INFO]** button, users can preview summary statistics of the number of drawings, parts, and assemblies to be converted, along with a list of all relative paths in a table format. (The table is sorted by extension name and applies color tags by extension, just like the main file manager, making it easy to check at a glance.)
+  - **Safe Non-stop Background Operation**: When the Start button is clicked in the popup, an independent SolidWorks conversion sub-process runs in the background, allowing the main program UI to be used continuously without interruption during the conversion process.
+  - **Precise CAD Conversion Quality Control**:
+    - **PDF Output**: Forces Black & White conversion and high-quality line output, and automatically controls printer line weight options so that pen tables (thickness, etc.) from drawing properties are accurately reflected in the output.
+    - **STEP/STEP_ASM Output**: Strictly specifies the AP214 protocol standard format to ensure that the CAD file's color information (Appearances) and color texture data are fully extracted along with it.
+    - **Automatic System Restoration**: Once bulk conversion is complete, it automatically and safely restores the user's original preference default values set in SolidWorks System Options, and a notification dialog is displayed to the user upon completion.
 
 ---
 
-## 2. 요구 환경 및 필수 소프트웨어
+## 2. Requirements and Required Software
 
-* **운영체제**: Windows 10 / 11 (x64)
-* **CAD 시스템**: Dassault Systèmes SolidWorks 및 eDrawings 뷰어 설치 필수 (SolidWorks COM API 기반 실시간 도면 추적 및 eDrawings 외부 미리보기 열기 실행 목적)
-* **필수 유틸리티**:
-  - **Git**: `git` 버전 2.x 이상 (경로 지정 가능)
-  - **Git LFS**: 대형 파일 및 바이너리 락 처리를 위한 확장 기능
-  - **uv**: 고속 Python 패키지 및 가상환경 관리자
+* **Operating System**: Windows 10 / 11 (x64)
+* **CAD System**: Installation of Dassault Systèmes SolidWorks and eDrawings Viewer is mandatory (for real-time drawing tracking based on SolidWorks COM API and opening external eDrawings previews).
+* **Required Utilities**:
+  - **Git**: `git` version 2.x or higher (path can be specified)
+  - **Git LFS**: Extension for handling large files and binary locks
+  - **uv**: High-speed Python package and virtual environment manager
 
   > [!TIP]
-  > **Scoop 패키지 관리자**를 사용하여 `git`, `git-lfs`, `uv`를 손쉽게 설치할 수 있습니다:
+  > You can easily install `git`, `git-lfs`, and `uv` using the **Scoop package manager**:
   > ```powershell
   > scoop install git git-lfs uv
   > ```
 
 ---
 
-## 3. 실행 방법 (자동 의존성 설치 및 구동)
+## 3. Execution Method (Automatic Dependency Installation and Startup)
 
-본 프로젝트는 고속 Python 패키지 관리자인 `uv`를 기반으로 하므로 별도의 수동 라이브러리 설치 절차가 필요 없습니다.
+Since this project is based on the high-speed Python package manager `uv`, no separate manual library installation procedure is required.
 
-프로젝트 폴더 내에 준비된 **`GIT4SW.bat`** 배치 파일을 더블클릭하여 바로 실행하면 됩니다.
+Simply double-click the **`GIT4SW.bat`** batch file prepared in the project folder to run it immediately.
 
 > [!NOTE]
-> `GIT4SW.bat`는 내부적으로 `uv run main.py`를 실행시킵니다.
-> 최초 실행 시 `uv`가 `pyproject.toml`에 기재된 스펙을 감지하여 가상환경(`.venv`)을 자동으로 빌드하고 필요한 의존성 라이브러리(`gitpython`, `pygithub`, `pywin32` 등)를 알아서 다운로드 및 설치한 뒤 프로그램을 안전하게 구동해 줍니다.
+> `GIT4SW.bat` internally executes `uv run main.py`.
+> On the first run, `uv` detects the specifications listed in `pyproject.toml`, automatically builds the virtual environment (`.venv`), and downloads/installs necessary dependency libraries (`gitpython`, `pygithub`, `pywin32`, etc.) before safely launching the program.
 
 ---
 
-## 4. 사용 설명서
+## 4. User Manual
 
-### 4.1 초기 설정
+### 4.1 Initial Setup
 
-프로그램을 최초로 실행한 후, 좌측 사이드바 메뉴 맨 하단의 **Config** 버튼을 눌러 설정 화면(Configuration Manager)에서 필수 환경 설정을 먼저 진행해야 합니다. 각 입력 필드에 알맞은 경로와 값을 입력한 후 하단의 **[Save Configuration]** 버튼을 클릭하면 `config.json`에 저장되고 앱에 즉시 반영됩니다.
+After running the program for the first time, you must first perform essential environment settings in the Configuration Manager by clicking the **Config** button at the bottom of the left sidebar menu. After entering the appropriate paths and values in each input field, click the **[Save Configuration]** button at the bottom to save it to `config.json`, which is immediately reflected in the app.
 
-각 설정 항목의 상세 내용 및 예시는 다음과 같습니다:
+Details and examples for each configuration item are as follows:
 
-* **Git Path**: 프로그램이 내부적으로 Git 명령을 호출해 실행할 `git.exe` 바이너리의 절대 경로입니다.
-  - *예*: `C:\Users\dhkima\scoop\apps\git\current\bin\git.exe`
-* **Git-Lfs Path**: Git LFS 바이너리 락 획득/조회를 위해 호출할 `git-lfs.exe` 실행 파일의 절대 경로입니다.
-  - *예*: `C:\Users\dhkima\scoop\apps\git\current\mingw64\bin\git-lfs.exe`
-* **Solidworks Path**: 로컬 시스템에 설치된 SolidWorks 실행 파일(`SLDWORKS.exe`)의 절대 경로입니다. 파일 매니저에서 Solidworks 열기 버튼 클릭 시 및 Fallback 예외 복구 시 실행 경로로 사용됩니다.
-  - *예*: `C:\Program Files\SOLIDWORKS Corp\SOLIDWORKS\SLDWORKS.exe`
-* **Edrawings Path**: 외부 eDrawings 도면 미리보기 실행 파일(`eDrawings.exe`)의 절대 경로입니다. 파일 매니저에서 eDrawings 버튼 클릭 시 사용됩니다.
-  - *예*: `C:\Program Files\SOLIDWORKS Corp\eDrawings\eDrawings.exe`
-* **Github Token**: 사용자의 개인 개발용 원격 브랜치를 생성하거나, Maintainer 모드에서 원격 비공개(Private) 저장소를 자동 퍼블리싱할 때 인증용으로 사용할 GitHub 개인 액세스 토큰(Personal Access Token)입니다.
-  - *예*: `ghp_**********************************`
-* **Default Local Path**: 신규 저장소 생성 및 원격 클론 작업 시 기본으로 사용할 로컬 부모 디렉터리 경로입니다.
-  - *예*: `C:\Users\dhkima\github`
-* **Organization Name**: 관리자 모드에서 신규 비공개 저장소를 자동 개설할 대상 GitHub 조직(Organization)의 이름입니다.
-  - *예*: `mech-higenmotor`
-* **Auto Sync**: 프로그램 구동 시 또는 저장소 스위칭/클론/신규 생성 작업 완료 시 자동으로 원격 동기화(Get Latest Version) 및 메인 브랜치 병합(Merge main branch)을 순차 실행할지 여부를 결정하는 Boolean 설정 변수입니다. 대시보드의 Auto Sync 체크박스로 제어되며 Config 화면의 수동 편집 목록에서는 제외됩니다.
-  - *예*: `true` 또는 `false`
+* **Git Path**: The absolute path of the `git.exe` binary that the program will call internally to execute Git commands.
+  - *Example*: `C:\Users\dhkima\scoop\apps\git\current\bin\git.exe`
+* **Git-Lfs Path**: The absolute path of the `git-lfs.exe` executable called to acquire/query Git LFS binary locks.
+  - *Example*: `C:\Users\dhkima\scoop\apps\git\current\mingw64\bin\git-lfs.exe`
+* **Solidworks Path**: The absolute path of the SolidWorks executable (`SLDWORKS.exe`) installed on your local system. It is used as the execution path when clicking the "Open Solidworks" button in the File Manager or during Fallback exception recovery.
+  - *Example*: `C:\Program Files\SOLIDWORKS Corp\SOLIDWORKS\SLDWORKS.exe`
+* **Edrawings Path**: The absolute path of the external eDrawings drawing preview executable (`eDrawings.exe`). It is used when clicking the eDrawings button in the File Manager.
+  - *Example*: `C:\Program Files\SOLIDWORKS Corp\eDrawings\eDrawings.exe`
+* **Github Token**: The GitHub Personal Access Token used for authenticating when creating personal development remote branches or automatically publishing new private repositories in Maintainer mode.
+  - *Example*: `ghp_**********************************`
+* **Default Local Path**: The default local parent directory path to be used when creating new repositories or performing remote clone operations.
+  - *Example*: `C:\Users\dhkima\github`
+* **Organization Name**: The name of the GitHub Organization target for automatically opening new private repositories in Administrator mode.
+  - *Example*: `mech-higenmotor`
+* **Auto Sync**: A Boolean setting variable that determines whether to sequentially execute "Get Latest Version (Sync)" and "Merge main branch" tasks upon program startup or upon completion of repository switching, cloning, or new creation. This is controlled by the Auto Sync checkbox on the Dashboard and is excluded from the manual editing list in the Config screen.
+  - *Example*: `true` or `false`
 
 
-### 4.2 기본 작업 워크플로우
+### 4.2 Basic Workflow
 
-1. **워크스페이스 등록**:
-   - `Dashboard` 화면 중앙의 `Repository Configuration` 카드 내에서 **Local Path**를 사용자의 실제 작업 폴더 경로로 설정합니다. 유효한 Git 저장소일 경우 우측에 `(🟢 Active)` 표시와 현재의 브랜치 정보가 갱신됩니다.
-2. **개발용 개인 브랜치 생성**:
-   - 대시보드에서 **[Make my branch]** 버튼을 누르면 현재 GitHub 계정 명칭 혹은 로컬 명칭과 동일한 이름의 전용 브랜치를 생성하고 자동으로 원격 origin에 Ref를 주입하며 업스트림으로 전환됩니다. (이미 동일한 브랜치가 존재하는 경우 버튼은 비활성화 처리되어 텍스트가 노출되지 않도록 가려집니다.)
-3. **README.md 열기 및 수정**:
-   - 대시보드의 Active Branch 영역 우측에 배치된 **[README.md]** 버튼을 통해 언제든지 워크스페이스의 프로젝트 정보를 메모장으로 열고 편집할 수 있습니다. 로컬 워크스페이스에 파일이 없는 경우, 프로그램 템플릿에서 자동으로 생성하여 적용해 줍니다.
-4. **SolidWorks 부품 설계 및 자동 잠금**:
-   - SolidWorks에서 파트나 어셈블리 파일을 오픈하여 수정을 시작하는 즉시 백그라운드 모니터에 의해 `git lfs lock` 명령이 실행됩니다. 타 협업 개발자가 원격 상태를 새로고침하면 해당 도면이 "잠김" 상태로 표시되므로 수정 소실 걱정 없이 안전하게 협업이 유지됩니다.
-5. **저장 및 버전 업로드 (Check-in)**:
-   - 파일 수정이 완료되면 `File Manager` 탭으로 이동합니다.
-   - 단일 또는 다중 선택 상태에서 **[Upload Selected File Version]** 또는 워크스페이스 내 수정/신규 파일을 모두 스테이징하여 커밋하고 즉시 원격 브랜치로 게시해 주는 **[Upload Every Files Version]** 버튼을 통해 업로드합니다.
-6. **도면 확인 및 복원 (History Log)**:
-   - 특정 이력 버전을 확인하거나 되돌려야 할 때는 `History log` 모드에 진입합니다. 원하는 커밋 줄을 더블클릭하면 해당 커밋 상태로 소스 및 CAD 도면들이 즉시 롤백 복원됩니다.
-7. **도면 및 모델 포맷 일괄 변환 (Export)**:
-   - 파일 목록에서 원하는 범위의 파일들을 필터링한 상태에서 **[EXPORT]** 버튼을 누릅니다.
-   - 변환할 포맷(PDF, DXF, STEP 등)을 체크하고 접두사 조건이 있다면 `PREFIX`를 입력합니다.
-   - **[Start]** 버튼을 누르면 백그라운드에서 솔리드웍스 엔진이 실행되어 대상 파일들을 지정된 하위 경로(예: `2D/PDF/`, `2D/STEP/`)에 흑백 펜테이블(PDF) 및 AP214 컬러(STEP)를 살려 고품질로 일괄 변환 및 저장합니다.
+1. **Register Workspace**:
+   - Set the **Local Path** within the `Repository Configuration` card in the center of the `Dashboard` screen to your actual working folder path. If it is a valid Git repository, `(🟢 Active)` and current branch information will be updated on the right.
+2. **Create Personal Development Branch**:
+   - Press the **[Make my branch]** button on the Dashboard to create a dedicated branch with the same name as your Current GitHub account or local name, automatically inject the Ref into remote `origin`, and switch to the upstream. (If an identical branch already exists, the button will be disabled and the text will be hidden.)
+3. **Open and Edit README.md**:
+   - You can open and edit the project information of the workspace in Notepad at any time via the **[README.md]** button located to the right of the Active Branch area on the Dashboard. If the file does not exist in the local workspace, it will be automatically generated from the program template.
+4. **SolidWorks Part Design and Automatic Locking**:
+   - As soon as you open a part or assembly file in SolidWorks and begin editing, `git lfs lock` is executed by the background monitor. When other collaborators refresh the remote status, that drawing will appear as "Locked," allowing for safe collaboration without fear of losing modifications.
+5. **Save and Upload Version (Check-in)**:
+   - Once file modification is complete, go to the `File Manager` tab.
+  - Use the **[Upload Selected File Version]** button for single or multiple selections, or the **[Upload Every Files Version]** button to stage, commit, and immediately publish all modified/new files in the workspace to the remote branch.
+6. **Verify Drawings and Restore (History Log)**:
+   - To check a specific history version or revert, enter `History log` mode. Double-clicking a desired commit row will immediately roll back the source and CAD drawings to that commit state.
+7. **Bulk Convert Drawing and Model Formats (Export)**:
+   - While filtering for the desired range of files in the file list, press the **[EXPORT]** button.
+  - Check the target formats (PDF, DXF, STEP, etc.) and enter a `PREFIX` if there are prefix conditions.
+  - Press the **[Start]** button; the SolidWorks engine will run in the background and batch convert and save the target files into the specified subdirectories (e.g., `2D/PDF/`, `2D/STEP/`) with high quality, maintaining black & white pen tables (for PDF) and AP214 color (for STEP).
 
-### 4.3 관리자 기능 (Maintainer Mode)
-* **저장소 생성 및 배포 (Make New Repository)**: 신규 CAD 관리용 프로젝트를 기획 시, 저장소 이름을 입력하고 **[Make]** 버튼을 실행하면 GitHub 조직 하위에 Private 저장소를 생성하고 템플릿 파일(`.gitattributes`, `.gitignore`)을 주입한 뒤 main/user 브랜치 배포까지의 모든 과정을 자동으로 마칩니다. 완료 후 생성된 저장소 정보로 대시보드가 즉시 자동 갱신되며 대시보드로 이동합니다.
-* **일괄 병합 (Merge all branches into main)**: 프로젝트 리더가 개발 브랜치들의 모든 진척 상황을 병합하려 할 때 실행합니다. 병합 도중 충돌(Conflict)이 감치되면 Ours(main 유지) 또는 Theirs(개발 브랜치 이식)를 묻는 팝업 다이어로그를 띄워 백그라운드 스레드에서 안전하고 순차적으로 병합 처리를 진행해 줍니다.
+### 4.3 Maintainer Mode (Administrator Functions)
 
-### 4.4 트러블슈팅
+* **Create and Deploy Repository (Make New Repository)**: When planning a new CAD management project, enter the repository name and execute the **[Make]** button to automatically create a Private repository under your GitHub Organization, inject template files (`.gitattributes`, `.gitignore`), and complete everything from main/user branch deployment. Upon completion, the dashboard is automatically updated with the new repository information and transitions to the Dashboard view.
+* **Bulk Merge (Merge all branches into main)**: Executed when a project leader wants to merge the progress of all development branches. If a conflict is detected during merging, a popup dialogasking whether to use Ours (keep main) or Theirs (import development branch) is displayed, and merging is performed safely and sequentially in a background thread.
 
-#### 4.4.1 git 자격증명이 안될 경우
+### 4.4 Troubleshooting
 
-* 일단 GIT4SW를 종료
+#### 4.4.1 If Git Credential Authentication Fails
 
-* 윈도우 시스템의 '자격 증명 관리자'를 실행하고, 'Windows 자격 증명'의 '일반 자격 증명' 중에서 `git:https://github.com` 항목을 삭제
+* First, close GIT4SW.
+* Run 'Credential Manager' in Windows, and under 'Windows Credentials' -> 'Generic Credentials', delete the item `git:https://github.com`.
+* Execute the following commands in a terminal in order:
 
-* 터미널에서 아래 명령을 순서대로 수행
-
-```
+```bash
 git credential-manager unconfigure
 git config --global --unset credential.helper
 git credential-manager configure
 ```
 
-* GIT4SW 재실행
-
-* github 자격증명 팝업창이 뜨면, '계정/비밀번호'로 증명하지 말고, 반드시 'Token'을 선택하고 토큰값을 복사해 넣을 것
-
-* github 자격증명 팝업창이 한 번 뿐만 아니라 2~3번 정도 더 뜰 수 있음.  모두 Token 입력하면 됨
-
+* Restart GIT4SW.
+* When the GitHub credential popup appears, do NOT authenticate with 'Account/Password'; you must select 'Token' and paste your token value.
+* The GitHub credential popup may appear not just once, but 2-3 more times. Enter the Token for all of them.
