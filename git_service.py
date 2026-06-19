@@ -191,32 +191,17 @@ if __name__ == '__main__':
                 print(f"DEBUG (global): Cleaned remote URL to {cleaned_url}")
                 
     else:
-        # If token does not exist in config.json, revert to standard credential.username configuration (rely on GCM)
+        # If token does not exist in config.json or lacks access, revert to GCM
         # 1. Clear any custom local helper if it was set
         run_simple_git(["config", "--local", "--unset-all", "credential.helper"])
         
         # 2. Configure username on GCM
-        # Check if username is configured
         code_user, current_user_config, _ = run_simple_git(["config", "--local", "credential.https://github.com.username"])
         has_token_in_url = "@" in remote_url
 
-        if code_user == 0 and current_user_config and not has_token_in_url:
-            return
-
-        username = None
-        # Fallback to local git config user.name
-        _, username, _ = run_simple_git(["config", "user.name"])
-
-        if not username:
-            try:
-                username = os.getlogin()
-            except Exception:
-                pass
-
-        if username:
-            username = username.strip().replace(" ", "-").lower()
-            
-            # 1. Clean the remote URL
+        # Force correct username 'dymaxionkim' if currently set to 'dhkima' or unset
+        if code_user != 0 or not current_user_config or current_user_config.lower() == "dhkima":
+            fallback_user = "dymaxionkim"
             if has_token_in_url:
                 match = re.match(r'^(https?://)([^@]+)@(github\.com/.*)$', remote_url, re.IGNORECASE)
                 if match:
@@ -225,11 +210,10 @@ if __name__ == '__main__':
                     run_simple_git(["remote", "set-url", "origin", cleaned_url])
                     print(f"DEBUG (global): Cleaned remote URL to {cleaned_url}")
 
-            # 2. Configure local git credentials
             try:
-                run_simple_git(["config", "--local", "credential.https://github.com.username", username])
-                run_simple_git(["config", "--local", "credential.username", username])
-                print(f"DEBUG (global): Configured GCM credential username to {username}")
+                run_simple_git(["config", "--local", "credential.https://github.com.username", fallback_user])
+                run_simple_git(["config", "--local", "credential.username", fallback_user])
+                print(f"DEBUG (global): Corrected GCM credential username to {fallback_user}")
             except Exception as e:
                 print(f"DEBUG (global): Failed to config GCM credential: {e}")
 
