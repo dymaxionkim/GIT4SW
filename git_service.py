@@ -29,9 +29,9 @@ def terminate_all_processes():
 
 def optimize_credentials_for_path(repo_path):
     """
-    Given a local repository path, checks if it is a git repository, resolves the
-    username from config.json using the GitHub token, and cleans the remote URL
-    as well as configures the credential.username config.
+    Given a local repository path, checks if it is a git repository,
+    creates a custom git credential helper that reads the token from config.json,
+    and configures Git to use it instead of GCM to prevent any account picker popups.
     """
     if not repo_path:
         repo_path = os.path.abspath(".")
@@ -40,12 +40,36 @@ def optimize_credentials_for_path(repo_path):
     if not os.path.exists(git_dir):
         return
 
-    git_exe = "git"
+    # Find the python executable path
+    python_path = sys.executable.replace("\\", "/")
+    
+    # Locate config.json in the current working directory or check parent directory
     config_path = "config.json"
-    if os.path.exists(config_path):
+    if not os.path.exists(config_path):
+        config_path = os.path.join(repo_path, "config.json")
+        if not os.path.exists(config_path):
+            config_path = os.path.abspath(os.path.join(os.path.dirname(__file__), "config.json"))
+            
+    if not os.path.exists(config_path):
+        return
+
+    config_abs_path = os.path.abspath(config_path).replace("\\", "/")
+
+    # Read config.json to see if token is present
+    token = ""
+    try:
+        import json
+        with open(config_abs_path, "r", encoding="utf-8") as f:
+            config = json.load(f)
+            token = config.get("github_token", "").strip()
+    except Exception:
+        pass
+
+    git_exe = "git"
+    if os.path.exists(config_abs_path):
         try:
             import json
-            with open(config_path, "r", encoding="utf-8") as f:
+            with open(config_abs_path, "r", encoding="utf-8") as f:
                 config = json.load(f)
                 custom_git = config.get("git_path")
                 if custom_git and os.path.exists(custom_git):
@@ -57,7 +81,7 @@ def optimize_credentials_for_path(repo_path):
         res = subprocess.run([git_exe] + cmd, cwd=repo_path, capture_output=True, text=True, errors="ignore")
         return res.returncode, res.stdout.strip(), res.stderr.strip()
 
-    # 1. Get remote URL
+    # Get remote URL
     code, remote_url, _ = run_simple_git(["remote", "get-url", "origin"])
     if code != 0 or not remote_url:
         return
@@ -65,62 +89,113 @@ def optimize_credentials_for_path(repo_path):
     if "github.com" not in remote_url.lower():
         return
 
-    # Check if already optimized
-    code_user, current_user_config, _ = run_simple_git(["config", "--local", "credential.https://github.com.username"])
-    has_token_in_url = "@" in remote_url
-
-    if code_user == 0 and current_user_config and not has_token_in_url:
-        return
-
-    # Resolve username
-    token = ""
-    if os.path.exists(config_path):
-        try:
-            import json
-            with open(config_path, "r", encoding="utf-8") as f:
-                config = json.load(f)
-                token = config.get("github_token", "").strip()
-        except Exception:
-            pass
-
-    username = None
+    # If token exists, we set up the custom credential helper to completely bypass GCM
     if token:
+        # Write .git/git_helper.py
+        helper_path = os.path.join(git_dir, "git_helper.py")
+        helper_code = f"""import json
+import os
+import sys
+
+def main():
+    if len(sys.argv) < 2 or sys.argv[1] != 'get':
+        return
+    
+    is_github = False
+    for line in sys.stdin:
+        if line.startswith('host=github.com'):
+            is_github = True
+            
+    if is_github:
+        config_path = {repr(config_abs_path)}
+        if os.path.exists(config_path):
+            try:
+                with open(config_path, 'r', encoding='utf-8') as f:
+                    config = json.load(f)
+                    token = config.get('github_token', '').strip()
+                    if token:
+                        print("username=x-access-token")
+                        print(f"password={{token}}")
+            except Exception:
+                pass
+
+if __name__ == '__main__':
+    main()
+"""
         try:
-            from github import Github
-            g = Github(token)
-            user = g.get_user()
-            username = user.login
-        except Exception:
-            pass
+            with open(helper_path, "w", encoding="utf-8") as f:
+                f.write(helper_code)
+        except Exception as we:
+            print(f"DEBUG (global): Failed to write helper script: {we}")
+            return
 
-    if not username:
-        _, username, _ = run_simple_git(["config", "user.name"])
+        helper_escaped = helper_path.replace("\\", "/")
+        helper_val = f'!"{python_path}" "{helper_escaped}"'
 
-    if not username:
-        try:
-            username = os.getlogin()
-        except Exception:
-            pass
-
-    if username:
-        username = username.strip().replace(" ", "-").lower()
-        
-        # 1. Clean the remote URL
-        if has_token_in_url:
+        # Check if already set
+        code_helper, current_helper, _ = run_simple_git(["config", "--local", "credential.helper"])
+        if helper_val not in current_helper or "manager" in current_helper or "wincred" in current_helper:
+            try:
+                # 1. Clear local helper
+                run_simple_git(["config", "--local", "credential.helper", ""])
+                # 2. Add our helper
+                run_simple_git(["config", "--local", "--add", "credential.helper", helper_val])
+                print(f"DEBUG (global): Configured custom file-based credential helper.")
+            except Exception as ce:
+                print(f"DEBUG (global): Failed to set credential helper config: {ce}")
+                
+        # Also clean the remote URL of any embedded plaintext tokens
+        if "@" in remote_url:
             match = re.match(r'^(https?://)([^@]+)@(github\.com/.*)$', remote_url, re.IGNORECASE)
             if match:
                 prefix, _, rest = match.groups()
                 cleaned_url = f"{prefix}{rest}"
                 run_simple_git(["remote", "set-url", "origin", cleaned_url])
                 print(f"DEBUG (global): Cleaned remote URL to {cleaned_url}")
+                
+    else:
+        # If token does not exist in config.json, revert to standard credential.username configuration (rely on GCM)
+        # 1. Clear any custom local helper if it was set
+        run_simple_git(["config", "--local", "--unset-all", "credential.helper"])
+        
+        # 2. Configure username on GCM
+        # Check if username is configured
+        code_user, current_user_config, _ = run_simple_git(["config", "--local", "credential.https://github.com.username"])
+        has_token_in_url = "@" in remote_url
 
-        # 2. Configure local git credentials
-        try:
-            run_simple_git(["config", "--local", "credential.https://github.com.username", username])
-            run_simple_git(["config", "--local", "credential.username", username])
-            print(f"DEBUG (global): Configured credential username to {username}")
-        except Exception as e:
-            print(f"DEBUG (global): Failed to config credential: {e}")
+        if code_user == 0 and current_user_config and not has_token_in_url:
+            return
+
+        username = None
+        # Fallback to local git config user.name
+        _, username, _ = run_simple_git(["config", "user.name"])
+
+        if not username:
+            try:
+                username = os.getlogin()
+            except Exception:
+                pass
+
+        if username:
+            username = username.strip().replace(" ", "-").lower()
+            
+            # 1. Clean the remote URL
+            if has_token_in_url:
+                match = re.match(r'^(https?://)([^@]+)@(github\.com/.*)$', remote_url, re.IGNORECASE)
+                if match:
+                    prefix, _, rest = match.groups()
+                    cleaned_url = f"{prefix}{rest}"
+                    run_simple_git(["remote", "set-url", "origin", cleaned_url])
+                    print(f"DEBUG (global): Cleaned remote URL to {cleaned_url}")
+
+            # 2. Configure local git credentials
+            try:
+                run_simple_git(["config", "--local", "credential.https://github.com.username", username])
+                run_simple_git(["config", "--local", "credential.username", username])
+                print(f"DEBUG (global): Configured GCM credential username to {username}")
+            except Exception as e:
+                print(f"DEBUG (global): Failed to config GCM credential: {e}")
+
 
 
 def run_git_subprocess(cmd_args, cwd, check=True):
