@@ -1,4 +1,5 @@
 import os
+import sys
 import subprocess
 import re
 import datetime
@@ -201,7 +202,7 @@ if __name__ == '__main__':
 def run_git_subprocess(cmd_args, cwd, check=True):
     import json
     args = list(cmd_args)
-    if args and args[0] == "git":
+    if args and os.path.basename(args[0]).lower() in ("git", "git.exe"):
         network_cmds = {"fetch", "pull", "push", "clone", "ls-remote", "lock", "unlock", "locks"}
         if any(cmd in args for cmd in network_cmds):
             try:
