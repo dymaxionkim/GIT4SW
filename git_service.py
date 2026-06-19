@@ -1005,3 +1005,59 @@ class GitService:
         self._run_lfs_cmd(["git", "fetch", "origin"])
         self.merge_branch_with_resolutions(f"origin/{branch}", resolutions)
         return "Sync complete."
+
+    def optimize_credential_helper(self, username):
+        """
+        Cleans the remote URL by removing any plaintext tokens, and configures
+        local git config credential.username and credential.https://<domain>.username
+        to prevent Git Credential Manager from showing account picker popups.
+        """
+        if not self.is_git_repo():
+            return
+
+        # 1. Clean remote URL of any embedded tokens (username/password)
+        try:
+            remote_url = self.get_remote_url()
+            if remote_url:
+                match = re.match(r'^(https?://)([^@]+)@(.*)$', remote_url, re.IGNORECASE)
+                if match:
+                    prefix, creds, rest = match.groups()
+                    cleaned_url = f"{prefix}{rest}"
+                    self.set_remote(cleaned_url)
+                    print(f"DEBUG: Cleaned remote URL from {remote_url} to {cleaned_url}")
+        except Exception as e:
+            print(f"DEBUG: Failed to clean remote URL: {e}")
+
+        # 2. Configure local git credentials for the domain
+        if username:
+            remote_url = self.get_remote_url()
+            if remote_url:
+                domain = None
+                if remote_url.startswith("https://") or remote_url.startswith("http://"):
+                    try:
+                        from urllib.parse import urlparse
+                        parsed = urlparse(remote_url)
+                        domain = parsed.netloc
+                        if "@" in domain:
+                            domain = domain.split("@")[-1]
+                        if ":" in domain:
+                            domain = domain.split(":")[0]
+                    except Exception:
+                        pass
+                elif "@" in remote_url and ":" in remote_url:
+                    try:
+                        domain = remote_url.split("@")[-1].split(":")[0]
+                    except Exception:
+                        pass
+                
+                if not domain and "github.com" in remote_url.lower():
+                    domain = "github.com"
+                    
+                if domain:
+                    try:
+                        self._run_lfs_cmd(["git", "config", f"credential.https://{domain}.username", username])
+                        self._run_lfs_cmd(["git", "config", "credential.username", username])
+                        print(f"DEBUG: Configured local credential.https://{domain}.username to {username}")
+                    except Exception as e:
+                        print(f"DEBUG: Failed to configure local git credentials: {e}")
+

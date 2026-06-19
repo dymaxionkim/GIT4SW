@@ -1305,6 +1305,8 @@ class GIT4SWApp(tk.Tk):
                     if username:
                         username = username.strip().replace(" ", "-").lower()
                         self.resolved_username = username
+                        if self.git_service:
+                            self.git_service.optimize_credential_helper(username)
                 
                 # Check if username branch exists
                 branch_exists = False
@@ -1462,6 +1464,8 @@ class GIT4SWApp(tk.Tk):
                 # Sanitize branch name to a valid git branch name
                 username = username.strip().replace(" ", "-").lower()
                 self.resolved_username = username
+                if self.git_service:
+                    self.git_service.optimize_credential_helper(username)
                 
                 # 2. Check if branch exists
                 repo = self.git_service.repo
@@ -3026,6 +3030,14 @@ class GIT4SWApp(tk.Tk):
                 with repo.config_writer() as writer:
                     writer.remove_option("core", "hooksPath")
                 
+                # Optimize credential helper by cleaning remote URL and configuring credentials
+                try:
+                    temp_service = GitService(local_repo_path)
+                    temp_service.optimize_credential_helper(username)
+                    self.write_log("Configured Git Credential Manager for this repository.", "success")
+                except Exception as oe:
+                    self.write_log(f"Warning: Failed to optimize credential helper: {oe}", "warning")
+                
                 # 14. Save new workspace path to config.json
                 self.write_log("Updating workspace path in config...", "info")
                 self.save_workspace_to_config(local_repo_path)
@@ -3569,6 +3581,24 @@ class GIT4SWApp(tk.Tk):
                 try:
                     res = temp_service.clone_repository(authenticated_url)
                     clean_res = redact_token(res)
+                    
+                    # Optimize credential helper by cleaning remote URL and configuring credentials
+                    try:
+                        username = getattr(self, 'resolved_username', None)
+                        if not username and github_token:
+                            try:
+                                from github import Github
+                                g = Github(github_token)
+                                user = g.get_user()
+                                username = user.login.strip().replace(" ", "-").lower()
+                                self.resolved_username = username
+                            except Exception:
+                                pass
+                        if username:
+                            temp_service.optimize_credential_helper(username)
+                            self.write_log(f"Configured Git Credential Manager for user '{username}'.", "success")
+                    except Exception as oe:
+                        self.write_log(f"Warning: Failed to optimize credential helper after clone: {oe}", "warning")
                     
                     def on_success():
                         self.workspace_path = local_dir
