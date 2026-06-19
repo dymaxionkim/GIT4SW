@@ -6,6 +6,10 @@ import datetime
 import git
 import threading
 
+# Set Git/GCM environment variables at process startup to ensure zero interactive GUI dialogs/prompts
+os.environ["GCM_INTERACTIVE"] = "never"
+os.environ["GIT_TERMINAL_PROMPT"] = "0"
+
 active_processes = set()
 active_processes_lock = threading.Lock()
 
@@ -64,6 +68,38 @@ def check_token_access(token, remote_url):
     return False
 
 
+_cached_github_username = None
+_cached_github_username_lock = threading.Lock()
+
+def get_token_username(token):
+    global _cached_github_username
+    if not token:
+        return None
+    with _cached_github_username_lock:
+        if _cached_github_username is not None:
+            return _cached_github_username
+        
+        # Query API
+        try:
+            import urllib.request
+            import json
+            req = urllib.request.Request(
+                "https://api.github.com/user",
+                headers={
+                    "Authorization": f"token {token}",
+                    "User-Agent": "GIT4SW-App"
+                }
+            )
+            with urllib.request.urlopen(req, timeout=2.0) as response:
+                if response.status == 200:
+                    data = json.loads(response.read().decode('utf-8'))
+                    _cached_github_username = data.get("login")
+                    return _cached_github_username
+        except Exception as e:
+            print(f"DEBUG (global): Failed to get username from token: {e}")
+    return None
+
+
 def optimize_credentials_for_path(repo_path):
     """
     Given a local repository path, checks if it is a git repository,
@@ -115,7 +151,11 @@ def optimize_credentials_for_path(repo_path):
             pass
 
     def run_simple_git(cmd):
-        res = subprocess.run([git_exe] + cmd, cwd=repo_path, capture_output=True, text=True, errors="ignore")
+        # We also pass GCM_INTERACTIVE=never and GIT_TERMINAL_PROMPT=0 environment variables here to prevent popup prompts!
+        env = os.environ.copy()
+        env["GCM_INTERACTIVE"] = "never"
+        env["GIT_TERMINAL_PROMPT"] = "0"
+        res = subprocess.run([git_exe] + cmd, cwd=repo_path, capture_output=True, text=True, errors="ignore", env=env)
         return res.returncode, res.stdout.strip(), res.stderr.strip()
 
     # Get remote URL
@@ -126,8 +166,8 @@ def optimize_credentials_for_path(repo_path):
     if "github.com" not in remote_url.lower():
         return
 
-    # If token exists and has access, we set up the custom credential helper to completely bypass GCM
-    if token and check_token_access(token, remote_url):
+    # If token exists in config.json, we set up the custom credential helper to completely bypass GCM
+    if token:
         # Write .git/git_helper.py
         helper_path = os.path.join(git_dir, "git_helper.py")
         helper_code = f"""import json
@@ -190,8 +230,19 @@ if __name__ == '__main__':
                 run_simple_git(["remote", "set-url", "origin", cleaned_url])
                 print(f"DEBUG (global): Cleaned remote URL to {cleaned_url}")
                 
+        # Satisfy request 8: Force modify the username in local .git/config to match the token owner's username
+        # This cleans up any stale 'dhkima' or 'dymaxionkim' configurations
+        github_username = get_token_username(token)
+        if github_username:
+            try:
+                run_simple_git(["config", "--local", "credential.https://github.com.username", github_username])
+                run_simple_git(["config", "--local", "credential.username", github_username])
+                print(f"DEBUG (global): Forcefully configured .git/config username to {github_username}")
+            except Exception as e:
+                print(f"DEBUG (global): Failed to config username in .git/config: {e}")
+                
     else:
-        # If token does not exist in config.json or lacks access, revert to GCM
+        # If token does not exist in config.json, revert to GCM
         # 1. Clear any custom local helper if it was set
         run_simple_git(["config", "--local", "--unset-all", "credential.helper"])
         
@@ -240,6 +291,10 @@ def run_git_subprocess(cmd_args, cwd, check=True):
         except Exception:
             pass
 
+    env = os.environ.copy()
+    env["GCM_INTERACTIVE"] = "never"
+    env["GIT_TERMINAL_PROMPT"] = "0"
+
     proc = subprocess.Popen(
         args,
         cwd=cwd,
@@ -247,6 +302,7 @@ def run_git_subprocess(cmd_args, cwd, check=True):
         stderr=subprocess.PIPE,
         text=True,
         encoding="utf-8",
+        env=env,
         errors="ignore"
     )
     register_process(proc)
