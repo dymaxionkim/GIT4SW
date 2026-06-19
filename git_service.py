@@ -202,7 +202,7 @@ def run_git_subprocess(cmd_args, cwd, check=True):
     import json
     args = list(cmd_args)
     if args and args[0] == "git":
-        network_cmds = {"fetch", "pull", "push", "clone", "ls-remote", "lock", "unlock"}
+        network_cmds = {"fetch", "pull", "push", "clone", "ls-remote", "lock", "unlock", "locks"}
         if any(cmd in args for cmd in network_cmds):
             try:
                 optimize_credentials_for_path(cwd)
