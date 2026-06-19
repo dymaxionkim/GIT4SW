@@ -28,6 +28,42 @@ def terminate_all_processes():
                 pass
     return terminated
 
+
+def check_token_access(token, remote_url):
+    """
+    Checks if the given token has access to the GitHub repository specified by the remote URL.
+    Returns True if access is confirmed (HTTP 200), False otherwise.
+    """
+    if not token or not remote_url or "github.com" not in remote_url.lower():
+        return False
+
+    # Parse owner and repo name
+    match = re.search(r'github\.com[/:]([^/]+)/([^/.]+)(?:\.git)?', remote_url, re.IGNORECASE)
+    if not match:
+        return False
+
+    owner, repo = match.groups()
+    api_url = f"https://api.github.com/repos/{owner}/{repo}"
+
+    try:
+        import urllib.request
+        import urllib.error
+        req = urllib.request.Request(
+            api_url,
+            headers={
+                "Authorization": f"token {token}",
+                "User-Agent": "GIT4SW-App"
+            }
+        )
+        with urllib.request.urlopen(req, timeout=2.0) as response:
+            if response.status == 200:
+                return True
+    except Exception as e:
+        print(f"DEBUG (global): Token check for {owner}/{repo} failed: {e}")
+
+    return False
+
+
 def optimize_credentials_for_path(repo_path):
     """
     Given a local repository path, checks if it is a git repository,
@@ -90,8 +126,8 @@ def optimize_credentials_for_path(repo_path):
     if "github.com" not in remote_url.lower():
         return
 
-    # If token exists, we set up the custom credential helper to completely bypass GCM
-    if token:
+    # If token exists and has access, we set up the custom credential helper to completely bypass GCM
+    if token and check_token_access(token, remote_url):
         # Write .git/git_helper.py
         helper_path = os.path.join(git_dir, "git_helper.py")
         helper_code = f"""import json
