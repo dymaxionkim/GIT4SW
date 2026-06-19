@@ -27,10 +27,113 @@ def terminate_all_processes():
                 pass
     return terminated
 
+def optimize_credentials_for_path(repo_path):
+    """
+    Given a local repository path, checks if it is a git repository, resolves the
+    username from config.json using the GitHub token, and cleans the remote URL
+    as well as configures the credential.username config.
+    """
+    if not repo_path:
+        repo_path = os.path.abspath(".")
+    
+    git_dir = os.path.join(repo_path, ".git")
+    if not os.path.exists(git_dir):
+        return
+
+    git_exe = "git"
+    config_path = "config.json"
+    if os.path.exists(config_path):
+        try:
+            import json
+            with open(config_path, "r", encoding="utf-8") as f:
+                config = json.load(f)
+                custom_git = config.get("git_path")
+                if custom_git and os.path.exists(custom_git):
+                    git_exe = custom_git
+        except Exception:
+            pass
+
+    def run_simple_git(cmd):
+        res = subprocess.run([git_exe] + cmd, cwd=repo_path, capture_output=True, text=True, errors="ignore")
+        return res.returncode, res.stdout.strip(), res.stderr.strip()
+
+    # 1. Get remote URL
+    code, remote_url, _ = run_simple_git(["remote", "get-url", "origin"])
+    if code != 0 or not remote_url:
+        return
+
+    if "github.com" not in remote_url.lower():
+        return
+
+    # Check if already optimized
+    code_user, current_user_config, _ = run_simple_git(["config", "--local", "credential.https://github.com.username"])
+    has_token_in_url = "@" in remote_url
+
+    if code_user == 0 and current_user_config and not has_token_in_url:
+        return
+
+    # Resolve username
+    token = ""
+    if os.path.exists(config_path):
+        try:
+            import json
+            with open(config_path, "r", encoding="utf-8") as f:
+                config = json.load(f)
+                token = config.get("github_token", "").strip()
+        except Exception:
+            pass
+
+    username = None
+    if token:
+        try:
+            from github import Github
+            g = Github(token)
+            user = g.get_user()
+            username = user.login
+        except Exception:
+            pass
+
+    if not username:
+        _, username, _ = run_simple_git(["config", "user.name"])
+
+    if not username:
+        try:
+            username = os.getlogin()
+        except Exception:
+            pass
+
+    if username:
+        username = username.strip().replace(" ", "-").lower()
+        
+        # 1. Clean the remote URL
+        if has_token_in_url:
+            match = re.match(r'^(https?://)([^@]+)@(github\.com/.*)$', remote_url, re.IGNORECASE)
+            if match:
+                prefix, _, rest = match.groups()
+                cleaned_url = f"{prefix}{rest}"
+                run_simple_git(["remote", "set-url", "origin", cleaned_url])
+                print(f"DEBUG (global): Cleaned remote URL to {cleaned_url}")
+
+        # 2. Configure local git credentials
+        try:
+            run_simple_git(["config", "--local", "credential.https://github.com.username", username])
+            run_simple_git(["config", "--local", "credential.username", username])
+            print(f"DEBUG (global): Configured credential username to {username}")
+        except Exception as e:
+            print(f"DEBUG (global): Failed to config credential: {e}")
+
+
 def run_git_subprocess(cmd_args, cwd, check=True):
     import json
     args = list(cmd_args)
     if args and args[0] == "git":
+        network_cmds = {"fetch", "pull", "push", "clone", "ls-remote", "lock", "unlock"}
+        if any(cmd in args for cmd in network_cmds):
+            try:
+                optimize_credentials_for_path(cwd)
+            except Exception as e:
+                print(f"DEBUG: Failed to optimize credentials in run_git_subprocess: {e}")
+
         try:
             if os.path.exists("config.json"):
                 with open("config.json", "r", encoding="utf-8") as f:
