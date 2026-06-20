@@ -139,23 +139,11 @@
 
 ### 4.4 트러블슈팅
 
-#### 4.4.1 git 자격증명이 안될 경우
+#### 4.4.1 GitHub 토큰을 이용한 Git 인증
 
-* 일단 GIT4SW를 종료
-
-* 윈도우 시스템의 '자격 증명 관리자'를 실행하고, 'Windows 자격 증명'의 '일반 자격 증명' 중에서 `git:https://github.com` 항목을 삭제
-
-* 터미널에서 아래 명령을 순서대로 수행
-
-```
-git credential-manager unconfigure
-git config --global --unset credential.helper
-git credential-manager configure
-```
-
-* GIT4SW 재실행
-
-* github 자격증명 팝업창이 뜨면, '계정/비밀번호'로 증명하지 말고, 반드시 'Token'을 선택하고 토큰값을 복사해 넣을 것
-
-* github 자격증명 팝업창이 한 번 뿐만 아니라 2~3번 정도 더 뜰 수 있음.  모두 Token 입력하면 됨
+* Git 원격 작업(push, pull, locks 등)은 `config.json`에 설정된 `github_token`을 사용하여 자동으로 인증이 완료됩니다.
+* 프로그램은 실행 시 동적 인라인 헬퍼 주입 방식을 사용하여 윈도우 시스템 자격증명관리자(GCM)를 완전히 무시하고 자체적으로 처리하므로, 작업 중 복잡한 로그인 팝업 창이 전혀 뜨지 않습니다.
+* 만약 자격증명 오류나 권한 문제가 발생한다면:
+  - `config.json` 파일의 `github_token` 항목에 적절한 리포지토리 제어 권한(특히 `repo` 또는 `write` 권한)을 가진 올바른 GitHub 개인 액세스 토큰(PAT)이 설정되어 있는지 확인하십시오.
+  - 네트워크 연결 상태 또는 GitHub 저장소에 대한 접근 권한을 확인하십시오. 로컬/전역 Git의 credential helper를 수동으로 수정할 필요가 전혀 없습니다.
 

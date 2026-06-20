@@ -140,18 +140,10 @@ Details and examples for each configuration item are as follows:
 
 ### 4.4 Troubleshooting
 
-#### 4.4.1 If Git Credential Authentication Fails
+#### 4.4.1 Git Authentication with GitHub Token
 
-* First, close GIT4SW.
-* Run 'Credential Manager' in Windows, and under 'Windows Credentials' -> 'Generic Credentials', delete the item `git:https://github.com`.
-* Execute the following commands in a terminal in order:
-
-```bash
-git credential-manager unconfigure
-git config --global --unset credential.helper
-git credential-manager configure
-```
-
-* Restart GIT4SW.
-* When the GitHub credential popup appears, do NOT authenticate with 'Account/Password'; you must select 'Token' and paste your token value.
-* The GitHub credential popup may appear not just once, but 2-3 more times. Enter the Token for all of them.
+* Git remote operations (push, pull, locks, etc.) are authenticated seamlessly using the `github_token` configured in `config.json`.
+* During execution, the program dynamically unsets local credential helpers and bypasses the Windows Credential Manager (GCM) using an inline temporary helper. This prevents any interactive browser/GCM login popup windows from interrupting your work.
+* If authentication fails:
+  - Verify that the `github_token` in `config.json` is a valid GitHub Personal Access Token (PAT) with appropriate scopes (especially `repo` or `write` access).
+  - Check your internet connection or repository permissions. Do not manually adjust your local/global Git credential helpers.
