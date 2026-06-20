@@ -250,9 +250,18 @@ if __name__ == '__main__':
         code_user, current_user_config, _ = run_simple_git(["config", "--local", "credential.https://github.com.username"])
         has_token_in_url = "@" in remote_url
 
-        # Force correct username 'dymaxionkim' if currently set to 'dhkima' or unset
-        if code_user != 0 or not current_user_config or current_user_config.lower() == "dhkima":
-            fallback_user = "dymaxionkim"
+        # Resolve current user's name to forcefully configure GCM's username
+        code_un, current_user, _ = run_simple_git(["config", "user.name"])
+        if code_un != 0 or not current_user:
+            code_un, current_user, _ = run_simple_git(["config", "--global", "user.name"])
+        if code_un != 0 or not current_user:
+            try:
+                current_user = os.getlogin()
+            except Exception:
+                current_user = ""
+                
+        fallback_user = current_user.strip()
+        if fallback_user:
             if has_token_in_url:
                 match = re.match(r'^(https?://)([^@]+)@(github\.com/.*)$', remote_url, re.IGNORECASE)
                 if match:
