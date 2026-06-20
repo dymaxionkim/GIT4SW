@@ -177,7 +177,10 @@ def optimize_credentials_for_path(repo_path):
 
     # 2. Always clear local custom helper to keep .git/config clean
     try:
-        run_simple_git(["config", "--local", "--unset-all", "credential.helper"])
+        code_helper, current_helper, _ = run_simple_git(["config", "--local", "credential.helper"])
+        if code_helper == 0 and current_helper:
+            run_simple_git(["config", "--local", "--unset-all", "credential.helper"])
+            print("DEBUG (global): Cleared local credential.helper to keep config clean.")
     except Exception as ce:
         print(f"DEBUG (global): Failed to unset local credential helper: {ce}")
 
@@ -195,9 +198,12 @@ def optimize_credentials_for_path(repo_path):
         github_username = get_token_username(token)
         if github_username:
             try:
-                run_simple_git(["config", "--local", "credential.https://github.com.username", github_username])
-                run_simple_git(["config", "--local", "credential.username", github_username])
-                print(f"DEBUG (global): Forcefully configured .git/config username to {github_username}")
+                _, curr_https_user, _ = run_simple_git(["config", "--local", "credential.https://github.com.username"])
+                _, curr_user, _ = run_simple_git(["config", "--local", "credential.username"])
+                if curr_https_user != github_username or curr_user != github_username:
+                    run_simple_git(["config", "--local", "credential.https://github.com.username", github_username])
+                    run_simple_git(["config", "--local", "credential.username", github_username])
+                    print(f"DEBUG (global): Forcefully configured .git/config username to {github_username}")
             except Exception as e:
                 print(f"DEBUG (global): Failed to config username in .git/config: {e}")
     else:
@@ -214,9 +220,12 @@ def optimize_credentials_for_path(repo_path):
         fallback_user = current_user.strip()
         if fallback_user:
             try:
-                run_simple_git(["config", "--local", "credential.https://github.com.username", fallback_user])
-                run_simple_git(["config", "--local", "credential.username", fallback_user])
-                print(f"DEBUG (global): Corrected GCM credential username to {fallback_user}")
+                _, curr_https_user, _ = run_simple_git(["config", "--local", "credential.https://github.com.username"])
+                _, curr_user, _ = run_simple_git(["config", "--local", "credential.username"])
+                if curr_https_user != fallback_user or curr_user != fallback_user:
+                    run_simple_git(["config", "--local", "credential.https://github.com.username", fallback_user])
+                    run_simple_git(["config", "--local", "credential.username", fallback_user])
+                    print(f"DEBUG (global): Corrected GCM credential username to {fallback_user}")
             except Exception as e:
                 print(f"DEBUG (global): Failed to config GCM credential: {e}")
 
@@ -315,7 +324,6 @@ if __name__ == '__main__':
                     args.insert(1, "-c")
                     args.insert(1, "credential.helper=")
                     args.insert(1, "-c")
-                    print(f"DEBUG (global): Injected credential.helper arguments for command: {args}")
     except Exception as e:
         print(f"DEBUG (global): Failed to parse token and inject helper args: {e}")
 
