@@ -51,43 +51,36 @@ def run_export(job_file):
     else:
         prefix = prefix.strip()
         
-    # Gather matching files per format
-    jobs_to_run = []
+    # Gather matching files and mapping their target formats
+    file_jobs = {}
     
-    for active_fmt in formats:
-        filtered_files = []
-        if active_fmt == "PDF" or active_fmt == "DXF":
-            # .slddrw files
-            for f_rel in all_files:
-                f_lower = f_rel.lower()
-                if f_lower.endswith(".slddrw"):
-                    base_name = os.path.basename(f_rel)
-                    if prefix == "" or base_name.startswith(prefix):
-                        filtered_files.append(f_rel)
-        elif active_fmt == "STEP":
-            # .sldprt files
-            for f_rel in all_files:
-                f_lower = f_rel.lower()
-                if f_lower.endswith(".sldprt"):
-                    base_name = os.path.basename(f_rel)
-                    if prefix == "" or base_name.startswith(prefix):
-                        filtered_files.append(f_rel)
-        elif active_fmt == "STEP_ASM":
-            # .sldasm files
-            for f_rel in all_files:
-                f_lower = f_rel.lower()
-                if f_lower.endswith(".sldasm"):
-                    base_name = os.path.basename(f_rel)
-                    if prefix == "" or base_name.startswith(prefix):
-                        filtered_files.append(f_rel)
-                        
-        if filtered_files:
-            jobs_to_run.append({
-                "format": active_fmt,
-                "files": filtered_files
-            })
+    for f_rel in all_files:
+        base_name = os.path.basename(f_rel)
+        if prefix != "" and not base_name.startswith(prefix):
+            continue
             
-    if not jobs_to_run:
+        f_lower = f_rel.lower()
+        target_formats = []
+        
+        if f_lower.endswith(".slddrw"):
+            if "PDF" in formats:
+                target_formats.append("PDF")
+            if "DXF" in formats:
+                target_formats.append("DXF")
+        elif f_lower.endswith(".sldprt"):
+            if "STEP" in formats:
+                target_formats.append("STEP")
+        elif f_lower.endswith(".sldasm"):
+            if "STEP_ASM" in formats:
+                target_formats.append("STEP_ASM")
+                
+        if target_formats:
+            # Sort target_formats in the order of: PDF -> DXF -> STEP -> STEP_ASM
+            format_order = {"PDF": 0, "DXF": 1, "STEP": 2, "STEP_ASM": 3}
+            target_formats.sort(key=lambda fmt: format_order.get(fmt, 9))
+            file_jobs[f_rel] = target_formats
+            
+    if not file_jobs:
         print("No matching files to export.")
         return
 
@@ -125,138 +118,147 @@ def run_export(job_file):
         except Exception as pref_e:
             print(f"Failed to set user preferences: {pref_e}")
 
-        # Run each format job
-        for run_job in jobs_to_run:
-            active_fmt = run_job["format"]
-            files = run_job["files"]
-            
-            # Setup format specifics and target preferences
-            orig_pdf_color = None
-            orig_pdf_line_weights = None
-            orig_pdf_high_quality = None
-            orig_step_ap = None
-            orig_step_appearances = None
-            
-            if active_fmt == "PDF":
-                format_subdir = "PDF"
-                target_ext = ".pdf"
-                doc_type = 3  # swDocDRAWING
-                open_options = 1 | 32  # swOpenDocOptions_Silent | swOpenDocOptions_LoadModel
+        # List of file jobs to run, sorted by format order: PDF/DXF (.slddrw) -> STEP (.sldprt) -> STEP_ASM (.sldasm)
+        def get_file_priority(f_rel):
+            ext = os.path.splitext(f_rel)[1].lower()
+            if ext == ".slddrw":
+                return 0
+            elif ext == ".sldprt":
+                return 1
+            elif ext == ".sldasm":
+                return 2
+            return 3
+
+        file_list = list(file_jobs.keys())
+        file_list.sort(key=lambda x: (get_file_priority(x), x.lower()))
+        total_files = len(file_list)
+        
+        for idx, file_rel in enumerate(file_list):
+            file_abs = os.path.normpath(os.path.join(workspace_path, file_rel))
+            if not os.path.exists(file_abs):
+                print(f"Skipping missing file: {file_abs}")
+                continue
                 
-                # Save & Set PDF user preferences (Black & White, line weights/pen tables)
-                try:
-                    orig_pdf_color = swApp.GetUserPreferenceToggle(323)                   # swPDFExportInColor
-                    orig_pdf_line_weights = swApp.GetUserPreferenceToggle(327)            # swPDFExportUseCurrentPrintLineWeights
-                    orig_pdf_high_quality = swApp.GetUserPreferenceToggle(325)            # swPDFExportHighQuality
-                    
-                    swApp.SetUserPreferenceToggle(323, False)                             # False = Black and White
-                    swApp.SetUserPreferenceToggle(327, True)                              # True = Use printer line weights (respects pen table)
-                    swApp.SetUserPreferenceToggle(325, True)                              # True = High quality lines
-                except Exception as pref_e:
-                    print(f"Failed to set PDF preferences: {pref_e}")
-                    
-            elif active_fmt == "DXF":
-                format_subdir = "DXF"
-                target_ext = ".dxf"
+            target_formats = file_jobs[file_rel]
+            f_lower = file_rel.lower()
+            
+            # Decide document type based on extension
+            if f_lower.endswith(".slddrw"):
                 doc_type = 3  # swDocDRAWING
                 open_options = 1 | 32  # swOpenDocOptions_Silent | swOpenDocOptions_LoadModel
-            elif active_fmt == "STEP":
-                format_subdir = "STEP"
-                target_ext = ".step"
+            elif f_lower.endswith(".sldprt"):
                 doc_type = 1  # swDocPART
                 open_options = 1  # swOpenDocOptions_Silent
-                
-                # Save & Set STEP user preferences (AP214 and Appearances)
-                try:
-                    orig_step_ap = swApp.GetUserPreferenceIntegerValue(75)               # swStepAP
-                    orig_step_appearances = swApp.GetUserPreferenceToggle(787)            # swStepExportAppearances
-                    
-                    swApp.SetUserPreferenceIntegerValue(75, 214)                         # 214 = AP214 (supports color)
-                    swApp.SetUserPreferenceToggle(787, True)                              # True = Export Appearances (color/textures)
-                except Exception as pref_e:
-                    print(f"Failed to set STEP preferences: {pref_e}")
-                    
-            elif active_fmt == "STEP_ASM":
-                format_subdir = "STEP_ASM"
-                target_ext = ".step"
+            elif f_lower.endswith(".sldasm"):
                 doc_type = 2  # swDocASSEMBLY
                 open_options = 1  # swOpenDocOptions_Silent
+            else:
+                continue
                 
-                # Save & Set STEP_ASM user preferences
-                try:
-                    orig_step_ap = swApp.GetUserPreferenceIntegerValue(75)               # swStepAP
-                    orig_step_appearances = swApp.GetUserPreferenceToggle(787)            # swStepExportAppearances
-                    
-                    swApp.SetUserPreferenceIntegerValue(75, 214)                         # 214 = AP214 (supports color)
-                    swApp.SetUserPreferenceToggle(787, True)                              # True = Export Appearances (color/textures)
-                except Exception as pref_e:
-                    print(f"Failed to set STEP_ASM preferences: {pref_e}")
-
-            print(f"Processing job format: {active_fmt}")
-            for file_rel in files:
-                file_abs = os.path.normpath(os.path.join(workspace_path, file_rel))
-                if not os.path.exists(file_abs):
-                    print(f"Skipping missing file: {file_abs}")
+            # Send real-time progress update via stdout
+            # format: [PROGRESS] current_index/total_files : base_filename
+            print(f"[PROGRESS] {idx+1}/{total_files} : {os.path.basename(file_rel)}", flush=True)
+            
+            print(f"Opening: {file_abs}")
+            error = win32com.client.VARIANT(pythoncom.VT_BYREF | pythoncom.VT_I4, 0)
+            warning = win32com.client.VARIANT(pythoncom.VT_BYREF | pythoncom.VT_I4, 0)
+            
+            try:
+                model = swApp.OpenDoc6(file_abs, doc_type, open_options, "", error, warning)
+                if model is None:
+                    print(f"Failed to open {file_abs}. Error: {error.value}")
                     continue
                     
-                file_dir = os.path.dirname(file_abs)
-                dest_dir = os.path.join(file_dir, output_dir, format_subdir)
-                os.makedirs(dest_dir, exist_ok=True)
+                act_error = win32com.client.VARIANT(pythoncom.VT_BYREF | pythoncom.VT_I4, 0)
+                swApp.ActivateDoc3(os.path.basename(file_abs), False, 0, act_error)
+                time.sleep(1)
                 
-                base_filename = os.path.splitext(os.path.basename(file_abs))[0]
-                dest_file_path = os.path.join(dest_dir, base_filename + target_ext)
-                
-                # If target file exists, remove it first
-                if os.path.exists(dest_file_path):
-                    try:
-                        os.remove(dest_file_path)
-                    except Exception as del_e:
-                        print(f"Failed to remove existing file {dest_file_path}: {del_e}")
-                
-                print(f"Opening: {file_abs}")
-                error = win32com.client.VARIANT(pythoncom.VT_BYREF | pythoncom.VT_I4, 0)
-                warning = win32com.client.VARIANT(pythoncom.VT_BYREF | pythoncom.VT_I4, 0)
-                
-                try:
-                    model = swApp.OpenDoc6(file_abs, doc_type, open_options, "", error, warning)
-                    if model is None:
-                        print(f"Failed to open {file_abs}. Error: {error.value}")
-                        continue
-                        
-                    act_error = win32com.client.VARIANT(pythoncom.VT_BYREF | pythoncom.VT_I4, 0)
-                    swApp.ActivateDoc3(os.path.basename(file_abs), False, 0, act_error)
-                    time.sleep(1)
+                # Perform export for each target format
+                for active_fmt in target_formats:
+                    orig_pdf_color = None
+                    orig_pdf_line_weights = None
+                    orig_pdf_high_quality = None
+                    orig_step_ap = None
+                    orig_step_appearances = None
                     
+                    # Prepare paths & target preferences
+                    if active_fmt == "PDF":
+                        format_subdir = "PDF"
+                        target_ext = ".pdf"
+                        try:
+                            orig_pdf_color = swApp.GetUserPreferenceToggle(323)                   # swPDFExportInColor
+                            orig_pdf_line_weights = swApp.GetUserPreferenceToggle(327)            # swPDFExportUseCurrentPrintLineWeights
+                            orig_pdf_high_quality = swApp.GetUserPreferenceToggle(325)            # swPDFExportHighQuality
+                            
+                            swApp.SetUserPreferenceToggle(323, False)                             # False = Black and White
+                            swApp.SetUserPreferenceToggle(327, True)                              # True = Use printer line weights (respects pen table)
+                            swApp.SetUserPreferenceToggle(325, True)                              # True = High quality lines
+                        except Exception as pref_e:
+                            print(f"Failed to set PDF preferences: {pref_e}")
+                            
+                    elif active_fmt == "DXF":
+                        format_subdir = "DXF"
+                        target_ext = ".dxf"
+                        
+                    elif active_fmt in ("STEP", "STEP_ASM"):
+                        format_subdir = "STEP" if active_fmt == "STEP" else "STEP_ASM"
+                        target_ext = ".step"
+                        try:
+                            orig_step_ap = swApp.GetUserPreferenceIntegerValue(75)               # swStepAP
+                            orig_step_appearances = swApp.GetUserPreferenceToggle(787)            # swStepExportAppearances
+                            
+                            swApp.SetUserPreferenceIntegerValue(75, 214)                         # 214 = AP214 (supports color)
+                            swApp.SetUserPreferenceToggle(787, True)                              # True = Export Appearances (color/textures)
+                        except Exception as pref_e:
+                            print(f"Failed to set STEP/STEP_ASM preferences: {pref_e}")
+
+                    # Determine output directory
+                    file_dir = os.path.dirname(file_abs)
+                    dest_dir = os.path.join(file_dir, output_dir, format_subdir)
+                    os.makedirs(dest_dir, exist_ok=True)
+                    
+                    base_filename = os.path.splitext(os.path.basename(file_abs))[0]
+                    dest_file_path = os.path.join(dest_dir, base_filename + target_ext)
+                    
+                    # Remove target file if exists
+                    if os.path.exists(dest_file_path):
+                        try:
+                            os.remove(dest_file_path)
+                        except Exception as del_e:
+                            print(f"Failed to remove existing file {dest_file_path}: {del_e}")
+                            
+                    # Save
                     result = model.SaveAs3(dest_file_path, 0, 1)
                     if result == 0:
                         print(f"Successfully exported {file_abs} -> {dest_file_path}")
                     else:
                         print(f"Failed to save {dest_file_path} (SaveAs3 code: {result})")
                         
-                    close_all_documents_without_saving(swApp)
-                except Exception as file_e:
-                    print(f"Error processing {file_abs}: {file_e}")
-                    close_all_documents_without_saving(swApp)
-                        
-            # Restore preferences for the active format after processing all files
-            if active_fmt == "PDF":
-                try:
-                    if orig_pdf_color is not None:
-                        swApp.SetUserPreferenceToggle(323, orig_pdf_color)
-                    if orig_pdf_line_weights is not None:
-                        swApp.SetUserPreferenceToggle(327, orig_pdf_line_weights)
-                    if orig_pdf_high_quality is not None:
-                        swApp.SetUserPreferenceToggle(325, orig_pdf_high_quality)
-                except Exception as restore_e:
-                    print(f"Failed to restore PDF preferences: {restore_e}")
-            elif active_fmt in ("STEP", "STEP_ASM"):
-                try:
-                    if orig_step_ap is not None:
-                        swApp.SetUserPreferenceIntegerValue(75, orig_step_ap)
-                    if orig_step_appearances is not None:
-                        swApp.SetUserPreferenceToggle(787, orig_step_appearances)
-                except Exception as restore_e:
-                    print(f"Failed to restore STEP preferences: {restore_e}")
+                    # Restore settings
+                    if active_fmt == "PDF":
+                        try:
+                            if orig_pdf_color is not None:
+                                swApp.SetUserPreferenceToggle(323, orig_pdf_color)
+                            if orig_pdf_line_weights is not None:
+                                swApp.SetUserPreferenceToggle(327, orig_pdf_line_weights)
+                            if orig_pdf_high_quality is not None:
+                                swApp.SetUserPreferenceToggle(325, orig_pdf_high_quality)
+                        except Exception as restore_e:
+                            print(f"Failed to restore PDF preferences: {restore_e}")
+                    elif active_fmt in ("STEP", "STEP_ASM"):
+                        try:
+                            if orig_step_ap is not None:
+                                swApp.SetUserPreferenceIntegerValue(75, orig_step_ap)
+                            if orig_step_appearances is not None:
+                                swApp.SetUserPreferenceToggle(787, orig_step_appearances)
+                        except Exception as restore_e:
+                            print(f"Failed to restore STEP/STEP_ASM preferences: {restore_e}")
+                            
+                # Close files
+                close_all_documents_without_saving(swApp)
+            except Exception as file_e:
+                print(f"Error processing {file_abs}: {file_e}")
+                close_all_documents_without_saving(swApp)
 
         # Restore global warning preferences
         try:

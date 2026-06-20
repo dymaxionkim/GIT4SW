@@ -391,6 +391,15 @@ class GIT4SWApp(tk.Tk):
                   background=[("active", "#dc2626"), ("disabled", "#fee2e2")],
                   foreground=[("active", "#ffffff"), ("disabled", "#f87171")])
 
+        # Progressbar (Emerald green theme)
+        style.configure("Custom.Horizontal.TProgressbar",
+                        thickness=14,
+                        troughcolor="#e5e7eb",    # progress bar background (light gray)
+                        background="#059669",     # progress bar fill (emerald green)
+                        lightcolor="#059669",
+                        darkcolor="#059669",
+                        bordercolor="#d1d5db")
+
         # Treeview (Modern styling)
         style.configure("Treeview", 
                         background=card_color, 
@@ -3945,6 +3954,7 @@ class GIT4SWApp(tk.Tk):
             self.write_log(f"eDrawings executable not found at path: {path}. Please check config.json.", "error")
 
     def open_export_dialog(self):
+        self._export_active_files = None
         # Create toplevel popup
         pop = tk.Toplevel(self)
         pop.title("Solidworks EXPORT")
@@ -4042,6 +4052,8 @@ class GIT4SWApp(tk.Tk):
 
         def start_action():
             filtered_files, formats = get_filtered_files_list()
+            if getattr(self, "_export_active_files", None) is not None:
+                filtered_files = [f for f in filtered_files if f in self._export_active_files]
             if not formats:
                 messagebox.showerror("Error", "Please select at least one format to export.")
                 return
@@ -4096,18 +4108,134 @@ class GIT4SWApp(tk.Tk):
                 messagebox.showerror("Error", f"Failed to create job configuration: {io_err}")
                 return
                 
-            # Launch background runner process
+            # Launch background runner process with progress tracking popup
             try:
                 script_dir = os.path.dirname(os.path.abspath(__file__))
                 runner_path = os.path.join(script_dir, "sw_export_runner.py")
                 
-                # Run subprocess
-                proc = subprocess.Popen([sys.executable, runner_path, job_path])
+                import subprocess
+                import threading
+                
+                # Run subprocess capturing stdout and stderr
+                proc = subprocess.Popen(
+                    [sys.executable, runner_path, job_path],
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE,
+                    text=True,
+                    bufsize=1, # Line buffered
+                    encoding="utf-8"
+                )
                 self.export_process = proc
                 self.write_log(f"🚀 Started background export process (Formats: {formats}, Prefix: '{prefix_val}', OutDir: '{out_dir_val}').", "info")
                 
-                # Start monitoring
-                self.after(500, lambda: self.check_export_process(job_path))
+                # Close the format selection window
+                pop.destroy()
+                
+                # Create Progress Status Dialog
+                progress_pop = tk.Toplevel(self)
+                progress_pop.title("SolidWorks Exporting...")
+                progress_pop.geometry("450x200")
+                progress_pop.resizable(False, False)
+                progress_pop.configure(bg="#f3f4f6")
+                progress_pop.transient(self)
+                progress_pop.grab_set() # Modal dialog to prevent interacting with main window
+                
+                # Title frame
+                title_lbl = tk.Label(progress_pop, text="SolidWorks EXPORT Progress", font=("TkDefaultFont", 11, "bold"), bg="#f3f4f6", fg="#059669")
+                title_lbl.pack(pady=(15, 5))
+                
+                # Progress labels
+                lbl_status = tk.Label(progress_pop, text=f"Initializing SolidWorks... (0 / {len(filtered_files)} Completed)", font="TkDefaultFont", bg="#f3f4f6", fg="#1f2937")
+                lbl_status.pack(pady=2)
+                
+                lbl_file = tk.Label(progress_pop, text="Launching background SolidWorks engine...", font=("TkDefaultFont", 9), bg="#f3f4f6", fg="#6b7280", wraplength=400)
+                lbl_file.pack(pady=(0, 10))
+                
+                # Progress bar
+                prog_bar = ttk.Progressbar(progress_pop, orient="horizontal", length=380, mode="determinate", maximum=len(filtered_files), style="Custom.Horizontal.TProgressbar")
+                prog_bar.pack(pady=5)
+                
+                is_cancelled = [False]
+                
+                def cancel_action():
+                    is_cancelled[0] = True
+                    try:
+                        proc.terminate()
+                    except Exception:
+                        pass
+                    try:
+                        progress_pop.destroy()
+                    except Exception:
+                        pass
+                    self.write_log("⚠️ Export process cancelled by user.", "warning")
+                    
+                # Cancel Button
+                btn_cancel = ttk.Button(progress_pop, text="Cancel", command=cancel_action)
+                btn_cancel.pack(pady=(10, 10))
+                
+                # GUI Updater helper
+                def update_progress(curr, total, file_name):
+                    try:
+                        prog_bar["value"] = curr
+                        lbl_status.config(text=f"Exporting... (Total: {total} | Completed: {curr})")
+                        lbl_file.config(text=f"Processing file: {file_name}")
+                    except Exception:
+                        pass
+                        
+                def on_finish(returncode, jp):
+                    if os.path.exists(jp):
+                        try:
+                            os.remove(jp)
+                        except:
+                            pass
+                    try:
+                        progress_pop.destroy()
+                    except Exception:
+                        pass
+                        
+                    if is_cancelled[0]:
+                        return
+                        
+                    if returncode == 0:
+                        messagebox.showinfo("Export Complete", "SolidWorks export process has completed successfully!")
+                        self.write_log("✅ Background export process finished successfully.", "success")
+                    else:
+                        messagebox.showerror("Export Failed", f"SolidWorks export process failed (Exit Code: {returncode})")
+                        self.write_log(f"❌ Background export process failed with exit code {returncode}.", "error")
+                
+                # Background monitoring thread
+                def monitor_thread():
+                    try:
+                        while True:
+                            line = proc.stdout.readline()
+                            if not line:
+                                break
+                            
+                            line_str = line.strip()
+                            if line_str.startswith("[PROGRESS]"):
+                                try:
+                                    # Format: [PROGRESS] curr/total : filename
+                                    parts = line_str.split(":", 1)
+                                    prog_info = parts[0].replace("[PROGRESS]", "").strip()
+                                    file_name = parts[1].strip()
+                                    curr_c, total_c = map(int, prog_info.split("/"))
+                                    
+                                    # Schedule UI update on main thread
+                                    self.after(0, lambda c=curr_c, t=total_c, fn=file_name: update_progress(c, t, fn))
+                                except Exception as e:
+                                    print(f"Error parsing progress output: {e}")
+                            else:
+                                if line_str:
+                                    self.after(0, lambda msg=line_str: self.write_log(f"SolidWorks: {msg}", "info"))
+                    except Exception as thread_e:
+                        print(f"Error in monitor thread: {thread_e}")
+                    finally:
+                        proc.wait()
+                        self.after(0, lambda: on_finish(proc.returncode, job_path))
+                        
+                # Start Thread
+                threading.Thread(target=monitor_thread, daemon=True).start()
+                
             except Exception as run_err:
                 messagebox.showerror("Error", f"Failed to start background export process: {run_err}")
                 if os.path.exists(job_path):
@@ -4116,8 +4244,6 @@ class GIT4SWApp(tk.Tk):
                     except:
                         pass
                 return
-                
-            pop.destroy()
             
         def info_action():
             filtered_files, formats = get_filtered_files_list()
@@ -4141,7 +4267,7 @@ class GIT4SWApp(tk.Tk):
             # Open INFO dialog window
             info_pop = tk.Toplevel(pop)
             info_pop.title("EXPORT Target Files Information")
-            info_pop.geometry("600x550")
+            info_pop.geometry("600x600")
             info_pop.resizable(False, False)
             info_pop.configure(bg="#f3f4f6")
             info_pop.transient(pop)
@@ -4167,23 +4293,20 @@ class GIT4SWApp(tk.Tk):
             table_card = ttk.Frame(info_pop, style="Card.TFrame")
             table_card.pack(fill="both", expand=True, padx=15, pady=5)
             
-            lbl_tbl_title = ttk.Label(table_card, text="Detailed Files List", style="TLabel", font="TkDefaultFont", background="#ffffff")
-            lbl_tbl_title.pack(anchor="w", padx=10, pady=(6, 2))
-            
-            # Scrollable Treeview
+            # Scrollable Treeview Container
             tbl_container = ttk.Frame(table_card, style="TFrame")
-            tbl_container.pack(fill="both", expand=True, padx=10, pady=(2, 10))
+            tbl_container.pack(fill="both", expand=True, padx=10, pady=(10, 5))
             
-            # Single column: path (type is removed)
-            tree = ttk.Treeview(tbl_container, columns=("path",), show="headings", selectmode="none")
+            # Two columns: path, active
+            tree = ttk.Treeview(tbl_container, columns=("path", "active"), show="headings", selectmode="extended")
             tree.heading("path", text="Relative File Path", anchor="w")
-            tree.column("path", width=480, anchor="w")
+            tree.heading("active", text="Active", anchor="center")
+            tree.column("path", width=400, anchor="w")
+            tree.column("active", width=80, anchor="center")
             
-            # Setup tags for color coding matching CustomFileTable
-            tree.tag_configure("sldprt", foreground="#059669")
-            tree.tag_configure("sldasm", foreground="#d97706")
-            tree.tag_configure("slddrw", foreground="#dc2626")
-            tree.tag_configure("default_ext", foreground="#7c3aed")
+            # Setup tags for status color coding
+            tree.tag_configure("active_on", foreground="#1d4ed8")  # Blue for On
+            tree.tag_configure("active_off", foreground="#4b5563") # Dark Gray for Off
             
             # Scrollbar
             sb = ttk.Scrollbar(tbl_container, orient="vertical", command=tree.yview)
@@ -4192,22 +4315,58 @@ class GIT4SWApp(tk.Tk):
             tree.pack(side="left", fill="both", expand=True)
             sb.pack(side="right", fill="y")
             
-            # Insert items with extension tag
+            # Ctrl+A binding for select all
+            def select_all(event):
+                tree.selection_set(tree.get_children())
+                return "break"
+            tree.bind("<Control-a>", select_all)
+            
+            # Insert items with extension tag and preserve active states
             for f in filtered_files:
-                ext_lower = os.path.splitext(f)[1].lower()
-                if ext_lower == ".sldprt":
-                    tag = "sldprt"
-                elif ext_lower == ".sldasm":
-                    tag = "sldasm"
-                elif ext_lower == ".slddrw":
-                    tag = "slddrw"
-                else:
-                    tag = "default_ext"
+                is_on = True
+                if getattr(self, "_export_active_files", None) is not None:
+                    is_on = (f in self._export_active_files)
                     
-                tree.insert("", "end", values=(f,), tags=(tag,))
+                active_str = "On" if is_on else "Off"
+                tag = "active_on" if is_on else "active_off"
+                
+                tree.insert("", "end", values=(f, active_str), tags=(tag,))
+                
+            # Control Buttons Panel (On / Off) inside the table card
+            ctrl_btn_frm = ttk.Frame(table_card, style="TFrame")
+            ctrl_btn_frm.pack(fill="x", side="bottom", padx=10, pady=(5, 10))
+            
+            def set_active_status(status):
+                selected = tree.selection()
+                if not selected:
+                    return
+                for item in selected:
+                    # Update column value
+                    tree.set(item, "active", status)
+                    # Update tags
+                    tag = "active_on" if status == "On" else "active_off"
+                    tree.item(item, tags=(tag,))
+                    
+            btn_on = ttk.Button(ctrl_btn_frm, text="On", style="Primary.TButton", command=lambda: set_active_status("On"))
+            btn_on.pack(side="left", padx=(0, 5))
+            
+            btn_off = ttk.Button(ctrl_btn_frm, text="Off", command=lambda: set_active_status("Off"))
+            btn_off.pack(side="left", padx=5)
+            
+            # Close action with caching active files
+            def save_and_close():
+                active_list = []
+                for item in tree.get_children():
+                    path_val = tree.set(item, "path")
+                    active_val = tree.set(item, "active")
+                    if active_val == "On":
+                        active_list.append(path_val)
+                self._export_active_files = active_list
+                self.write_log(f"ℹ️ Export target list adjusted in INFO: {len(active_list)} of {len(tree.get_children())} files active.", "info")
+                info_pop.destroy()
                 
             # Close button
-            btn_close = ttk.Button(info_pop, text="Close", command=info_pop.destroy)
+            btn_close = ttk.Button(info_pop, text="Close", command=save_and_close)
             btn_close.pack(pady=15)
 
         # Buttons Panel
@@ -4223,23 +4382,7 @@ class GIT4SWApp(tk.Tk):
         btn_cancel = ttk.Button(btn_frm, text="Cancel", style="TButton", command=pop.destroy)
         btn_cancel.pack(side="right", expand=True, fill="x", padx=(5, 0))
 
-    def check_export_process(self, job_path):
-        if hasattr(self, 'export_process') and self.export_process:
-            poll = self.export_process.poll()
-            if poll is None:
-                # Still running, check again in 500ms
-                self.after(500, lambda: self.check_export_process(job_path))
-            else:
-                self.export_process = None
-                # Clean up job file
-                if os.path.exists(job_path):
-                    try:
-                        os.remove(job_path)
-                    except:
-                        pass
-                # Show completed dialog
-                messagebox.showinfo("Export Complete", "Solidworks export process has completed!")
-                self.write_log("✅ Background export process finished successfully.", "success")
+
 
     @queue_during_bg_tasks
     def open_solidworks(self):
