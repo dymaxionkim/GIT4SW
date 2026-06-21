@@ -235,21 +235,43 @@ def run_single_export(file_abs, target_formats, output_dir, workspace_path, expo
             os.makedirs(dest_dir, exist_ok=True)
             
             base_filename = os.path.splitext(os.path.basename(file_abs))[0]
-            dest_file_path = os.path.join(dest_dir, base_filename + target_ext)
             
-            # Remove target file if exists
-            if os.path.exists(dest_file_path):
+            # Determine configurations list to iterate
+            configs_to_process = [None]
+            if active_fmt in ("STEP", "STEP_ASM"):
                 try:
-                    os.remove(dest_file_path)
-                except Exception as del_e:
-                    print(f"Failed to remove existing file {dest_file_path}: {del_e}")
+                    config_names = model.GetConfigurationNames()
+                    if config_names and len(config_names) >= 2:
+                        configs_to_process = config_names
+                except Exception as conf_err:
+                    print(f"Failed to get configuration names: {conf_err}")
                     
-            # Save
-            result = model.SaveAs3(dest_file_path, 0, 1)
-            if result == 0:
-                print(f"Successfully exported {file_abs} -> {dest_file_path}")
-            else:
-                print(f"Failed to save {dest_file_path} (SaveAs3 code: {result})")
+            for config_name in configs_to_process:
+                if config_name:
+                    try:
+                        print(f"Switching to configuration: {config_name} for STEP export")
+                        model.ShowConfiguration2(config_name)
+                        time.sleep(1)
+                        dest_file_path = os.path.join(dest_dir, f"{base_filename}_{config_name}{target_ext}")
+                    except Exception as show_conf_err:
+                        print(f"Failed to show configuration {config_name}: {show_conf_err}")
+                        dest_file_path = os.path.join(dest_dir, base_filename + target_ext)
+                else:
+                    dest_file_path = os.path.join(dest_dir, base_filename + target_ext)
+                    
+                # Remove target file if exists
+                if os.path.exists(dest_file_path):
+                    try:
+                        os.remove(dest_file_path)
+                    except Exception as del_e:
+                        print(f"Failed to remove existing file {dest_file_path}: {del_e}")
+                        
+                # Save
+                result = model.SaveAs3(dest_file_path, 0, 1)
+                if result == 0:
+                    print(f"Successfully exported {file_abs} -> {dest_file_path}")
+                else:
+                    print(f"Failed to save {dest_file_path} (SaveAs3 code: {result})")
                 
             # Restore settings
             if active_fmt == "PDF":

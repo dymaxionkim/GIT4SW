@@ -120,12 +120,13 @@ gantt
 
 ---
 
-### 8단계: SolidWorks Assembly BOM 자동 추출 기능 탑재 (Milestone 8 - 2026-06-21)
+### 8단계: SolidWorks Assembly BOM 자동 추출 및 STEP 설정별 분기 탑재 (Milestone 8 - 2026-06-21)
 * **BOM 자동 추출 전용 UI**:
   - EXPORT 다이얼로그 내에 "BOM Export On / Off" 선택이 가능한 라디오버튼 위젯 그룹을 추가하였습니다. (기본값 On)
   - 대상 파일 목록 중 `.sldasm` 파일이 한 개도 존재하지 않으면(혹은 Prefix 필터 통과한 sldasm 파일이 없으면) 해당 라디오버튼들이 자동으로 비활성화(Disabled)되며 Off 상태로 안전하게 락인되도록 동적 감시 메커니즘을 구현하였습니다.
-* **설정(Configuration)별 BOM 파일 분기 자동화**:
+* **설정(Configuration)별 BOM 및 STEP 파일 분기 자동화**:
   - 만약 sldasm 파일이 2개 이상의 설정(Configuration)을 가지고 있다면, 각 설정을 차례로 전환 및 대기한 후 별개의 BOM 파일을 `파일명_설정명.csv` 형태로 저장하도록 자동 분기 기능을 장착했습니다. 단일 설정일 경우 일반 `파일명.csv`로 저장됩니다.
+  - **설정별 STEP/STEP_ASM 내보내기 확장**: `.sldprt`(STEP) 및 `.sldasm`(STEP_ASM) 파일을 변환할 때 해당 모델에 2개 이상의 설정(Configuration)이 존재하면, 각 설정을 차례로 활성화한 후 원래 파일명 뒤에 `_설정명` 접미사를 붙여 개별 `.step` 파일로 각각 분리 저장하도록 로직을 고도화했습니다.
 * **사용자 정의 속성(Custom Properties) 및 수량(Quantity) 완전 추출**:
   - 어셈블리 내 모든 component들을 재귀 탐색하여 수량(Quantity)을 합산 집계하고, 각 component 파일의 전역 속성 및 설정 연동형 사용자 정의 속성(Custom Properties)을 동적으로 전수조사하여 합집합을 헤더 컬럼으로 정의한 고정밀 CSV(`utf-8-sig`) 양식을 `BOM/` 디렉토리에 자동 생성합니다.
 
