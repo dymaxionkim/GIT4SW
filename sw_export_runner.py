@@ -433,6 +433,9 @@ def run_export(job_file):
             swApp.SetUserPreferenceToggle(11, False)  # swDxfIssuingWarning
             swApp.SetUserPreferenceToggle(143, False) # swDxfMappingFileEnabled
             swApp.SetUserPreferenceToggle(15, True)   # swExtRefNoPromptOrSave (Don't prompt to save read-only referenced docs)
+            swApp.SetUserPreferenceToggle(119, False) # swShowErrorsEveryRebuild (Suppress rebuild errors dialog)
+            swApp.SetUserPreferenceIntegerValue(246, 1) # swRebuildErrorAction -> swStopContinuePrompt_Continue (Always continue on rebuild errors)
+            swApp.SetUserPreferenceToggle(249, False) # swWarnSaveUpdateErrors (Suppress save warnings on rebuild errors)
         except Exception as pref_e:
             print(f"Failed to set user preferences: {pref_e}")
 
@@ -495,7 +498,7 @@ def run_export(job_file):
             t_read.start()
             
             start_time = time.time()
-            timeout = 120.0 # 2 minutes watchdog
+            timeout = 40.0 # 40 seconds watchdog
             timed_out = False
             
             while True:
@@ -510,7 +513,7 @@ def run_export(job_file):
                     
                 if time.time() - start_time > timeout:
                     timed_out = True
-                    print(f"\n[WARNING] Watchdog Timeout: File conversion exceeded 2 minutes limit ({file_rel}). Force terminating process...", flush=True)
+                    print(f"\n[WARNING] Watchdog Timeout: File conversion exceeded 40 seconds limit ({file_rel}). Force terminating process...", flush=True)
                     proc.terminate()
                     try:
                         proc.wait(timeout=5)
@@ -540,8 +543,8 @@ def run_export(job_file):
                 try:
                     swApp = win32com.client.DispatchEx('SldWorks.Application')
                     time.sleep(5)
-                    swApp.Visible = False
-                    swApp.UserControl = False
+                    swApp.Visible = True
+                    swApp.UserControl = True
                     try:
                         if hasattr(swApp, "GetProcessID"):
                             pid_val = swApp.GetProcessID
@@ -559,6 +562,9 @@ def run_export(job_file):
                     swApp.SetUserPreferenceToggle(11, False)
                     swApp.SetUserPreferenceToggle(143, False)
                     swApp.SetUserPreferenceToggle(15, True)
+                    swApp.SetUserPreferenceToggle(119, False)
+                    swApp.SetUserPreferenceIntegerValue(246, 1)
+                    swApp.SetUserPreferenceToggle(249, False)
                 except Exception as re_e:
                     print(f"Failed to restart SolidWorks instance: {re_e}", flush=True)
                     swApp = None
