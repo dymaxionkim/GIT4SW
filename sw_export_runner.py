@@ -436,6 +436,7 @@ def run_export(job_file):
             swApp.SetUserPreferenceToggle(119, False) # swShowErrorsEveryRebuild (Suppress rebuild errors dialog)
             swApp.SetUserPreferenceIntegerValue(246, 1) # swRebuildErrorAction -> swStopContinuePrompt_Continue (Always continue on rebuild errors)
             swApp.SetUserPreferenceToggle(249, False) # swWarnSaveUpdateErrors (Suppress save warnings on rebuild errors)
+            swApp.SetUserPreferenceToggle(46, False)  # swAutoSaveEnable (Disable Auto-Save/Recovery to prevent recovery prompts)
         except Exception as pref_e:
             print(f"Failed to set user preferences: {pref_e}")
 
@@ -565,6 +566,7 @@ def run_export(job_file):
                     swApp.SetUserPreferenceToggle(119, False)
                     swApp.SetUserPreferenceIntegerValue(246, 1)
                     swApp.SetUserPreferenceToggle(249, False)
+                    swApp.SetUserPreferenceToggle(46, False)
                 except Exception as re_e:
                     print(f"Failed to restart SolidWorks instance: {re_e}", flush=True)
                     swApp = None
