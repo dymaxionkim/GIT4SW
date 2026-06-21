@@ -39,6 +39,7 @@
 * **Powerful Conflict Resolution Popup (LFS Pointer Error Response)**:
   - If a conflict occurs during Sync/Merge/Upload, a multi-selection dialog rendered with system fonts is displayed. Users can select multiple files using the mouse and Ctrl/Shift combinations to perform bulk overwrite resolution (based on Local/Remote or branch name).
   - Even in situations where `git merge` fails due to Git LFS pointer mismatches, it detects the exception, reliably brings up the conflict dialog, and handles it.
+  - **Automatic Local Backup for Conflicts**: Before prompting the user to resolve a conflict, the client automatically backs up the local conflicted files to the `.backup/` folder in the workspace root with a timestamp (`filename_YYYYMMDD_HHMMSS.ext`). This guarantees that your local modifications are never lost, even if you select the wrong resolution option.
 * **Maintainer "Make" Repository Auto-registration and Screen Transition**: In Maintainer mode, when a new repository creation (Make) is completed, it automatically registers the new local path and remote address in the Dashboard and Configuration settings and immediately transitions to the Dashboard view.
 * **Past Version Exploration and Restoration**: Displays the entire commit history as a list, allowing users to safely revert the workspace to a specific version just by double-clicking an entry (maintaining Standard Detached HEAD state). The history row for the currently checked-out version is clearly indicated with the UI theme's green text color and bold font.
 * **Git History Visualization (Graph button)**: A **[Graph]** button is provided at the far right of the Version History Log screen. Clicking it executes a separate windowed terminal (cmd) running the `git log --graph --oneline --all --decorate` command to visualize the entire branch's commit lineage as an ASCII graphic at a glance. The executed Git path automatically tracks the custom `git.exe` path configured in `config.json`.
@@ -55,6 +56,7 @@
     - **PDF Output**: Forces Black & White conversion and high-quality line output, and automatically controls printer line weight options so that pen tables (thickness, etc.) from drawing properties are accurately reflected in the output.
     - **STEP/STEP_ASM Output**: Strictly specifies the AP214 protocol standard format to ensure that the CAD file's color information (Appearances) and color texture data are fully extracted along with it.
     - **Automatic System Restoration**: Once bulk conversion is complete, it automatically and safely restores the user's original preference default values set in SolidWorks System Options, and a notification dialog is displayed to the user upon completion.
+    - **Watchdog Timeout Protection**: If SolidWorks hangs or encounters a deadlock (e.g., when loading a corrupted or heavy drawing file) for more than 2 minutes on a single file, a watchdog timer terminates the hung subprocess, kills the deadlocked SolidWorks process, spins up a fresh instance, and automatically resumes conversion from the next file in queue.
 
 ---
 
@@ -147,3 +149,8 @@ Details and examples for each configuration item are as follows:
 * If authentication fails:
   - Verify that the `github_token` in `config.json` is a valid GitHub Personal Access Token (PAT) with appropriate scopes (especially `repo` or `write` access).
   - Check your internet connection or repository permissions. Do not manually adjust your local/global Git credential helpers.
+
+#### 4.4.2 Restoring Overwritten Local Modifications
+* If you accidentally chose to resolve a conflict by selecting "Theirs" (Remote Version) and lost your local changes, you can retrieve them from the `.backup/` folder in your workspace root.
+* All original conflicted local files are copied here before the conflict prompt is shown. The files are named using the pattern `[filename]_[YYYYMMDD_HHMMSS].[ext]`.
+* Simply copy the backup file back to its original location and rename it to restore your work.

@@ -26,8 +26,10 @@ The Dashboard is the central cockpit of the application, showing repository conf
   - Opens the README.md file of your active local repository in Notepad. Once you edit and close the text editor, the client automatically runs git add, commit, and push to synchronize the file with the remote server. If the file does not exist locally, it initializes it from the template.
 • Get Latest Version (Sync) (Button)
   - Downloads and applies (pulls) the latest changes from the remote server for the active branch.
+  - **Conflict Auto-Backup**: If any merge conflicts are detected during synchronization, the client automatically backs up the original local versions of conflicted files into a `.backup/` folder in the workspace root with a timestamp (`[filename]_[timestamp].[ext]`) before showing the resolution dialog. This allows you to easily restore your local modifications if you accidentally overwrite them.
 • Merge main branch into current branch (Button)
   - Merges updates from the shared 'main' (or 'master') branch into your developer branch. It automatically commits, pushes the merged branch back to the remote server, and safely switches the workspace back to your original developer branch.
+  - Pre-merge conflict detection also triggers the same automatic local backup process to safeguard your local changes.
 • Auto Sync (Checkbox)
   - Toggles automated synchronization. When checked (ON), the application automatically executes "Get Latest Version (Sync)" followed by "Merge main branch into current branch" sequentially whenever the application starts or the workspace/repository is changed.
 • Live Monitor (Card & Status Panel)
@@ -80,11 +82,12 @@ The File Manager provides file-level checkout, checking-in, and local modificati
   - Launches a compact dialog window to perform bulk conversion of drawings (.slddrw), parts (.sldprt), and assemblies (.sldasm) to various formats (PDF, DXF, STEP, STEP_ASM).
   - Supports multi-selection of formats, custom file name prefix filters (PREFIX), and target subdirectory configurations (OUTPUT_DIR, defaults to "2D").
   - The dialog runs completely asynchronously in a separate background python process so the main client interface remains fully responsive.
-  - Inside the dialog, clicking the **INFO** button opens a details modal displaying summary counts and a color-coded relative paths list of files matching your active export rules, sorted by file extension. The window is dynamically sized (600x550) to fully display the list and "Close" button.
-  - Conversion Quality Features:
+  - Inside the dialog, clicking the **INFO** button opens a details modal displaying summary counts and a color-coded relative paths list of files matching your active export rules, sorted by file extension. The window is dynamically sized (600x600) to fully display the list and "Close" button.
+  - Conversion Quality & Safety Features:
     - Drawings saved to PDF are forced to Black & White (swPDFExportInColor set to False) with High Quality rendering, and automatically respect your SolidWorks document properties' custom line weights/pen tables (swPDFExportUseCurrentPrintLineWeights set to True).
     - Parts and Assemblies saved to STEP are forced to the AP214 standard (supporting colors) with color appearances and textures preserved (swStepExportAppearances set to True).
     - Original SolidWorks user preferences are automatically restored back to their custom values once the batch conversion finishes.
+    - **Watchdog Protection**: If a file conversion hangs or encounters a SolidWorks deadlock for more than 2 minutes, a watchdog timer kills the hung process and SolidWorks engine, launches a new instance, and automatically resumes conversion from the next file in the list.
 • Version Description (Text Box)
   - Enter a brief description (commit message) describing what changes you made to the files.
 • Upload Selected File Version (Button)
