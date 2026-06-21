@@ -4203,7 +4203,7 @@ class GIT4SWApp(tk.Tk):
                 proc = subprocess.Popen(
                     [sys.executable, "-u", runner_path, job_path],
                     stdout=subprocess.PIPE,
-                    stderr=subprocess.PIPE,
+                    stderr=subprocess.STDOUT,
                     text=True,
                     bufsize=1, # Line buffered
                     encoding="utf-8"
