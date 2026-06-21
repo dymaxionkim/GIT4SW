@@ -4084,7 +4084,7 @@ class GIT4SWApp(tk.Tk):
                     match = True
                 elif f_lower.endswith(".sldprt") and "STEP" in formats:
                     match = True
-                elif f_lower.endswith(".sldasm") and "STEP_ASM" in formats:
+                elif f_lower.endswith(".sldasm") and ("STEP_ASM" in formats or bom_var.get()):
                     match = True
                     
                 if match:
@@ -4201,7 +4201,7 @@ class GIT4SWApp(tk.Tk):
                 
                 # Run subprocess capturing stdout and stderr
                 proc = subprocess.Popen(
-                    [sys.executable, runner_path, job_path],
+                    [sys.executable, "-u", runner_path, job_path],
                     stdout=subprocess.PIPE,
                     stderr=subprocess.PIPE,
                     text=True,

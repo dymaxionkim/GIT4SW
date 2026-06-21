@@ -39,14 +39,26 @@ def run_single_export(file_abs, target_formats, output_dir, workspace_path, expo
     pythoncom.CoInitialize()
     swApp = None
     try:
-        try:
-            swApp = win32com.client.GetActiveObject("SldWorks.Application")
-        except Exception:
+        # Try to bind to active SolidWorks with retries
+        max_retries = 5
+        retry_interval = 1.0
+        for attempt in range(1, max_retries + 1):
             try:
-                swApp = win32com.client.GetObject(Class="SldWorks.Application")
-            except Exception as e2:
-                print(f"Failed to bind to active SolidWorks instance: {e2}")
-                sys.exit(1)
+                swApp = win32com.client.GetActiveObject("SldWorks.Application")
+                break
+            except Exception as e_active:
+                try:
+                    swApp = win32com.client.GetObject(Class="SldWorks.Application")
+                    break
+                except Exception as e_get:
+                    if attempt < max_retries:
+                        print(f"[{attempt}/{max_retries}] Waiting for SolidWorks to register in ROT...")
+                        time.sleep(retry_interval)
+                    else:
+                        print(f"Failed to bind to active SolidWorks instance after {max_retries} attempts. Last error: {e_get}")
+                        sys.stdout.flush()
+                        sys.stderr.flush()
+                        sys.exit(1)
                 
         f_lower = file_abs.lower()
         if f_lower.endswith(".slddrw"):
@@ -125,7 +137,11 @@ def run_single_export(file_abs, target_formats, output_dir, workspace_path, expo
             configs_to_process = [None]
             if active_fmt in ("STEP", "STEP_ASM"):
                 try:
-                    config_names = model.GetConfigurationNames()
+                    conf_val = model.GetConfigurationNames
+                    if callable(conf_val):
+                        config_names = conf_val()
+                    else:
+                        config_names = conf_val
                     if config_names and len(config_names) >= 2:
                         configs_to_process = config_names
                 except Exception as conf_err:
@@ -181,7 +197,11 @@ def run_single_export(file_abs, target_formats, output_dir, workspace_path, expo
         if f_lower.endswith(".sldasm") and export_bom:
             print(f"Starting BOM extraction for: {file_abs}")
             try:
-                config_names = model.GetConfigurationNames()
+                conf_val = model.GetConfigurationNames
+                if callable(conf_val):
+                    config_names = conf_val()
+                else:
+                    config_names = conf_val
                 file_dir = os.path.dirname(file_abs)
                 dest_dir = os.path.join(file_dir, output_dir, "BOM")
                 os.makedirs(dest_dir, exist_ok=True)
@@ -208,9 +228,12 @@ def run_single_export(file_abs, target_formats, output_dir, workspace_path, expo
                     
                     if components:
                         for comp in components:
-                            if comp.IsSuppressed():
+                            is_supp_val = comp.IsSuppressed
+                            is_supp = is_supp_val() if callable(is_supp_val) else is_supp_val
+                            if is_supp:
                                 continue
-                            path = comp.GetPathName()
+                            path_val = comp.GetPathName
+                            path = path_val() if callable(path_val) else path_val
                             if not path:
                                 continue
                             path_lower = path.lower()
@@ -223,7 +246,14 @@ def run_single_export(file_abs, target_formats, output_dir, workspace_path, expo
                     for path_lower, comp in comp_objects.items():
                         qty = comp_counts[path_lower]
                         props = {}
-                        comp_model = comp.GetModelDoc2()
+                        comp_model = None
+                        try:
+                            comp_model_val = comp.GetModelDoc2
+                            comp_model = comp_model_val() if callable(comp_model_val) else comp_model_val
+                        except Exception as doc_e:
+                            print(f"    Warning: Could not get ModelDoc2 for {os.path.basename(path_lower)}: {doc_e}")
+                        except:
+                            print(f"    Warning: COM error getting ModelDoc2 for {os.path.basename(path_lower)}")
                         if comp_model:
                             # Global
                             prop_mgr_global = comp_model.Extension.CustomPropertyManager("")
@@ -266,9 +296,15 @@ def run_single_export(file_abs, target_formats, output_dir, workspace_path, expo
                         for k in props.keys():
                             all_prop_names.add(k)
                             
+                        # Retrieve path safely or fall back to path_lower
+                        comp_path_val = comp.GetPathName
+                        comp_path = comp_path_val() if callable(comp_path_val) else comp_path_val
+                        if not comp_path:
+                            comp_path = path_lower
+                            
                         row_data = {
                             "Component Name": os.path.splitext(os.path.basename(path_lower))[0],
-                            "File Path": comp.GetPathName(),
+                            "File Path": comp_path,
                             "Quantity": qty,
                             "properties": props
                         }
@@ -290,13 +326,13 @@ def run_single_export(file_abs, target_formats, output_dir, workspace_path, expo
                         print(f"Failed to write BOM CSV {dest_csv_path}: {csv_err}")
                         
             except Exception as bom_err:
-                print(f"Error extracting BOM: {bom_err}")
+                print(f"Error extracting BOM: {repr(bom_err)}")
 
         # Close documents
         close_all_documents_without_saving(swApp)
         
     except Exception as file_e:
-        print(f"Error processing {file_abs}: {file_e}")
+        print(f"Error processing {file_abs}: {repr(file_e)}")
         if swApp:
             close_all_documents_without_saving(swApp)
         sys.exit(1)
@@ -357,6 +393,8 @@ def run_export(job_file):
         print("No matching files to export.")
         return
 
+    has_errors = False
+
     # Initialize COM
     pythoncom.CoInitialize()
     
@@ -372,13 +410,20 @@ def run_export(job_file):
         return
         
     try:
-        # Hide the UI and disable user control for true background run
-        swApp.Visible = False
-        swApp.UserControl = False
+        # Show the UI and enable user control to prevent background hangs/dialog freezes
+        swApp.Visible = True
+        swApp.UserControl = True
         
         # Get process ID
         try:
-            sw_pid = swApp.GetProcessID()
+            if hasattr(swApp, "GetProcessID"):
+                pid_val = swApp.GetProcessID
+                if callable(pid_val):
+                    sw_pid = pid_val()
+                else:
+                    sw_pid = pid_val
+            else:
+                sw_pid = None
         except Exception as pid_e:
             print(f"Could not retrieve SolidWorks PID: {pid_e}")
             sw_pid = None
@@ -433,12 +478,16 @@ def run_export(job_file):
 
             # Spawn watchdog subprocess
             export_bom_str = str(job.get("export_bom", True))
+            import os as os_env
+            env_vars = os_env.environ.copy()
+            env_vars["PYTHONIOENCODING"] = "utf-8"
             proc = subprocess.Popen(
-                [sys.executable, __file__, "--single", file_abs, ",".join(target_formats), output_dir, workspace_path, export_bom_str],
+                [sys.executable, "-u", __file__, "--single", file_abs, ",".join(target_formats), output_dir, workspace_path, export_bom_str],
                 stdout=subprocess.PIPE,
                 stderr=subprocess.STDOUT,
                 text=True,
-                encoding="utf-8"
+                encoding="utf-8",
+                env=env_vars
             )
             
             out_queue = queue.Queue()
@@ -478,6 +527,7 @@ def run_export(job_file):
                     break
                     
             if timed_out:
+                has_errors = True
                 if sw_pid:
                     try:
                         print(f"Forcefully terminating hung SolidWorks PID {sw_pid} due to timeout...", flush=True)
@@ -493,7 +543,14 @@ def run_export(job_file):
                     swApp.Visible = False
                     swApp.UserControl = False
                     try:
-                        sw_pid = swApp.GetProcessID()
+                        if hasattr(swApp, "GetProcessID"):
+                            pid_val = swApp.GetProcessID
+                            if callable(pid_val):
+                                sw_pid = pid_val()
+                            else:
+                                sw_pid = pid_val
+                        else:
+                            sw_pid = None
                     except Exception as pid_e:
                         print(f"Could not retrieve SolidWorks PID: {pid_e}", flush=True)
                         sw_pid = None
@@ -507,6 +564,9 @@ def run_export(job_file):
                     swApp = None
                     sw_pid = None
                     break
+            elif proc.returncode != 0:
+                has_errors = True
+                print(f"[ERROR] Subprocess failed for file {file_rel} with exit code {proc.returncode}.", flush=True)
 
         # Restore global warning preferences
         try:
@@ -543,6 +603,10 @@ def run_export(job_file):
                 print(f"Successfully cleaned up temporary job file: {job_file}")
         except Exception as cleanup_e:
             print(f"Failed to remove job file {job_file}: {cleanup_e}")
+            
+        if has_errors:
+            print("[ERROR] Export finished with errors. One or more files failed to convert.", flush=True)
+            sys.exit(1)
 
 if __name__ == "__main__":
     if len(sys.argv) > 1 and sys.argv[1] == "--single":
