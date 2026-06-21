@@ -57,7 +57,7 @@ def run_single_export(file_abs, target_formats, output_dir, workspace_path, expo
             open_options = 1  # swOpenDocOptions_Silent
         elif f_lower.endswith(".sldasm"):
             doc_type = 2  # swDocASSEMBLY
-            open_options = 1  # swOpenDocOptions_Silent
+            open_options = 1 | 32  # swOpenDocOptions_Silent | swOpenDocOptions_LoadModel
         else:
             print(f"Unsupported file format: {file_abs}")
             sys.exit(1)
@@ -75,7 +75,109 @@ def run_single_export(file_abs, target_formats, output_dir, workspace_path, expo
         swApp.ActivateDoc3(os.path.basename(file_abs), False, 0, act_error)
         time.sleep(1)
         
-        # BOM Export block if it is sldasm and export_bom is enabled
+        # Perform export for each target format (PDF, DXF, STEP, STEP_ASM)
+        for active_fmt in target_formats:
+            orig_pdf_color = None
+            orig_pdf_line_weights = None
+            orig_pdf_high_quality = None
+            orig_step_ap = None
+            orig_step_appearances = None
+            
+            # Prepare paths & target preferences
+            if active_fmt == "PDF":
+                format_subdir = "PDF"
+                target_ext = ".pdf"
+                try:
+                    orig_pdf_color = swApp.GetUserPreferenceToggle(323)
+                    orig_pdf_line_weights = swApp.GetUserPreferenceToggle(327)
+                    orig_pdf_high_quality = swApp.GetUserPreferenceToggle(325)
+                    
+                    swApp.SetUserPreferenceToggle(323, False)                             # Black and White
+                    swApp.SetUserPreferenceToggle(327, True)                              # Use printer line weights
+                    swApp.SetUserPreferenceToggle(325, True)                              # High quality lines
+                except Exception as pref_e:
+                    print(f"Failed to set PDF preferences: {pref_e}")
+                    
+            elif active_fmt == "DXF":
+                format_subdir = "DXF"
+                target_ext = ".dxf"
+                
+            elif active_fmt in ("STEP", "STEP_ASM"):
+                format_subdir = "STEP" if active_fmt == "STEP" else "STEP_ASM"
+                target_ext = ".step"
+                try:
+                    orig_step_ap = swApp.GetUserPreferenceIntegerValue(75)
+                    orig_step_appearances = swApp.GetUserPreferenceToggle(787)
+                    
+                    swApp.SetUserPreferenceIntegerValue(75, 214)                          # AP214
+                    swApp.SetUserPreferenceToggle(787, True)                              # Export Appearances
+                except Exception as pref_e:
+                    print(f"Failed to set STEP/STEP_ASM preferences: {pref_e}")
+
+            # Determine output directory
+            file_dir = os.path.dirname(file_abs)
+            dest_dir = os.path.join(file_dir, output_dir, format_subdir)
+            os.makedirs(dest_dir, exist_ok=True)
+            
+            base_filename = os.path.splitext(os.path.basename(file_abs))[0]
+            
+            # Determine configurations list to iterate
+            configs_to_process = [None]
+            if active_fmt in ("STEP", "STEP_ASM"):
+                try:
+                    config_names = model.GetConfigurationNames()
+                    if config_names and len(config_names) >= 2:
+                        configs_to_process = config_names
+                except Exception as conf_err:
+                    print(f"Failed to get configuration names: {conf_err}")
+                    
+            for config_name in configs_to_process:
+                if config_name:
+                    try:
+                        print(f"Switching to configuration: {config_name} for STEP export")
+                        model.ShowConfiguration2(config_name)
+                        time.sleep(1)
+                        dest_file_path = os.path.join(dest_dir, f"{base_filename}_{config_name}{target_ext}")
+                    except Exception as show_conf_err:
+                        print(f"Failed to show configuration {config_name}: {show_conf_err}")
+                        dest_file_path = os.path.join(dest_dir, base_filename + target_ext)
+                else:
+                    dest_file_path = os.path.join(dest_dir, base_filename + target_ext)
+                    
+                # Remove target file if exists
+                if os.path.exists(dest_file_path):
+                    try:
+                        os.remove(dest_file_path)
+                    except Exception as del_e:
+                        print(f"Failed to remove existing file {dest_file_path}: {del_e}")
+                        
+                # Save
+                result = model.SaveAs3(dest_file_path, 0, 1)
+                if result == 0:
+                    print(f"Successfully exported {file_abs} -> {dest_file_path}")
+                else:
+                    print(f"Failed to save {dest_file_path} (SaveAs3 code: {result})")
+                
+            # Restore settings
+            if active_fmt == "PDF":
+                try:
+                    if orig_pdf_color is not None:
+                        swApp.SetUserPreferenceToggle(323, orig_pdf_color)
+                    if orig_pdf_line_weights is not None:
+                        swApp.SetUserPreferenceToggle(327, orig_pdf_line_weights)
+                    if orig_pdf_high_quality is not None:
+                        swApp.SetUserPreferenceToggle(325, orig_pdf_high_quality)
+                except Exception as restore_e:
+                    print(f"Failed to restore PDF preferences: {restore_e}")
+            elif active_fmt in ("STEP", "STEP_ASM"):
+                try:
+                    if orig_step_ap is not None:
+                        swApp.SetUserPreferenceIntegerValue(75, orig_step_ap)
+                    if orig_step_appearances is not None:
+                        swApp.SetUserPreferenceToggle(787, orig_step_appearances)
+                except Exception as restore_e:
+                    print(f"Failed to restore STEP/STEP_ASM preferences: {restore_e}")
+        # BOM Export block if it is sldasm and export_bom is enabled (runs AFTER STEP_ASM export)
         if f_lower.endswith(".sldasm") and export_bom:
             print(f"Starting BOM extraction for: {file_abs}")
             try:
@@ -189,110 +291,7 @@ def run_single_export(file_abs, target_formats, output_dir, workspace_path, expo
                         
             except Exception as bom_err:
                 print(f"Error extracting BOM: {bom_err}")
-                
-        # Perform export for each target format
-        for active_fmt in target_formats:
-            orig_pdf_color = None
-            orig_pdf_line_weights = None
-            orig_pdf_high_quality = None
-            orig_step_ap = None
-            orig_step_appearances = None
-            
-            # Prepare paths & target preferences
-            if active_fmt == "PDF":
-                format_subdir = "PDF"
-                target_ext = ".pdf"
-                try:
-                    orig_pdf_color = swApp.GetUserPreferenceToggle(323)
-                    orig_pdf_line_weights = swApp.GetUserPreferenceToggle(327)
-                    orig_pdf_high_quality = swApp.GetUserPreferenceToggle(325)
-                    
-                    swApp.SetUserPreferenceToggle(323, False)                             # Black and White
-                    swApp.SetUserPreferenceToggle(327, True)                              # Use printer line weights
-                    swApp.SetUserPreferenceToggle(325, True)                              # High quality lines
-                except Exception as pref_e:
-                    print(f"Failed to set PDF preferences: {pref_e}")
-                    
-            elif active_fmt == "DXF":
-                format_subdir = "DXF"
-                target_ext = ".dxf"
-                
-            elif active_fmt in ("STEP", "STEP_ASM"):
-                format_subdir = "STEP" if active_fmt == "STEP" else "STEP_ASM"
-                target_ext = ".step"
-                try:
-                    orig_step_ap = swApp.GetUserPreferenceIntegerValue(75)
-                    orig_step_appearances = swApp.GetUserPreferenceToggle(787)
-                    
-                    swApp.SetUserPreferenceIntegerValue(75, 214)                          # AP214
-                    swApp.SetUserPreferenceToggle(787, True)                              # Export Appearances
-                except Exception as pref_e:
-                    print(f"Failed to set STEP/STEP_ASM preferences: {pref_e}")
 
-            # Determine output directory
-            file_dir = os.path.dirname(file_abs)
-            dest_dir = os.path.join(file_dir, output_dir, format_subdir)
-            os.makedirs(dest_dir, exist_ok=True)
-            
-            base_filename = os.path.splitext(os.path.basename(file_abs))[0]
-            
-            # Determine configurations list to iterate
-            configs_to_process = [None]
-            if active_fmt in ("STEP", "STEP_ASM"):
-                try:
-                    config_names = model.GetConfigurationNames()
-                    if config_names and len(config_names) >= 2:
-                        configs_to_process = config_names
-                except Exception as conf_err:
-                    print(f"Failed to get configuration names: {conf_err}")
-                    
-            for config_name in configs_to_process:
-                if config_name:
-                    try:
-                        print(f"Switching to configuration: {config_name} for STEP export")
-                        model.ShowConfiguration2(config_name)
-                        time.sleep(1)
-                        dest_file_path = os.path.join(dest_dir, f"{base_filename}_{config_name}{target_ext}")
-                    except Exception as show_conf_err:
-                        print(f"Failed to show configuration {config_name}: {show_conf_err}")
-                        dest_file_path = os.path.join(dest_dir, base_filename + target_ext)
-                else:
-                    dest_file_path = os.path.join(dest_dir, base_filename + target_ext)
-                    
-                # Remove target file if exists
-                if os.path.exists(dest_file_path):
-                    try:
-                        os.remove(dest_file_path)
-                    except Exception as del_e:
-                        print(f"Failed to remove existing file {dest_file_path}: {del_e}")
-                        
-                # Save
-                result = model.SaveAs3(dest_file_path, 0, 1)
-                if result == 0:
-                    print(f"Successfully exported {file_abs} -> {dest_file_path}")
-                else:
-                    print(f"Failed to save {dest_file_path} (SaveAs3 code: {result})")
-                
-            # Restore settings
-            if active_fmt == "PDF":
-                try:
-                    if orig_pdf_color is not None:
-                        swApp.SetUserPreferenceToggle(323, orig_pdf_color)
-                    if orig_pdf_line_weights is not None:
-                        swApp.SetUserPreferenceToggle(327, orig_pdf_line_weights)
-                    if orig_pdf_high_quality is not None:
-                        swApp.SetUserPreferenceToggle(325, orig_pdf_high_quality)
-                except Exception as restore_e:
-                    print(f"Failed to restore PDF preferences: {restore_e}")
-            elif active_fmt in ("STEP", "STEP_ASM"):
-                try:
-                    if orig_step_ap is not None:
-                        swApp.SetUserPreferenceIntegerValue(75, orig_step_ap)
-                    if orig_step_appearances is not None:
-                        swApp.SetUserPreferenceToggle(787, orig_step_appearances)
-                except Exception as restore_e:
-                    print(f"Failed to restore STEP/STEP_ASM preferences: {restore_e}")
-                    
         # Close documents
         close_all_documents_without_saving(swApp)
         
@@ -326,6 +325,7 @@ def run_export(job_file):
         
     # Gather matching files and mapping their target formats
     file_jobs = {}
+    is_bom_enabled = job.get("export_bom", True)
     
     for f_rel in all_files:
         base_name = os.path.basename(f_rel)
@@ -347,7 +347,7 @@ def run_export(job_file):
             if "STEP_ASM" in formats:
                 target_formats.append("STEP_ASM")
                 
-        if target_formats:
+        if target_formats or (f_lower.endswith(".sldasm") and is_bom_enabled):
             # Sort target_formats in the order of: PDF -> DXF -> STEP -> STEP_ASM
             format_order = {"PDF": 0, "DXF": 1, "STEP": 2, "STEP_ASM": 3}
             target_formats.sort(key=lambda fmt: format_order.get(fmt, 9))
