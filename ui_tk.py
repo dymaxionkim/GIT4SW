@@ -3965,8 +3965,6 @@ class GIT4SWApp(tk.Tk):
             except Exception:
                 return default_path
         return default_path
-
-    @queue_during_bg_tasks
     def open_external_viewer(self):
         files = self.get_selected_file_abs_paths()
         if not files:
@@ -3992,7 +3990,7 @@ class GIT4SWApp(tk.Tk):
         # Create toplevel popup
         pop = tk.Toplevel(self)
         pop.title("Solidworks EXPORT")
-        pop.geometry("420x370")
+        pop.geometry("420x425")
         pop.resizable(False, False)
         
         # Apply window background color matching main GUI
@@ -4023,6 +4021,17 @@ class GIT4SWApp(tk.Tk):
         
         cb_step_asm = tk.Checkbutton(lf, text="STEP_ASM (.sldasm)", variable=step_asm_var, bg="#f3f4f6", activebackground="#f3f4f6", selectcolor="#ffffff", fg="#1f2937", font="TkDefaultFont")
         cb_step_asm.pack(anchor="w", padx=15, pady=2)
+        
+        # BOM Export Option Frame
+        bom_lf = tk.LabelFrame(pop, text="BOM Options", bg="#f3f4f6", fg="#059669", font="TkDefaultFont", relief="groove")
+        bom_lf.pack(fill="x", padx=20, pady=(5, 5))
+        
+        bom_var = tk.BooleanVar(value=True)
+        rb_bom_on = tk.Radiobutton(bom_lf, text="BOM Export On", variable=bom_var, value=True, bg="#f3f4f6", activebackground="#f3f4f6", fg="#1f2937", font="TkDefaultFont", selectcolor="#ffffff")
+        rb_bom_on.pack(side="left", padx=15, pady=5)
+        
+        rb_bom_off = tk.Radiobutton(bom_lf, text="BOM Export Off", variable=bom_var, value=False, bg="#f3f4f6", activebackground="#f3f4f6", fg="#1f2937", font="TkDefaultFont", selectcolor="#ffffff")
+        rb_bom_off.pack(side="left", padx=15, pady=5)
         
         # Input Frame
         input_frm = ttk.Frame(pop, style="TFrame")
@@ -4084,12 +4093,51 @@ class GIT4SWApp(tk.Tk):
                         
             return final_list, formats
 
+        def update_bom_state(*args):
+            # Check sldasm presence in the visible list matching prefix
+            prefix_val = ent_prefix.get().strip()
+            if prefix_val == "*" or prefix_val == "":
+                prefix_val = ""
+                
+            visible_files = []
+            for item in self.tree.get_children():
+                vals = self.tree.item(item, 'values')
+                if vals:
+                    visible_files.append(vals[0])
+                    
+            has_sldasm = False
+            for f_rel in visible_files:
+                if f_rel.lower().endswith(".sldasm"):
+                    base_name = os.path.basename(f_rel)
+                    if prefix_val == "" or base_name.startswith(prefix_val):
+                        has_sldasm = True
+                        break
+                        
+            if has_sldasm:
+                rb_bom_on.configure(state="normal")
+                rb_bom_off.configure(state="normal")
+            else:
+                bom_var.set(False)
+                rb_bom_on.configure(state="disabled")
+                rb_bom_off.configure(state="disabled")
+
+        # Bind events
+        cb_pdf.configure(command=update_bom_state)
+        cb_dxf.configure(command=update_bom_state)
+        cb_step.configure(command=update_bom_state)
+        cb_step_asm.configure(command=update_bom_state)
+        ent_prefix.bind("<KeyRelease>", update_bom_state)
+        
+        # Run state update immediately
+        update_bom_state()
+        
         def start_action():
             filtered_files, formats = get_filtered_files_list()
             if getattr(self, "_export_active_files", None) is not None:
                 filtered_files = [f for f in filtered_files if f in self._export_active_files]
-            if not formats:
-                messagebox.showerror("Error", "Please select at least one format to export.")
+            if not formats and not (bom_var.get() and any(f.lower().endswith(".sldasm") for f in filtered_files)):
+                # If neither format is selected, nor BOM is selected for assembly files, show error
+                messagebox.showerror("Error", "Please select at least one format or enable BOM Export.")
                 return
                 
             if not filtered_files:
@@ -4128,6 +4176,7 @@ class GIT4SWApp(tk.Tk):
                 "formats": formats,
                 "prefix": prefix_val,
                 "output_dir": out_dir_val,
+                "export_bom": bom_var.get(),
                 "files": filtered_files
             }
             

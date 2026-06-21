@@ -31,7 +31,7 @@ def close_all_documents_without_saving(swApp):
         except Exception as fallback_e:
             print(f"Fallback manual close failed: {fallback_e}")
 
-def run_single_export(file_abs, target_formats, output_dir, workspace_path):
+def run_single_export(file_abs, target_formats, output_dir, workspace_path, export_bom):
     if not WIN32_AVAILABLE:
         print("Error: PyWin32 is not installed or not running on Windows.")
         sys.exit(1)
@@ -75,6 +75,121 @@ def run_single_export(file_abs, target_formats, output_dir, workspace_path):
         swApp.ActivateDoc3(os.path.basename(file_abs), False, 0, act_error)
         time.sleep(1)
         
+        # BOM Export block if it is sldasm and export_bom is enabled
+        if f_lower.endswith(".sldasm") and export_bom:
+            print(f"Starting BOM extraction for: {file_abs}")
+            try:
+                config_names = model.GetConfigurationNames()
+                file_dir = os.path.dirname(file_abs)
+                dest_dir = os.path.join(file_dir, output_dir, "BOM")
+                os.makedirs(dest_dir, exist_ok=True)
+                
+                base_filename = os.path.splitext(os.path.basename(file_abs))[0]
+                configurations_to_run = config_names if (config_names and len(config_names) >= 2) else [None]
+                
+                for config_name in configurations_to_run:
+                    if config_name:
+                        print(f"Switching to configuration: {config_name}")
+                        model.ShowConfiguration2(config_name)
+                        time.sleep(1)
+                        csv_filename = f"{base_filename}_{config_name}.csv"
+                    else:
+                        csv_filename = f"{base_filename}.csv"
+                        
+                    dest_csv_path = os.path.join(dest_dir, csv_filename)
+                    
+                    assembly = model
+                    components = assembly.GetComponents(False)
+                    
+                    comp_counts = {}
+                    comp_objects = {}
+                    
+                    if components:
+                        for comp in components:
+                            if comp.IsSuppressed():
+                                continue
+                            path = comp.GetPathName()
+                            if not path:
+                                continue
+                            path_lower = path.lower()
+                            comp_counts[path_lower] = comp_counts.get(path_lower, 0) + 1
+                            comp_objects[path_lower] = comp
+                            
+                    all_prop_names = set()
+                    bom_rows = []
+                    
+                    for path_lower, comp in comp_objects.items():
+                        qty = comp_counts[path_lower]
+                        props = {}
+                        comp_model = comp.GetModelDoc2()
+                        if comp_model:
+                            # Global
+                            prop_mgr_global = comp_model.Extension.CustomPropertyManager("")
+                            names_global = prop_mgr_global.GetNames()
+                            if names_global:
+                                for name in names_global:
+                                    val_out = win32com.client.VARIANT(pythoncom.VT_BYREF | pythoncom.VT_BSTR, "")
+                                    res_out = win32com.client.VARIANT(pythoncom.VT_BYREF | pythoncom.VT_BSTR, "")
+                                    was_resolved = win32com.client.VARIANT(pythoncom.VT_BYREF | pythoncom.VT_BOOL, False)
+                                    try:
+                                        prop_mgr_global.Get5(name, False, val_out, res_out, was_resolved)
+                                        props[name] = res_out.value
+                                    except:
+                                        try:
+                                            prop_mgr_global.Get6(name, False, val_out, res_out, was_resolved)
+                                            props[name] = res_out.value
+                                        except:
+                                            pass
+                                            
+                            # Configuration-specific
+                            ref_config = comp.ReferencedConfiguration
+                            if ref_config:
+                                prop_mgr_config = comp_model.Extension.CustomPropertyManager(ref_config)
+                                names_config = prop_mgr_config.GetNames()
+                                if names_config:
+                                    for name in names_config:
+                                        val_out = win32com.client.VARIANT(pythoncom.VT_BYREF | pythoncom.VT_BSTR, "")
+                                        res_out = win32com.client.VARIANT(pythoncom.VT_BYREF | pythoncom.VT_BSTR, "")
+                                        was_resolved = win32com.client.VARIANT(pythoncom.VT_BYREF | pythoncom.VT_BOOL, False)
+                                        try:
+                                            prop_mgr_config.Get5(name, False, val_out, res_out, was_resolved)
+                                            props[name] = res_out.value
+                                        except:
+                                            try:
+                                                prop_mgr_config.Get6(name, False, val_out, res_out, was_resolved)
+                                                props[name] = res_out.value
+                                            except:
+                                                pass
+                                                
+                        for k in props.keys():
+                            all_prop_names.add(k)
+                            
+                        row_data = {
+                            "Component Name": os.path.splitext(os.path.basename(path_lower))[0],
+                            "File Path": comp.GetPathName(),
+                            "Quantity": qty,
+                            "properties": props
+                        }
+                        bom_rows.append(row_data)
+                        
+                    import csv
+                    headers = ["Component Name", "File Path", "Quantity"] + sorted(list(all_prop_names))
+                    try:
+                        with open(dest_csv_path, "w", newline="", encoding="utf-8-sig") as csvfile:
+                            writer = csv.writer(csvfile)
+                            writer.writerow(headers)
+                            for row in bom_rows:
+                                line = [row["Component Name"], row["File Path"], row["Quantity"]]
+                                for prop in headers[3:]:
+                                    line.append(row["properties"].get(prop, ""))
+                                writer.writerow(line)
+                        print(f"Successfully generated BOM: {dest_csv_path}")
+                    except Exception as csv_err:
+                        print(f"Failed to write BOM CSV {dest_csv_path}: {csv_err}")
+                        
+            except Exception as bom_err:
+                print(f"Error extracting BOM: {bom_err}")
+                
         # Perform export for each target format
         for active_fmt in target_formats:
             orig_pdf_color = None
@@ -295,8 +410,9 @@ def run_export(job_file):
                     pipe.close()
 
             # Spawn watchdog subprocess
+            export_bom_str = str(job.get("export_bom", True))
             proc = subprocess.Popen(
-                [sys.executable, __file__, "--single", file_abs, ",".join(target_formats), output_dir, workspace_path],
+                [sys.executable, __file__, "--single", file_abs, ",".join(target_formats), output_dir, workspace_path, export_bom_str],
                 stdout=subprocess.PIPE,
                 stderr=subprocess.STDOUT,
                 text=True,
@@ -408,15 +524,18 @@ def run_export(job_file):
 
 if __name__ == "__main__":
     if len(sys.argv) > 1 and sys.argv[1] == "--single":
-        if len(sys.argv) < 6:
+        if len(sys.argv) < 7:
             print("Error: Missing arguments for --single mode")
             sys.exit(1)
         file_abs = sys.argv[2]
         formats_str = sys.argv[3]
         output_dir = sys.argv[4]
         workspace_path = sys.argv[5]
+        export_bom_val = sys.argv[6].lower() == "true"
         target_formats = formats_str.split(",")
-        run_single_export(file_abs, target_formats, output_dir, workspace_path)
+        if target_formats == [""]:
+            target_formats = []
+        run_single_export(file_abs, target_formats, output_dir, workspace_path, export_bom_val)
     else:
         if len(sys.argv) < 2:
             print("Usage: python sw_export_runner.py <job_file_path>")
