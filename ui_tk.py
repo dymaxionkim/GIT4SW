@@ -2639,7 +2639,40 @@ class GIT4SWApp(tk.Tk):
         else:
             shutil.copy2(src, dest)
 
+    def backup_conflicted_files(self, conflicted_files):
+        import datetime
+        import shutil
+        workspace_path = getattr(self.git_service, 'workspace_path', None)
+        if not workspace_path:
+            return
+            
+        backup_root = os.path.join(workspace_path, ".backup")
+        try:
+            os.makedirs(backup_root, exist_ok=True)
+        except Exception as e:
+            self.write_log(f"⚠️ Failed to create backup directory: {e}", "warning")
+            return
+            
+        timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+        
+        for f_rel in conflicted_files:
+            src_path = os.path.normpath(os.path.join(workspace_path, f_rel))
+            if not os.path.exists(src_path):
+                continue
+                
+            # backup filename format: base_filename_YYYYMMDD_HHMMSS.ext
+            base_name, ext = os.path.splitext(os.path.basename(f_rel))
+            backup_name = f"{base_name}_{timestamp}{ext}"
+            dest_path = os.path.join(backup_root, backup_name)
+            
+            try:
+                shutil.copy2(src_path, dest_path)
+                self.write_log(f"💾 Auto-saved conflict backup: {f_rel} -> .backup/{backup_name}", "info")
+            except Exception as copy_e:
+                self.write_log(f"⚠️ Failed to backup {f_rel}: {copy_e}", "warning")
+
     def _prompt_resolve_conflict(self, filename, branch_name):
+        self.backup_conflicted_files([filename])
         res_queue = queue.Queue()
         def ask():
             from tkinter import messagebox
@@ -2660,6 +2693,7 @@ class GIT4SWApp(tk.Tk):
         return res_queue.get()
 
     def prompt_multi_conflict_resolution(self, conflicted_files, ours_branch=None, theirs_branch=None, is_pull=False):
+        self.backup_conflicted_files(conflicted_files)
         res_queue = queue.Queue()
         def ask():
             dialog = MultiConflictResolutionDialog(self, conflicted_files, ours_branch, theirs_branch, is_pull)

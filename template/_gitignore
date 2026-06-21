@@ -40,3 +40,4 @@ STP_ASM/
 BOM/
 build/
 CAE/
+.backup/
