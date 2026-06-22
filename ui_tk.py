@@ -5341,31 +5341,102 @@ finally:
         def run():
             self.increment_tasks()
             try:
-                # Pre-clear read-only attribute on disk for all files locked by us in the repository.
-                # This ensures that when opening an assembly, SolidWorks loads referenced parts/sub-assemblies
-                # locked by us in read-write mode rather than read-only.
+                # 1. Fetch remote locks to adjust local file write permissions for ALL files locked by us/others in the repo.
+                locks = {}
                 if self.git_service.is_git_repo():
                     try:
                         self.write_log("Analyzing LFS locks to adjust local file write permissions...", "info")
                         locks = self.git_service.get_lfs_locks()
+                        
                         import stat
                         cleared_count = 0
+                        marked_ro_count = 0
                         for rel_path, lock_info in locks.items():
-                            if lock_info.get('is_ours'):
-                                abs_path = os.path.abspath(os.path.join(self.git_service.repo_path, rel_path))
-                                if os.path.exists(abs_path):
-                                    try:
-                                        mode = os.stat(abs_path).st_mode
-                                        os.chmod(abs_path, mode | stat.S_IWRITE)
-                                        cleared_count += 1
-                                    except Exception as ce:
-                                        print(f"Failed to clear read-only on locked file '{abs_path}': {ce}")
+                            abs_path = os.path.abspath(os.path.join(self.git_service.repo_path, rel_path))
+                            if os.path.exists(abs_path):
+                                try:
+                                    mode = os.stat(abs_path).st_mode
+                                    if lock_info.get('is_ours'):
+                                        if not (mode & stat.S_IWRITE):
+                                            os.chmod(abs_path, mode | stat.S_IWRITE)
+                                            cleared_count += 1
+                                    else:
+                                        if (mode & stat.S_IWRITE):
+                                            os.chmod(abs_path, mode & ~stat.S_IWRITE)
+                                            marked_ro_count += 1
+                                except Exception as ce:
+                                    print(f"Failed to adjust attributes on lock file '{abs_path}': {ce}")
+                        
+                        log_msg = []
                         if cleared_count > 0:
-                            self.write_log(f"Cleared read-only attribute for {cleared_count} locked files belonging to you.", "success")
+                            log_msg.append(f"cleared read-only on {cleared_count} of your locked files")
+                        if marked_ro_count > 0:
+                            log_msg.append(f"marked {marked_ro_count} files locked by others as read-only")
+                        
+                        if log_msg:
+                            self.write_log("Synced file permissions: " + ", ".join(log_msg) + ".", "success")
                         else:
-                            self.write_log("No locked files belonging to you needed write-permission adjustments.", "info")
+                            self.write_log("No repository files needed write-permission adjustments.", "info")
                     except Exception as le:
                         self.write_log(f"Failed to check locks and adjust attributes: {le}", "error")
+
+                # Normalize locks keys to lowercase with forward slashes
+                locks_lower = {}
+                if self.git_service.is_git_repo():
+                    try:
+                        locks_lower = {k.lower().replace('\\', '/'): v for k, v in locks.items()}
+                    except Exception:
+                        pass
+
+                # Determine open options and disk attribute for each file
+                file_open_settings = {}
+                import stat
+                
+                for file in files:
+                    abs_file_path = os.path.abspath(file)
+                    file_rel = os.path.relpath(abs_file_path, self.git_service.repo_path).replace('\\', '/').lower()
+                    
+                    is_ours = False
+                    if not self.git_service.is_git_repo():
+                        is_ours = True
+                    else:
+                        if file_rel in locks_lower:
+                            is_ours = locks_lower[file_rel].get('is_ours', False)
+                        else:
+                            # Try to lock it
+                            try:
+                                self.write_log(f"Attempting to lock '{os.path.basename(file)}'...", "info")
+                                self.git_service.lock_file(file)
+                                is_ours = True
+                                locks_lower[file_rel] = {'is_ours': True, 'owner': 'me'}
+                                self.write_log(f"Successfully locked '{os.path.basename(file)}'.", "success")
+                            except Exception as le:
+                                self.write_log(f"Failed to lock '{os.path.basename(file)}' (will open as Read-Only): {le}", "warning")
+                                is_ours = False
+                    
+                    # Set appropriate permissions on disk and record target open options
+                    if is_ours:
+                        try:
+                            if os.path.exists(abs_file_path):
+                                mode = os.stat(abs_file_path).st_mode
+                                os.chmod(abs_file_path, mode | stat.S_IWRITE)
+                        except Exception as chmod_e:
+                            print(f"Failed to clear read-only on '{abs_file_path}': {chmod_e}")
+                        file_open_settings[abs_file_path] = {
+                            'options': 1,  # swOpenDocOptions_Silent (read-write)
+                            'is_ours': True
+                        }
+                    else:
+                        try:
+                            if os.path.exists(abs_file_path):
+                                mode = os.stat(abs_file_path).st_mode
+                                os.chmod(abs_file_path, mode & ~stat.S_IWRITE)
+                        except Exception as chmod_e:
+                            print(f"Failed to set read-only on '{abs_file_path}': {chmod_e}")
+                        file_open_settings[abs_file_path] = {
+                            'options': 1 | 2,  # swOpenDocOptions_Silent | swOpenDocOptions_ReadOnly
+                            'is_ours': False
+                        }
 
                 # 1. Try to connect to an existing SolidWorks instance
                 sw_app = self.sw_service._get_sw_app()
@@ -5390,31 +5461,20 @@ finally:
                             doc_type = 3
                             
                         try:
-                            # Pre-lock file to get write permission and register remote lock
-                            if self.git_service.is_git_repo():
-                                try:
-                                    self.git_service.lock_file(file)
-                                except Exception as le:
-                                    print(f"Pre-locking file '{file}' failed: {le}")
+                            settings = file_open_settings.get(abs_file_path, {'options': 1, 'is_ours': True})
+                            open_opt = settings['options']
+                            is_ours_lock = settings['is_ours']
                             
-                            # Force remove read-only attribute on disk to guarantee it opens read-write
-                            import stat
-                            try:
-                                if os.path.exists(abs_file_path):
-                                    mode = os.stat(abs_file_path).st_mode
-                                    os.chmod(abs_file_path, mode | stat.S_IWRITE)
-                            except Exception as chmod_e:
-                                print(f"Failed to clear read-only attribute on '{abs_file_path}': {chmod_e}")
-                            
-                            # Open Doc (Options: 1 = swOpenDocOptions_Silent)
-                            doc = sw_app.OpenDoc6(abs_file_path, doc_type, 1, "", errors_ref, warnings_ref)
+                            # Open Doc
+                            doc = sw_app.OpenDoc6(abs_file_path, doc_type, open_opt, "", errors_ref, warnings_ref)
                             if doc:
                                 try:
                                     title = self.sw_service._call_com_method(doc, 'GetTitle')
                                     # Option: 2 = swUserDecision
                                     self.sw_service._call_com_method(sw_app, 'ActivateDoc3', title, True, 2, errors_ref)
-                                  # Add to active locked files set in UI to track local status
-                                    self.files_locked_by_us.add(abs_file_path.lower())
+                                    if is_ours_lock:
+                                        # Add to active locked files set in UI to track local status
+                                        self.files_locked_by_us.add(abs_file_path.lower())
                                 except Exception as ae:
                                     print(f"Failed to activate document: {ae}")
                                 self.task_queue.put(('success', f"Opened '{os.path.basename(file)}' in the running SolidWorks.", None))
@@ -5431,26 +5491,13 @@ finally:
                     import subprocess
                     for file in files:
                         abs_file_path = os.path.abspath(file)
+                        settings = file_open_settings.get(abs_file_path, {'options': 1, 'is_ours': True})
+                        is_ours_lock = settings['is_ours']
                         
-                        # Pre-lock file to get write permission and register remote lock
-                        if self.git_service.is_git_repo():
-                            try:
-                                self.git_service.lock_file(file)
-                            except Exception as le:
-                                print(f"Pre-locking file '{file}' failed: {le}")
-                        
-                        # Force remove read-only attribute on disk
-                        import stat
-                        try:
-                            if os.path.exists(abs_file_path):
-                                mode = os.stat(abs_file_path).st_mode
-                                os.chmod(abs_file_path, mode | stat.S_IWRITE)
-                        except Exception as chmod_e:
-                            print(f"Failed to clear read-only attribute on '{abs_file_path}': {chmod_e}")
-                            
                         try:
                             subprocess.Popen([path, abs_file_path])
-                            self.files_locked_by_us.add(abs_file_path.lower())
+                            if is_ours_lock:
+                                self.files_locked_by_us.add(abs_file_path.lower())
                         except Exception as e:
                             errors.append(f"Failed to open {os.path.basename(file)} in SolidWorks: {e}")
                     if errors:
@@ -5459,26 +5506,13 @@ finally:
                     errors = []
                     for file in files:
                         abs_file_path = os.path.abspath(file)
+                        settings = file_open_settings.get(abs_file_path, {'options': 1, 'is_ours': True})
+                        is_ours_lock = settings['is_ours']
                         
-                        # Pre-lock file to get write permission and register remote lock
-                        if self.git_service.is_git_repo():
-                            try:
-                                self.git_service.lock_file(file)
-                            except Exception as le:
-                                print(f"Pre-locking file '{file}' failed: {le}")
-                        
-                        # Force remove read-only attribute on disk
-                        import stat
-                        try:
-                            if os.path.exists(abs_file_path):
-                                mode = os.stat(abs_file_path).st_mode
-                                os.chmod(abs_file_path, mode | stat.S_IWRITE)
-                        except Exception as chmod_e:
-                            print(f"Failed to clear read-only attribute on '{abs_file_path}': {chmod_e}")
-                            
                         try:
                             os.startfile(abs_file_path)
-                            self.files_locked_by_us.add(abs_file_path.lower())
+                            if is_ours_lock:
+                                self.files_locked_by_us.add(abs_file_path.lower())
                         except Exception as e:
                             errors.append(f"Failed to open {os.path.basename(file)} in SolidWorks: {e}")
                     if errors:

@@ -143,9 +143,9 @@ def main():
         # Load SolidWorks early-bound typelibs
         load_sw_typelib()
 
-        # Open document silently (swOpenDocOptions_Silent = 1)
+        # Open document silently and read-only (swOpenDocOptions_Silent = 1, swOpenDocOptions_ReadOnly = 2)
         doc_type = 2 # swDocASSEMBLY
-        options = 1 
+        options = 1 | 2 
         error = win32com.client.VARIANT(pythoncom.VT_BYREF | pythoncom.VT_I4, 0)
         warning = win32com.client.VARIANT(pythoncom.VT_BYREF | pythoncom.VT_I4, 0)
 
