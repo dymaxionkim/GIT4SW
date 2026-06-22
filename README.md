@@ -54,9 +54,10 @@
   - **Safe Non-stop Background Operation**: When the Start button is clicked in the popup, an independent SolidWorks conversion sub-process runs in the background, allowing the main program UI to be used continuously without interruption during the conversion process.
   - **Precise CAD Conversion Quality Control**:
     - **PDF Output**: Forces Black & White conversion and high-quality line output, and automatically controls printer line weight options so that pen tables (thickness, etc.) from drawing properties are accurately reflected in the output.
-    - **STEP/STEP_ASM Output**: Strictly specifies the AP214 protocol standard format to ensure that the CAD file's color information (Appearances) and color texture data are fully extracted along with it.
+    - **STEP/STEP_ASM Output**: Strictly specifies the AP214 protocol standard format to ensure that the CAD file's color information (Appearances) and color texture data are fully extracted along with it. Files with 2 or more Configurations automatically generate separate STEP files per configuration.
     - **Automatic System Restoration**: Once bulk conversion is complete, it automatically and safely restores the user's original preference default values set in SolidWorks System Options, and a notification dialog is displayed to the user upon completion.
-    - **Watchdog Timeout Protection**: If SolidWorks hangs or encounters a deadlock (e.g., when loading a corrupted or heavy drawing file) for more than 2 minutes on a single file, a watchdog timer terminates the hung subprocess, kills the deadlocked SolidWorks process, spins up a fresh instance, and automatically resumes conversion from the next file in queue.
+    - **Accurate Progress Count**: The Completed counter increments by exactly 1 per target CAD file (not per STEP output file), ensuring correct progress display even for files with multiple Configurations.
+    - **Watchdog Timeout Protection**: If SolidWorks hangs or encounters a deadlock (e.g., when loading a corrupted or heavy drawing file) for more than 3 minutes on a single file, a watchdog timer terminates the hung subprocess, kills the deadlocked SolidWorks process, spins up a fresh instance, and automatically resumes conversion from the next file in queue.
 
 ---
 

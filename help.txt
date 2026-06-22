@@ -85,9 +85,10 @@ The File Manager provides file-level checkout, checking-in, and local modificati
   - Inside the dialog, clicking the **INFO** button opens a details modal displaying summary counts and a color-coded relative paths list of files matching your active export rules, sorted by file extension. The window is dynamically sized (600x600) to fully display the list and "Close" button.
   - Conversion Quality & Safety Features:
     - Drawings saved to PDF are forced to Black & White (swPDFExportInColor set to False) with High Quality rendering, and automatically respect your SolidWorks document properties' custom line weights/pen tables (swPDFExportUseCurrentPrintLineWeights set to True).
-    - Parts and Assemblies saved to STEP are forced to the AP214 standard (supporting colors) with color appearances and textures preserved (swStepExportAppearances set to True).
+    - Parts and Assemblies saved to STEP are forced to the AP214 standard (supporting colors) with color appearances and textures preserved (swStepExportAppearances set to True). If a model has 2 or more Configurations, a separate STEP file is automatically generated for each configuration (e.g., filename_ConfigName.step).
     - Original SolidWorks user preferences are automatically restored back to their custom values once the batch conversion finishes.
-    - **Watchdog Protection**: If a file conversion hangs or encounters a SolidWorks deadlock for more than 2 minutes, a watchdog timer kills the hung process and SolidWorks engine, launches a new instance, and automatically resumes conversion from the next file in the list.
+    - **Accurate Progress Count**: The "Completed" counter increments by exactly 1 per processed CAD source file — not per generated STEP output or Configuration — ensuring an accurate count even for models with multiple configurations.
+    - **Watchdog Protection**: If a file conversion hangs or encounters a SolidWorks deadlock for more than 3 minutes (180 seconds), a watchdog timer kills the hung process and SolidWorks engine, launches a new instance, and automatically resumes conversion from the next file in the list. If SolidWorks fails to restart after a timeout, the loop continues attempting the remaining files (it does NOT abort early).
 • Version Description (Text Box)
   - Enter a brief description (commit message) describing what changes you made to the files.
 • Upload Selected File Version (Button)
