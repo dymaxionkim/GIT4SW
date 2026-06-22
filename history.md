@@ -122,6 +122,10 @@ gantt
 * **EXPORT 루프 조기 중단 버그 수정** (핵심):
   - **문제**: Watchdog 타임아웃이 발생한 후 SolidWorks 재시작도 실패하면, `break`로 인해 루프 전체가 종료되어 나머지 파일들이 처리되지 않는 현상이 있었습니다.
   - **수정**: `break`를 `continue`로 변경하였습니다. 자식 서브프로세스는 SolidWorks에 독립적으로 연결하므로 부모의 `swApp` 핸들이 없어도 나머지 파일들의 변환을 계속 시도할 수 있습니다.
+* **EXPORT 안정성 추가 개선 및 COM 교착 방지 / 한글 인코딩 오류 차단** (핵심):
+  - **COM 참조 카운트 정리 및 GC 강제 실행**: 솔리드웍스 문서 닫기(`CloseDoc`) 호출 직전, Python 메모리상에 상주해있던 `ModelDoc2` 객체 및 문서 목록 배열 등의 COM 참조 변수들을 모두 `None`으로 소거하고 `gc.collect()` 및 `CoCollectFreeUnusedLibraries()`를 강제 호출하여 reference lock을 해제함으로써, SolidWorks 내부적으로 교착 상태(Deadlock)나 파일 닫기 실패 현상을 완벽하게 방지하도록 아키텍처를 개선했습니다.
+  - **`CloseDoc` 호출 인자 값 정상화**: 기존에 absolute file path(절대 경로)로 넘겨 오동작하던 `CloseDoc` API의 인자를 `model.GetTitle()`에서 얻은 문서 제목(Title/Name)으로 보정하여 문서가 실제로 닫히도록 수정했습니다.
+  - **한글 인코딩 및 스트림 차단 오류 수정**: 윈도우 OS 환경에서 도면/설정명에 한글(예: `기본`)이 포함된 경우, 자식 프로세스가 출력하는 UTF-8 스트림과 부모 및 UI 간의 인코딩 불일치로 인해 발생하던 `UnicodeDecodeError` 및 `UnicodeEncodeError` 현상을 차단하기 위해 `sys.stdout`/`sys.stderr` 스트림 인코딩을 동적으로 `utf-8`(`errors="replace"`)로 재설정하고, `subprocess.Popen` 호출에 `PYTHONIOENCODING="utf-8"` 환경 변수 주입 및 `errors="replace"`를 추가하여 UI 프로그레스 감시 스레드가 깨지지 않도록 해결했습니다.
 
 ---
 
@@ -136,6 +140,8 @@ gantt
 | **파일 세부 제어** | 전체 파일 대상 무조건 변환 진행 | INFO 팝업 내 개별 파일 Active On/Off 필터 제공 | 원하지 않는 파일의 무분별한 파일 변환 방지 및 선택적 저장 |
 | **EXPORT 진행률 카운트** | enumerate 인덱스/STEP 파일 수 기준 | CAD 파일 1개당 정확히 1 증가 (processed_count) | 다중 Configuration 파일 처리 시 정확한 진행률 표시 |
 | **EXPORT 루프 내구성** | 타임아웃+재시작 실패 시 break로 전체 중단 | continue로 변경하여 나머지 파일 계속 처리 | 일부 파일 장애가 전체 배치 처리를 멈추지 않음 |
+| **EXPORT 진행 갱신** | 한글 설정명(예: `기본`) 출력 시 UI 스레드 디코드 에러 크래시 | UTF-8 강제 재설정 + errors="replace" 스트림 처리 | 한글/특수문자 포함 도면명/설정명에서도 UI 프리징 및 크래시 완전 차단 |
+| **EXPORT 문서 닫기** | COM 참조 누수로 인한 CloseDoc 데드락 및 절대경로 오전달로 인한 미닫힘 | GetTitle()로 대상 지정 + 문서 객체 변수 해제 & 가비지 컬렉션(GC) 선행 호출 | 백그라운드 SolidWorks의 리소스 락 해제 및 안정적인 메모리 정리 |
 
 ---
 

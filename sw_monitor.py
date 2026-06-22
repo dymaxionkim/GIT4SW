@@ -1,6 +1,15 @@
 import os
 import sys
 
+# Enforce UTF-8 output streams with replacement errors to prevent encoding crashes on Windows
+if hasattr(sys.stdout, 'reconfigure'):
+    try:
+        sys.stdout.reconfigure(encoding='utf-8', errors='replace')
+        sys.stderr.reconfigure(encoding='utf-8', errors='replace')
+    except Exception:
+        pass
+
+
 try:
     import win32com.client
     import pythoncom
@@ -181,93 +190,149 @@ class SolidWorksMonitorService:
             import time
             time.sleep(0.2)
 
-            # Step 1: Close the main target document using QuitDoc FIRST.
-            # This releases the active document lock and parent-child reference links.
-            title = target_doc['title']
-            sw.QuitDoc(title)
-            base_title, _ = os.path.splitext(title)
-            if base_title != title:
-                sw.QuitDoc(base_title)
-
-            # Allow SolidWorks to settle and release COM reference locks
-            time.sleep(0.3)
-
-            # Step 2: Clean up all REMAINING open documents (referenced/linked assemblies and skeletons)
-            # using a dependency-aware iterative cleanup loop to avoid reference prompts.
+            orig_user_control = True
             try:
-                iteration = 0
-                last_doc_count = -1
-                stuck_count = 0
+                orig_user_control = sw.UserControl
+                sw.UserControl = False
+                print(f"check_and_close_file: Set UserControl to False (was {orig_user_control})")
+            except Exception as uc_err:
+                print(f"check_and_close_file: Failed to set UserControl to False: {uc_err}")
+
+            try:
+                # Step 1: Close the main target document using CloseDoc FIRST.
+                # This releases the active document lock and parent-child reference links.
+                title_to_close = target_doc.get('title')
+                if not title_to_close:
+                    title_to_close = os.path.basename(abs_target_path)
                 
-                while iteration < 10:  # Try up to 10 passes to resolve nested references
-                    all_docs = self._call_com_method(sw, 'GetDocuments')
-                    if not all_docs:
-                        break
+                # Release target document COM object references before CloseDoc
+                doc_obj = None
+                target_doc = None
+                open_docs = None
+                import gc
+                gc.collect()
+                try:
+                    pythoncom.CoCollectFreeUnusedLibraries()
+                except:
+                    pass
+                
+                print(f"check_and_close_file: closing main document '{title_to_close}' (path: '{abs_target_path}') via CloseDoc")
+                sw.CloseDoc(title_to_close)
+
+                # Allow SolidWorks to settle and release COM reference locks
+                time.sleep(0.3)
+
+                # Step 2: Clean up all REMAINING open documents (referenced/linked assemblies and skeletons)
+                # using a dependency-aware iterative cleanup loop to avoid reference prompts.
+                try:
+                    iteration = 0
+                    last_doc_count = -1
+                    stuck_count = 0
                     
-                    current_count = len(all_docs)
-                    if current_count == last_doc_count:
-                        stuck_count += 1
-                        if stuck_count > 2:
+                    while iteration < 10:  # Try up to 10 passes to resolve nested references
+                        all_docs = self._call_com_method(sw, 'GetDocuments')
+                        if not all_docs:
                             break
-                    else:
-                        stuck_count = 0
-                    last_doc_count = current_count
-                    
-                    parent_docs = []  # assemblies and drawings
-                    child_docs = []   # parts
-                    
-                    for d in all_docs:
-                        try:
-                            d_title = self._call_com_method(d, 'GetTitle')
-                            if not d_title:
-                                continue
-                            try:
-                                dtype = d.GetType()
-                            except Exception:
-                                dtype = getattr(d, 'GetType')
-                                if callable(dtype):
-                                    dtype = dtype()
-                                    
-                            title_lower = d_title.lower()
-                            if dtype in (2, 3) or title_lower.endswith(".sldasm") or title_lower.endswith(".slddrw"):
-                                parent_docs.append((d, d_title))
-                            else:
-                                child_docs.append((d, d_title))
-                        except Exception:
-                            pass
-                    
-                    closed_any = False
-                    # Close parents first to release references on children
-                    for d, d_title in parent_docs:
-                        try:
-                            sw.QuitDoc(d_title)
-                            base_d_title, _ = os.path.splitext(d_title)
-                            if base_d_title != d_title:
-                                sw.QuitDoc(base_d_title)
-                            closed_any = True
-                        except Exception:
-                            pass
-                            
-                    if closed_any:
-                        time.sleep(0.1)
                         
-                    # Close children
-                    for d, d_title in child_docs:
+                        current_count = len(all_docs)
+                        if current_count == last_doc_count:
+                            stuck_count += 1
+                            if stuck_count > 2:
+                                break
+                        else:
+                            stuck_count = 0
+                        last_doc_count = current_count
+                        
+                        parent_titles = []  # list of title
+                        child_titles = []   # list of title
+                        
+                        for d in all_docs:
+                            try:
+                                try:
+                                    path = self._call_com_method(d, 'GetPathName')
+                                except Exception:
+                                    path = getattr(d, 'GetPathName')
+                                    if callable(path):
+                                        path = path()
+                                        
+                                try:
+                                    title = self._call_com_method(d, 'GetTitle')
+                                except Exception:
+                                    title = getattr(d, 'GetTitle')
+                                    if callable(title):
+                                        title = title()
+                                        
+                                if not title:
+                                    title = path
+                                    
+                                if not title:
+                                    continue
+                                    
+                                try:
+                                    dtype = d.GetType()
+                                except Exception:
+                                    dtype = getattr(d, 'GetType')
+                                    if callable(dtype):
+                                        dtype = dtype()
+                                        
+                                path_lower = (path or "").lower()
+                                title_lower = (title or "").lower()
+                                is_parent = (dtype in (2, 3) or 
+                                             path_lower.endswith(".sldasm") or 
+                                             path_lower.endswith(".slddrw") or
+                                             title_lower.endswith(".sldasm") or
+                                             title_lower.endswith(".slddrw"))
+                                             
+                                if is_parent:
+                                    parent_titles.append(title)
+                                else:
+                                    child_titles.append(title)
+                            except Exception:
+                                pass
+                        
+                        # Clear COM document references for cleanup loop
+                        all_docs = None
+                        d = None
+                        gc.collect()
                         try:
-                            sw.QuitDoc(d_title)
-                            base_d_title, _ = os.path.splitext(d_title)
-                            if base_d_title != d_title:
-                                sw.QuitDoc(base_d_title)
-                            closed_any = True
-                        except Exception:
+                            pythoncom.CoCollectFreeUnusedLibraries()
+                        except:
                             pass
+                        
+                        closed_any = False
+                        # Close parents first to release references on children
+                        for title in parent_titles:
+                            try:
+                                print(f"check_and_close_file (cleanup): closing parent '{title}' via CloseDoc")
+                                sw.CloseDoc(title)
+                                closed_any = True
+                            except Exception:
+                                pass
+                                
+                        if closed_any:
+                            time.sleep(0.2)
                             
-                    if not closed_any:
-                        break
-                    time.sleep(0.1)
-                    iteration += 1
-            except Exception as e_post:
-                print(f"Warning: Failed to cleanup remaining referenced docs: {e_post}")
+                        # Close children
+                        for title in child_titles:
+                            try:
+                                print(f"check_and_close_file (cleanup): closing child '{title}' via CloseDoc")
+                                sw.CloseDoc(title)
+                                closed_any = True
+                            except Exception:
+                                pass
+                                
+                        if not closed_any:
+                            break
+                        time.sleep(0.2)
+                        iteration += 1
+                except Exception as e_post:
+                    print(f"Warning: Failed to cleanup remaining referenced docs: {e_post}")
+            finally:
+                try:
+                    sw.UserControl = orig_user_control
+                    print(f"check_and_close_file: Restored UserControl to {orig_user_control}")
+                except Exception as uc_err:
+                    print(f"check_and_close_file: Failed to restore UserControl: {uc_err}")
 
             return True
         except Exception as e:

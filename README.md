@@ -58,6 +58,8 @@
     - **Automatic System Restoration**: Once bulk conversion is complete, it automatically and safely restores the user's original preference default values set in SolidWorks System Options, and a notification dialog is displayed to the user upon completion.
     - **Accurate Progress Count**: The Completed counter increments by exactly 1 per target CAD file (not per STEP output file), ensuring correct progress display even for files with multiple Configurations.
     - **Watchdog Timeout Protection**: If SolidWorks hangs or encounters a deadlock (e.g., when loading a corrupted or heavy drawing file) for more than 3 minutes on a single file, a watchdog timer terminates the hung subprocess, kills the deadlocked SolidWorks process, spins up a fresh instance, and automatically resumes conversion from the next file in queue.
+    - **Robust Encoding & Localized Name Support**: The stdout/stderr communication streams use UTF-8 and fallback replacement (`errors="replace"`), preventing any background reader thread crashes in the Tkinter GUI when printing non-ASCII configuration or file names (such as the Korean configuration name `기본`).
+    - **Deadlock-Free Document Closing**: To prevent SolidWorks from hanging during document closing, `CloseDoc` is invoked using the document's Title (via `GetTitle()`) instead of the absolute file path. Furthermore, all active Python COM wrapper references to the files are cleared (`model = None`, etc.) and garbage collection is explicitly triggered (`gc.collect()` and `CoCollectFreeUnusedLibraries()`) before closing, releasing any lock on the files.
 
 ---
 

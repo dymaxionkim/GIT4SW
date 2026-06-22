@@ -89,6 +89,8 @@ The File Manager provides file-level checkout, checking-in, and local modificati
     - Original SolidWorks user preferences are automatically restored back to their custom values once the batch conversion finishes.
     - **Accurate Progress Count**: The "Completed" counter increments by exactly 1 per processed CAD source file — not per generated STEP output or Configuration — ensuring an accurate count even for models with multiple configurations.
     - **Watchdog Protection**: If a file conversion hangs or encounters a SolidWorks deadlock for more than 3 minutes (180 seconds), a watchdog timer kills the hung process and SolidWorks engine, launches a new instance, and automatically resumes conversion from the next file in the list. If SolidWorks fails to restart after a timeout, the loop continues attempting the remaining files (it does NOT abort early).
+    - **Robust Unicode & UTF-8 Encoding**: Enforces UTF-8 standard stream reconfiguration and replacement error handling (`errors="replace"`) for all communication pipelines. This completely prevents any Tkinter UI progress monitor thread crashes when printing localized/non-ASCII configuration names (such as `기본`).
+    - **Deadlock-Free CloseDoc Handling**: Closes documents by document Title (retrieved via `GetTitle()`) instead of the absolute file path. Releases all active Python COM wrappers (`model = None`, `docs_left = None`, etc.) and forces garbage collection (`gc.collect()` and `CoCollectFreeUnusedLibraries()`) right before calling `CloseDoc` to ensure SolidWorks safely unloads document resources without reference locking.
 • Version Description (Text Box)
   - Enter a brief description (commit message) describing what changes you made to the files.
 • Upload Selected File Version (Button)

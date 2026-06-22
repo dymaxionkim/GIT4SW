@@ -3613,7 +3613,26 @@ class GIT4SWApp(tk.Tk):
                     branch = self.git_service.get_current_branch()
                     if not branch:
                         raise RuntimeError("Cannot sync/pull because you are not currently on a branch (detached HEAD).")
-                        
+
+                    # --- Version comparison: skip pull if already up-to-date ---
+                    try:
+                        local_hash = self.git_service.get_branch_tip_commit(branch)
+                        remote_hash = self.git_service.get_branch_tip_commit(f"origin/{branch}")
+                        if local_hash and remote_hash and local_hash == remote_hash:
+                            self.write_log(
+                                f"Already up-to-date with remote (local=remote={local_hash[:7]}). Pull skipped.",
+                                "info"
+                            )
+                            def on_complete_skip():
+                                self.refresh_dashboard()
+                                if on_success_callback:
+                                    on_success_callback()
+                            self.task_queue.put(('callback', None, on_complete_skip))
+                            return
+                    except Exception as ver_e:
+                        self.write_log(f"Version comparison skipped ({ver_e}). Proceeding with pull...", "info")
+                    # ---------------------------------------------------------
+
                     conflicted_files = self.git_service.check_merge_conflicts(f"origin/{branch}")
                     if conflicted_files:
                         self.write_log(f"Conflicts pre-detected in {len(conflicted_files)} files! Showing resolution dialog...", "warning")
@@ -3854,6 +3873,51 @@ class GIT4SWApp(tk.Tk):
             self.increment_tasks()
             try:
                 try:
+                    # --- Fetch remote to get up-to-date remote branch info ---
+                    try:
+                        self.git_service._run_lfs_cmd(["git", "fetch", "origin"])
+                    except Exception as fetch_e:
+                        self.write_log(f"Remote fetch failed ({fetch_e}). Proceeding with local data...", "warning")
+
+                    # --- Version comparison: skip merge if current branch already contains remote source ---
+                    try:
+                        remote_source_hash = self.git_service.get_branch_tip_commit(f"origin/{source}")
+                        local_source_hash = self.git_service.get_branch_tip_commit(source)
+                        current_hash = self.git_service.get_branch_tip_commit(current)
+
+                        # Determine which hash to compare against (prefer remote)
+                        compare_hash = remote_source_hash if remote_source_hash else local_source_hash
+
+                        if compare_hash and current_hash and compare_hash == current_hash:
+                            # current branch tip == source tip: already merged or identical
+                            self.write_log(
+                                f"Current branch '{current}' is already at the same commit as '{source}' "
+                                f"({compare_hash[:7]}). Merge skipped.",
+                                "info"
+                            )
+                            self.task_queue.put(('callback', None, self.refresh_dashboard))
+                            return
+
+                        if compare_hash:
+                            # Check if current branch already contains the tip of source
+                            try:
+                                out = self.git_service._run_lfs_cmd(
+                                    ["git", "merge-base", "--is-ancestor", compare_hash, current]
+                                )
+                                # If the above does not raise, source tip is already an ancestor of current
+                                self.write_log(
+                                    f"Branch '{source}' ({compare_hash[:7]}) is already fully merged into "
+                                    f"'{current}'. Merge skipped.",
+                                    "info"
+                                )
+                                self.task_queue.put(('callback', None, self.refresh_dashboard))
+                                return
+                            except Exception:
+                                pass  # Not yet merged — proceed normally
+                    except Exception as ver_e:
+                        self.write_log(f"Version comparison skipped ({ver_e}). Proceeding with merge...", "info")
+                    # ---------------------------------------------------------
+
                     conflicted_files = self.git_service.check_merge_conflicts(source)
                     if conflicted_files:
                         self.write_log(f"Conflicts pre-detected in {len(conflicted_files)} files! Showing resolution dialog...", "warning")
@@ -4295,6 +4359,10 @@ class GIT4SWApp(tk.Tk):
                 import subprocess
                 import threading
                 
+                import os as os_env
+                env_vars = os_env.environ.copy()
+                env_vars["PYTHONIOENCODING"] = "utf-8"
+                
                 # Run subprocess capturing stdout and stderr
                 proc = subprocess.Popen(
                     [sys.executable, "-u", runner_path, job_path],
@@ -4302,7 +4370,9 @@ class GIT4SWApp(tk.Tk):
                     stderr=subprocess.STDOUT,
                     text=True,
                     bufsize=1, # Line buffered
-                    encoding="utf-8"
+                    encoding="utf-8",
+                    errors="replace",
+                    env=env_vars
                 )
                 self.export_process = proc
                 self.write_log(f"🚀 Started background export process (Formats: {formats}, Prefix: '{prefix_val}', OutDir: '{out_dir_val}').", "info")
@@ -4327,7 +4397,7 @@ class GIT4SWApp(tk.Tk):
                 lbl_status = tk.Label(progress_pop, text=f"Initializing SolidWorks... (0 / {len(filtered_files)} Completed)", font="TkDefaultFont", bg="#f3f4f6", fg="#1f2937")
                 lbl_status.pack(pady=2)
                 
-                lbl_file = tk.Label(progress_pop, text="Launching background SolidWorks engine...", font=("TkDefaultFont", 9), bg="#f3f4f6", fg="#6b7280", wraplength=400)
+                lbl_file = tk.Label(progress_pop, text="Launching background SolidWorks engine...", font="TkDefaultFont", bg="#f3f4f6", fg="#6b7280", wraplength=400)
                 lbl_file.pack(pady=(0, 10))
                 
                 # Progress bar
@@ -4356,8 +4426,20 @@ class GIT4SWApp(tk.Tk):
                 def update_progress(curr, total, file_name):
                     try:
                         prog_bar["value"] = curr
-                        lbl_status.config(text=f"Exporting... (Total: {total} | Completed: {curr})")
-                        lbl_file.config(text=f"Processing file: {file_name}")
+                        lbl_status.config(text=f"Exporting... {curr}/{total} files", font="TkDefaultFont")
+                        lbl_file.config(text=f"{file_name}", font="TkDefaultFont")
+                    except Exception:
+                        pass
+                        
+                def update_config_progress(config_name):
+                    try:
+                        current_file_text = lbl_file.cget("text")
+                        if " (Config: " in current_file_text:
+                            current_file_text = current_file_text.split(" (Config: ")[0]
+                        elif "\n(Config: " in current_file_text:
+                            current_file_text = current_file_text.split("\n(Config: ")[0]
+                        current_file_text = current_file_text.strip()
+                        lbl_file.config(text=f"{current_file_text} \n(Config: {config_name})", font="TkDefaultFont")
                     except Exception:
                         pass
                         
@@ -4404,6 +4486,15 @@ class GIT4SWApp(tk.Tk):
                                 except Exception as e:
                                     print(f"Error parsing progress output: {e}")
                             else:
+                                if "Switching to configuration:" in line_str:
+                                    try:
+                                        config_part = line_str.split("Switching to configuration:")[1].strip()
+                                        if " for STEP export" in config_part:
+                                            config_part = config_part.split(" for STEP export")[0].strip()
+                                        self.after(0, lambda conf=config_part: update_config_progress(conf))
+                                    except Exception as e:
+                                        print(f"Error parsing configuration progress: {e}")
+                                        
                                 if line_str:
                                     self.after(0, lambda msg=line_str: self.write_log(f"SolidWorks: {msg}", "info"))
                     except Exception as thread_e:

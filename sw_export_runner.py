@@ -3,6 +3,15 @@ import sys
 import json
 import time
 
+# Enforce UTF-8 output streams with replacement errors to prevent encoding crashes on Windows
+if hasattr(sys.stdout, 'reconfigure'):
+    try:
+        sys.stdout.reconfigure(encoding='utf-8', errors='replace')
+        sys.stderr.reconfigure(encoding='utf-8', errors='replace')
+    except Exception:
+        pass
+
+
 # We only import win32com and pythoncom when running on Windows
 try:
     import win32com.client
@@ -228,6 +237,15 @@ def close_all_documents_without_saving(swApp):
     if not swApp:
         print("close_all_documents_without_saving: swApp is None", flush=True)
         return
+    
+    orig_user_control = True
+    try:
+        orig_user_control = swApp.UserControl
+        swApp.UserControl = False
+        print(f"close_all_documents_without_saving: Set UserControl to False (was {orig_user_control})", flush=True)
+    except Exception as uc_err:
+        print(f"close_all_documents_without_saving: Failed to set UserControl to False: {uc_err}", flush=True)
+
     try:
         # Safe cleanup loop for remaining dependent/referenced documents.
         # Prioritizes closing parent documents (assemblies, drawings) first to release references on parts.
@@ -259,16 +277,34 @@ def close_all_documents_without_saving(swApp):
                 stuck_count = 0
             last_doc_count = current_count
             
-            parent_docs = []  # assemblies and drawings
-            child_docs = []   # parts
+            parent_titles = []  # list of (title, path)
+            child_titles = []   # list of (title, path)
             
             for d in docs_left:
                 try:
+                    # Get path
+                    try:
+                        path_val = d.GetPathName
+                        path = path_val() if callable(path_val) else path_val
+                    except Exception:
+                        path = getattr(d, 'GetPathName')
+                        if callable(path):
+                            path = path()
+                            
+                    # Get title
                     try:
                         title_val = d.GetTitle
                         title = title_val() if callable(title_val) else title_val
                     except Exception:
                         title = getattr(d, 'GetTitle')
+                        if callable(title):
+                            title = title()
+                            
+                    if not title:
+                        title = path
+                        
+                    if not title:
+                        continue
                         
                     try:
                         dtype = d.GetType()
@@ -277,50 +313,67 @@ def close_all_documents_without_saving(swApp):
                         if callable(dtype):
                             dtype = dtype()
                             
-                    if not title:
-                        continue
-                        
-                    title_lower = title.lower()
+                    path_lower = (path or "").lower()
+                    title_lower = (title or "").lower()
+                    
                     # dtype: 2 = swDocASSEMBLY, 3 = swDocDRAWING
-                    if dtype in (2, 3) or title_lower.endswith(".sldasm") or title_lower.endswith(".slddrw"):
-                        parent_docs.append((d, title))
+                    is_parent = (dtype in (2, 3) or 
+                                 path_lower.endswith(".sldasm") or 
+                                 path_lower.endswith(".slddrw") or
+                                 title_lower.endswith(".sldasm") or
+                                 title_lower.endswith(".slddrw"))
+                                 
+                    if is_parent:
+                        parent_titles.append((title, path or title))
                     else:
-                        child_docs.append((d, title))
-                except Exception:
-                    pass
+                        child_titles.append((title, path or title))
+                except Exception as doc_err:
+                    print(f"Error inspecting document: {doc_err}", flush=True)
+            
+            # Clear all COM object references in the current context before closing
+            docs_left = None
+            d = None
+            import gc
+            gc.collect()
+            try:
+                pythoncom.CoCollectFreeUnusedLibraries()
+            except:
+                pass
             
             closed_any = False
             # Close parents first to break references
-            for d, title in parent_docs:
+            for title, path in parent_titles:
                 try:
-                    print(f"close_all_documents_without_saving: closing parent '{title}' via QuitDoc", flush=True)
-                    swApp.QuitDoc(title)
-                    base_title, _ = os.path.splitext(title)
-                    if base_title != title:
-                        swApp.QuitDoc(base_title)
+                    print(f"close_all_documents_without_saving: closing parent '{title}' (path: '{path}') via CloseDoc", flush=True)
+                    swApp.CloseDoc(title)
                     closed_any = True
                 except Exception as e:
                     print(f"Error closing parent {title}: {e}", flush=True)
                     
             if closed_any:
-                time.sleep(0.1)
+                time.sleep(0.2)
                 
             # Close children second
-            for d, title in child_docs:
+            for title, path in child_titles:
                 try:
-                    print(f"close_all_documents_without_saving: closing child '{title}' via QuitDoc", flush=True)
-                    swApp.QuitDoc(title)
-                    base_title, _ = os.path.splitext(title)
-                    if base_title != title:
-                        swApp.QuitDoc(base_title)
+                    print(f"close_all_documents_without_saving: closing child '{title}' (path: '{path}') via CloseDoc", flush=True)
+                    swApp.CloseDoc(title)
+                    closed_any = True
                 except Exception as e:
                     print(f"Error closing child {title}: {e}", flush=True)
                     
-            time.sleep(0.1)
+            time.sleep(0.2)
             iteration += 1
             
     except Exception as e:
         print(f"Error in close_all_documents_without_saving cleanup: {e}", flush=True)
+    finally:
+        # Restore UserControl to its original state
+        try:
+            swApp.UserControl = orig_user_control
+            print(f"close_all_documents_without_saving: Restored UserControl to {orig_user_control}", flush=True)
+        except Exception as uc_err:
+            print(f"close_all_documents_without_saving: Failed to restore UserControl: {uc_err}", flush=True)
     print("close_all_documents_without_saving: end", flush=True)
 
 def run_single_export(file_abs, target_formats, output_dir, workspace_path):
@@ -439,11 +492,13 @@ def run_single_export(file_abs, target_formats, output_dir, workspace_path):
                 for config_name in configs_to_process:
                     if config_name:
                         try:
-                            print(f"Switching to configuration: {config_name}")
-                            model.ShowConfiguration2(config_name)
+                            print(f"Switching to configuration: {config_name}", flush=True)
+                            success = model.ShowConfiguration2(config_name)
+                            if not success:
+                                print(f"Warning: ShowConfiguration2 returned False for configuration: {config_name}", flush=True)
                             time.sleep(2) # Delay for large configuration switching rebuild
                         except Exception as show_conf_err:
-                            print(f"Failed to show configuration {config_name}: {show_conf_err}")
+                            print(f"Failed to show configuration {config_name}: {show_conf_err}", flush=True)
                     
                     dest_dir_step = os.path.join(file_dir, output_dir, "STEP_ASM")
                     os.makedirs(dest_dir_step, exist_ok=True)
@@ -538,12 +593,14 @@ def run_single_export(file_abs, target_formats, output_dir, workspace_path):
                 for config_name in configs_to_process:
                     if config_name:
                         try:
-                            print(f"Switching to configuration: {config_name} for STEP export")
-                            model.ShowConfiguration2(config_name)
+                            print(f"Switching to configuration: {config_name} for STEP export", flush=True)
+                            success = model.ShowConfiguration2(config_name)
+                            if not success:
+                                print(f"Warning: ShowConfiguration2 returned False for configuration: {config_name}", flush=True)
                             time.sleep(2) # Delay for configuration switching rebuild
                             dest_file_path = os.path.join(dest_dir, f"{base_filename}__{config_name}{target_ext}")
                         except Exception as show_conf_err:
-                            print(f"Failed to show configuration {config_name}: {show_conf_err}")
+                            print(f"Failed to show configuration {config_name}: {show_conf_err}", flush=True)
                             dest_file_path = os.path.join(dest_dir, base_filename + target_ext)
                     else:
                         dest_file_path = os.path.join(dest_dir, base_filename + target_ext)
@@ -587,14 +644,45 @@ def run_single_export(file_abs, target_formats, output_dir, workspace_path):
         if model:
             try:
                 time.sleep(0.2)
-                title_val = model.GetTitle
-                title = title_val() if callable(title_val) else title_val
-                if title:
-                    print(f"Closing main document: '{title}' via QuitDoc", flush=True)
-                    swApp.QuitDoc(title)
-                    base_title, _ = os.path.splitext(title)
-                    if base_title != title:
-                        swApp.QuitDoc(base_title)
+                
+                # Try to get the document title
+                title_to_close = None
+                try:
+                    title_val = model.GetTitle
+                    title_to_close = title_val() if callable(title_val) else title_val
+                except Exception:
+                    title_to_close = getattr(model, 'GetTitle')
+                    if callable(title_to_close):
+                        title_to_close = title_to_close()
+                        
+                if not title_to_close:
+                    title_to_close = os.path.basename(file_abs)
+                
+                # Release model COM reference and run garbage collection
+                model = None
+                title_val = None
+                import gc
+                gc.collect()
+                try:
+                    pythoncom.CoCollectFreeUnusedLibraries()
+                except:
+                    pass
+                    
+                print(f"Closing main document: '{title_to_close}' (path: '{file_abs}') via CloseDoc", flush=True)
+                orig_uc = True
+                try:
+                    orig_uc = swApp.UserControl
+                    swApp.UserControl = False
+                except:
+                    pass
+                
+                try:
+                    swApp.CloseDoc(title_to_close)
+                finally:
+                    try:
+                        swApp.UserControl = orig_uc
+                    except:
+                        pass
             except Exception as e_close_main:
                 print(f"Warning: Failed to close main document '{file_abs}': {e_close_main}", flush=True)
 
@@ -607,13 +695,42 @@ def run_single_export(file_abs, target_formats, output_dir, workspace_path):
             if model:
                 try:
                     time.sleep(0.2)
-                    title_val = model.GetTitle
-                    title = title_val() if callable(title_val) else title_val
-                    if title:
-                        swApp.QuitDoc(title)
-                        base_title, _ = os.path.splitext(title)
-                        if base_title != title:
-                            swApp.QuitDoc(base_title)
+                    
+                    title_to_close = None
+                    try:
+                        title_val = model.GetTitle
+                        title_to_close = title_val() if callable(title_val) else title_val
+                    except Exception:
+                        title_to_close = getattr(model, 'GetTitle')
+                        if callable(title_to_close):
+                            title_to_close = title_to_close()
+                            
+                    if not title_to_close:
+                        title_to_close = os.path.basename(file_abs)
+                        
+                    # Release model COM reference and run garbage collection
+                    model = None
+                    title_val = None
+                    import gc
+                    gc.collect()
+                    try:
+                        pythoncom.CoCollectFreeUnusedLibraries()
+                    except:
+                        pass
+                        
+                    orig_uc = True
+                    try:
+                        orig_uc = swApp.UserControl
+                        swApp.UserControl = False
+                    except:
+                        pass
+                    try:
+                        swApp.CloseDoc(title_to_close)
+                    finally:
+                        try:
+                            swApp.UserControl = orig_uc
+                        except:
+                            pass
                 except:
                     pass
             close_all_documents_without_saving(swApp)
@@ -779,6 +896,7 @@ def run_export(job_file):
                 stderr=subprocess.STDOUT,
                 text=True,
                 encoding="utf-8",
+                errors="replace",
                 env=env_vars
             )
             
@@ -787,18 +905,32 @@ def run_export(job_file):
             t_read.start()
             
             start_time = time.time()
-            timeout = 180.0 # 180 seconds watchdog
+            timeout = 180.0 # 180 seconds watchdog silence timeout
             timed_out = False
             
             while True:
-                try:
-                    line = out_queue.get_nowait()
-                    sys.stdout.write(line)
-                    sys.stdout.flush()
-                except queue.Empty:
-                    if proc.poll() is not None:
+                has_output = False
+                while True:
+                    try:
+                        line = out_queue.get_nowait()
+                        sys.stdout.write(line)
+                        sys.stdout.flush()
+                        has_output = True
+                    except queue.Empty:
                         break
-                    time.sleep(0.1)
+                
+                if has_output:
+                    start_time = time.time() # Reset watchdog timer on output
+                    
+                if proc.poll() is not None:
+                    # Drain any remaining logs
+                    while not out_queue.empty():
+                        try:
+                            sys.stdout.write(out_queue.get_nowait())
+                            sys.stdout.flush()
+                        except queue.Empty:
+                            break
+                    break
                     
                 if time.time() - start_time > timeout:
                     timed_out = True
@@ -810,13 +942,7 @@ def run_export(job_file):
                         proc.kill()
                     break
                     
-            # Flush remaining logs
-            while not out_queue.empty():
-                try:
-                    sys.stdout.write(out_queue.get_nowait())
-                    sys.stdout.flush()
-                except queue.Empty:
-                    break
+                time.sleep(0.1)
                     
             if timed_out:
                 has_errors = True
@@ -865,10 +991,8 @@ def run_export(job_file):
                     print(f"Failed to restart SolidWorks instance: {re_e}", flush=True)
                     swApp = None
                     sw_pid = None
-                    # NOTE: Use 'continue' (not 'break') so the loop proceeds to remaining files.
-                    # Child subprocesses connect to SolidWorks independently and do not need
-                    # the parent's swApp reference. Even if the parent's restart fails, subsequent
-                    # child subprocesses can still attempt to connect or start their own SW instance.
+                    # Send failure progress update before skipping
+                    print(f"[PROGRESS] {processed_count}/{total_files} : {os.path.basename(file_rel)}", flush=True)
                     continue
             elif proc.returncode != 0:
                 has_errors = True
@@ -896,12 +1020,25 @@ def run_export(job_file):
             pass
 
     finally:
-        # Exit SolidWorks
+        # Close all open documents and exit SolidWorks
         if swApp:
             try:
-                swApp.ExitApp()
-            except Exception as exit_e:
-                print(f"Error during swApp.ExitApp(): {exit_e}")
+                close_all_documents_without_saving(swApp)
+            except Exception as close_err:
+                print(f"Error during final documents cleanup: {close_err}")
+                
+            def exit_sw_async(app):
+                try:
+                    app.ExitApp()
+                except Exception as exit_e:
+                    print(f"Error during swApp.ExitApp(): {exit_e}")
+                    
+            try:
+                t_exit = threading.Thread(target=exit_sw_async, args=(swApp,), daemon=True)
+                t_exit.start()
+                t_exit.join(timeout=5.0) # Wait up to 5.0 seconds for graceful ExitApp
+            except Exception as t_err:
+                print(f"Failed to start async ExitApp thread: {t_err}")
                 
         # Clean up process if still alive
         try:
