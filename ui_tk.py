@@ -2106,6 +2106,28 @@ class GIT4SWApp(tk.Tk):
                     try:
                         remote_locks = self.git_service.get_lfs_locks()
                         
+                        # Sync file permissions on disk based on retrieved locks!
+                        import stat
+                        cleared_count = 0
+                        marked_ro_count = 0
+                        for rel_path, lock_info in remote_locks.items():
+                            abs_path = os.path.abspath(os.path.join(self.workspace_path, rel_path))
+                            if os.path.exists(abs_path):
+                                try:
+                                    mode = os.stat(abs_path).st_mode
+                                    if lock_info.get('is_ours'):
+                                        # Clear read-only (ensure S_IWRITE)
+                                        if not (mode & stat.S_IWRITE):
+                                            os.chmod(abs_path, mode | stat.S_IWRITE)
+                                            cleared_count += 1
+                                    else:
+                                        # Make read-only (remove S_IWRITE)
+                                        if (mode & stat.S_IWRITE):
+                                            os.chmod(abs_path, mode & ~stat.S_IWRITE)
+                                            marked_ro_count += 1
+                                except Exception as ce:
+                                    print(f"Failed to adjust attribute on '{abs_path}': {ce}")
+                        
                         def update_locks_gui():
                             if not getattr(self, 'files_data', None):
                                 return
@@ -2124,6 +2146,12 @@ class GIT4SWApp(tk.Tk):
                                     f['is_our_lock'] = False
                                     
                             self.populate_file_table()
+                            if cleared_count > 0 or marked_ro_count > 0:
+                                self.write_log(
+                                    f"Synced local file permissions: Cleared read-only on {cleared_count} files (locked by you), "
+                                    f"marked {marked_ro_count} files as read-only (locked by others).",
+                                    "success"
+                                )
                             
                         self.task_queue.put(('callback', None, update_locks_gui))
                     except Exception as le:
@@ -2345,6 +2373,17 @@ class GIT4SWApp(tk.Tk):
                 for file_rel_path in files_to_lock:
                     try:
                         self.git_service.lock_file(file_rel_path)
+                        
+                        # Force clear read-only attribute on disk immediately after locking
+                        abs_path = os.path.abspath(os.path.join(self.workspace_path, file_rel_path))
+                        if os.path.exists(abs_path):
+                            import stat
+                            try:
+                                mode = os.stat(abs_path).st_mode
+                                os.chmod(abs_path, mode | stat.S_IWRITE)
+                            except Exception as chmod_e:
+                                print(f"Failed to clear read-only on locked file '{abs_path}': {chmod_e}")
+                                
                         success_count += 1
                     except Exception as e:
                         errors.append(f"Failed to lock {file_rel_path}: {e}")
@@ -2401,6 +2440,17 @@ class GIT4SWApp(tk.Tk):
                         
                     try:
                         self.git_service.unlock_file(file_rel_path)
+                        
+                        # Re-enable read-only attribute on disk immediately after unlocking
+                        abs_path = os.path.abspath(os.path.join(self.workspace_path, file_rel_path))
+                        if os.path.exists(abs_path):
+                            import stat
+                            try:
+                                mode = os.stat(abs_path).st_mode
+                                os.chmod(abs_path, mode & ~stat.S_IWRITE)
+                            except Exception as chmod_e:
+                                print(f"Failed to set read-only on unlocked file '{abs_path}': {chmod_e}")
+                                
                         success_count += 1
                         
                         # Clean up our tracking set
@@ -2460,6 +2510,17 @@ class GIT4SWApp(tk.Tk):
                 for file_rel_path in files_to_unlock:
                     try:
                         self.git_service.unlock_file(file_rel_path, force=True)
+                        
+                        # Re-enable read-only attribute on disk immediately after force unlocking
+                        abs_path = os.path.abspath(os.path.join(self.workspace_path, file_rel_path))
+                        if os.path.exists(abs_path):
+                            import stat
+                            try:
+                                mode = os.stat(abs_path).st_mode
+                                os.chmod(abs_path, mode & ~stat.S_IWRITE)
+                            except Exception as chmod_e:
+                                print(f"Failed to set read-only on force unlocked file '{abs_path}': {chmod_e}")
+                                
                         success_count += 1
                     except Exception as e:
                         errors.append(f"Failed to force unlock {file_rel_path}: {e}")
