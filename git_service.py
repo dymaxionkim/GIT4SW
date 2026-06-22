@@ -71,33 +71,52 @@ def check_token_access(token, remote_url):
 _cached_github_username = None
 _cached_github_username_lock = threading.Lock()
 
-def get_token_username(token):
-    global _cached_github_username
+_cached_token_username = {}
+_cached_token_username_lock = threading.Lock()
+
+def get_token_username_for_url(token, remote_url):
+    global _cached_token_username
     if not token:
         return None
-    with _cached_github_username_lock:
-        if _cached_github_username is not None:
-            return _cached_github_username
         
-        # Query API
+    cache_key = (token, remote_url)
+    with _cached_token_username_lock:
+        if cache_key in _cached_token_username:
+            return _cached_token_username[cache_key]
+            
+        # Determine API endpoint
+        if remote_url and "codeberg.org" in remote_url.lower():
+            url = "https://codeberg.org/api/v1/user"
+            auth_header = f"token {token}"
+            username_field = "username"
+        else:
+            url = "https://api.github.com/user"
+            auth_header = f"token {token}"
+            username_field = "login"
+            
         try:
             import urllib.request
             import json
             req = urllib.request.Request(
-                "https://api.github.com/user",
+                url,
                 headers={
-                    "Authorization": f"token {token}",
+                    "Authorization": auth_header,
                     "User-Agent": "GIT4SW-App"
                 }
             )
             with urllib.request.urlopen(req, timeout=2.0) as response:
                 if response.status == 200:
                     data = json.loads(response.read().decode('utf-8'))
-                    _cached_github_username = data.get("login")
-                    return _cached_github_username
+                    username = data.get(username_field)
+                    _cached_token_username[cache_key] = username
+                    return username
         except Exception as e:
-            print(f"DEBUG (global): Failed to get username from token: {e}")
+            print(f"DEBUG (global): Failed to get username from token for {url}: {e}")
+            
     return None
+
+def get_token_username(token):
+    return get_token_username_for_url(token, None)
 
 
 def optimize_credentials_for_path(repo_path):
@@ -195,7 +214,7 @@ def optimize_credentials_for_path(repo_path):
 
     # 4. Resolve username from token or fallback to local user name
     if token:
-        github_username = get_token_username(token)
+        github_username = get_token_username_for_url(token, remote_url)
         if github_username:
             try:
                 _, curr_https_user, _ = run_simple_git(["config", "--local", "credential.https://github.com.username"])
@@ -718,20 +737,85 @@ class GitService:
         locks = {}
         if not self.is_git_repo():
             return locks
-        if not self.get_remote_url():
+        remote_url = self.get_remote_url()
+        if not remote_url:
             return locks
         try:
             locks_out = self._run_lfs_cmd(["git", "lfs", "locks"])
             if not locks_out:
                 return locks
                 
-            # Get current git user name to check ownership
-            current_user = ""
+            # Compile all possible candidate usernames representing "me" to check lock ownership
+            candidates = set()
+            
+            # 1. Parse git config --list (local + global + system) to gather all possible username configs
             try:
-                current_user = self.repo.config_reader().get_value("user", "name", default="")
+                config_out = self._run_lfs_cmd(["git", "config", "--list"])
+                for line in config_out.splitlines():
+                    if "=" in line:
+                        key, val = line.split("=", 1)
+                        key = key.strip().lower()
+                        val = val.strip().lower()
+                        if key == "user.name" and val:
+                            candidates.add(val)
+                        elif key == "user.email" and val:
+                            if "@" in val:
+                                prefix = val.split("@")[0].strip()
+                                if prefix:
+                                    candidates.add(prefix)
+                        elif "username" in key and val:
+                            candidates.add(val)
+            except Exception as e:
+                print(f"DEBUG (locks): Failed to parse git config --list: {e}")
+                
+            # 2. Local config reader user.name/email (as backup)
+            try:
+                git_name = self.repo.config_reader().get_value("user", "name", default="")
+                if git_name:
+                    candidates.add(git_name.strip().lower())
             except Exception:
                 pass
+            try:
+                git_email = self.repo.config_reader().get_value("user", "email", default="")
+                if git_email and "@" in git_email:
+                    email_prefix = git_email.split("@")[0].strip().lower()
+                    if email_prefix:
+                        candidates.add(email_prefix)
+            except Exception:
+                pass
+
+            # 3. Environment variables
+            for env_var in ["USERNAME", "USER", "GITHUB_USER", "GITHUB_USERNAME"]:
+                val = os.environ.get(env_var)
+                if val:
+                    candidates.add(val.strip().lower())
+                    
+            # 4. OS login name
+            try:
+                candidates.add(os.getlogin().strip().lower())
+            except Exception:
+                pass
+
+            # 5. Token username
+            try:
+                config_path = "config.json"
+                if not os.path.exists(config_path):
+                    config_path = os.path.join(self.repo_path, "config.json")
+                    if not os.path.exists(config_path):
+                        config_path = os.path.abspath(os.path.join(os.path.dirname(__file__), "config.json"))
                 
+                if os.path.exists(config_path):
+                    import json
+                    with open(config_path, "r", encoding="utf-8") as f:
+                        config = json.load(f)
+                        token = config.get("github_token", "").strip()
+                        if token:
+                            token_user = get_token_username_for_url(token, remote_url)
+                            if token_user:
+                                candidates.add(token_user.strip().lower())
+            except Exception as e:
+                print(f"DEBUG (locks): Failed to resolve token username: {e}")
+
             for line in locks_out.splitlines():
                 line = line.strip()
                 if not line:
@@ -740,11 +824,21 @@ class GitService:
                 if len(parts) >= 2:
                     file_path = parts[0].strip().replace("\\", "/")
                     owner_info = parts[1].strip()
-                    owner_name = re.sub(r'\s*\(ID:.*$', '', owner_info)
+                    owner_name = re.sub(r'\s*\(ID:.*$', '', owner_info).strip()
+                    owner_name_lower = owner_name.lower()
                     
+                    # Lock is ours if the lock owner matches our candidate names exactly,
+                    # or if the lock owner contains our candidate names (minimum length 3)
                     is_ours = False
-                    if current_user and current_user.lower() in owner_name.lower():
-                        is_ours = True
+                    for c in candidates:
+                        if not c:
+                            continue
+                        if c == owner_name_lower:
+                            is_ours = True
+                            break
+                        if len(c) >= 3 and (c in owner_name_lower or owner_name_lower in c):
+                            is_ours = True
+                            break
                         
                     locks[file_path] = {
                         'owner': owner_name,

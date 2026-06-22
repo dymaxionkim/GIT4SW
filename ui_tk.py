@@ -198,14 +198,16 @@ class MultiConflictResolutionDialog(tk.Toplevel):
         scrollbar = ttk.Scrollbar(list_frm, orient="vertical")
         scrollbar.pack(side="right", fill="y")
         
+        # Modern Flat styled Listbox with custom selection colors matching combobox
         self.listbox = tk.Listbox(
             list_frm,
             selectmode="extended",
             yscrollcommand=scrollbar.set,
             bg="#ffffff",
             fg="#1f2937",
-            selectbackground="#e5e7eb",
-            selectforeground="#1f2937",
+            selectbackground="#d1fae5",
+            selectforeground="#065f46",
+            activestyle="none",
             bd=0,
             highlightthickness=0,
             font="TkDefaultFont"
@@ -215,9 +217,12 @@ class MultiConflictResolutionDialog(tk.Toplevel):
         self.listbox.pack(side="left", fill="both", expand=True)
         scrollbar.config(command=self.listbox.yview)
         
-        # Control Frame (Combo box + OK button)
+        # Bind Listbox selection changes to handle Diff button activation
+        self.listbox.bind("<<ListboxSelect>>", self.on_select_change)
+        
+        # Control Frame (Combo box + Action buttons)
         control_frm = ttk.Frame(self, style="TFrame")
-        control_frm.pack(padx=16, pady=8, fill="x")
+        control_frm.pack(padx=16, pady=12, fill="x", side="bottom")
         
         lbl_adopt = ttk.Label(control_frm, text="Adopt version from:", style="TLabel")
         lbl_adopt.pack(side="left", padx=(0, 8))
@@ -231,15 +236,16 @@ class MultiConflictResolutionDialog(tk.Toplevel):
         self.cb_choice.pack(side="left", padx=(0, 8))
         self.cb_choice.set(self.options[0])
         
-        btn_ok = ttk.Button(control_frm, text="OK", style="Primary.TButton", command=self.on_ok)
+        # Buttons aligned horizontally: Choose -> Diff -> Exit
+        btn_ok = ttk.Button(control_frm, text="Choose", style="Primary.TButton", command=self.on_ok)
         btn_ok.pack(side="left")
         
-        # Bottom/Action Buttons Frame
-        btn_frm = ttk.Frame(self, style="TFrame")
-        btn_frm.pack(padx=16, pady=12, fill="x", side="bottom")
+        self.btn_diff = ttk.Button(control_frm, text="Diff", style="Diff.TButton", command=self.on_diff)
+        self.btn_diff.pack(side="left", padx=(8, 0))
+        self.btn_diff.state(["disabled"]) # Initially disabled until exactly 1 file is selected
         
-        btn_cancel = ttk.Button(btn_frm, text="Cancel", command=self.on_cancel)
-        btn_cancel.pack(side="right")
+        btn_cancel = ttk.Button(control_frm, text="Exit", command=self.on_cancel)
+        btn_cancel.pack(side="left", padx=(8, 0))
         
         # Center the window
         self.update_idletasks()
@@ -248,6 +254,22 @@ class MultiConflictResolutionDialog(tk.Toplevel):
         self.geometry(f"+{x}+{y}")
         
         self.protocol("WM_DELETE_WINDOW", self.on_cancel)
+        
+    def on_select_change(self, event=None):
+        selected_indices = self.listbox.curselection()
+        if len(selected_indices) == 1:
+            self.btn_diff.state(["!disabled"])
+        else:
+            self.btn_diff.state(["disabled"])
+            
+    def on_diff(self):
+        selected_indices = self.listbox.curselection()
+        if len(selected_indices) == 1:
+            selected_file = self.listbox.get(selected_indices[0])
+            messagebox.showinfo(
+                "Compare Version (Diff)", 
+                f"Compare versions for:\n{selected_file}\n\n(Visual comparison tool or git diff will be executed.)"
+            )
         
     def on_ok(self):
         selected_indices = self.listbox.curselection()
@@ -711,6 +733,12 @@ class GIT4SWApp(tk.Tk):
         # BOM Button Style
         style.configure("BOM.TButton", padding=6, background="#2563eb", foreground="#ffffff", borderwidth=0)
         style.map("BOM.TButton",
+                  background=[("active", "#1d4ed8"), ("disabled", "#e5e7eb")],
+                  foreground=[("active", "#ffffff"), ("disabled", "#9ca3af")])
+
+        # Diff Button Style
+        style.configure("Diff.TButton", padding=6, background="#2563eb", foreground="#ffffff", borderwidth=0)
+        style.map("Diff.TButton",
                   background=[("active", "#1d4ed8"), ("disabled", "#e5e7eb")],
                   foreground=[("active", "#ffffff"), ("disabled", "#9ca3af")])
 
@@ -5251,6 +5279,32 @@ finally:
         def run():
             self.increment_tasks()
             try:
+                # Pre-clear read-only attribute on disk for all files locked by us in the repository.
+                # This ensures that when opening an assembly, SolidWorks loads referenced parts/sub-assemblies
+                # locked by us in read-write mode rather than read-only.
+                if self.git_service.is_git_repo():
+                    try:
+                        self.write_log("Analyzing LFS locks to adjust local file write permissions...", "info")
+                        locks = self.git_service.get_lfs_locks()
+                        import stat
+                        cleared_count = 0
+                        for rel_path, lock_info in locks.items():
+                            if lock_info.get('is_ours'):
+                                abs_path = os.path.abspath(os.path.join(self.git_service.repo_path, rel_path))
+                                if os.path.exists(abs_path):
+                                    try:
+                                        mode = os.stat(abs_path).st_mode
+                                        os.chmod(abs_path, mode | stat.S_IWRITE)
+                                        cleared_count += 1
+                                    except Exception as ce:
+                                        print(f"Failed to clear read-only on locked file '{abs_path}': {ce}")
+                        if cleared_count > 0:
+                            self.write_log(f"Cleared read-only attribute for {cleared_count} locked files belonging to you.", "success")
+                        else:
+                            self.write_log("No locked files belonging to you needed write-permission adjustments.", "info")
+                    except Exception as le:
+                        self.write_log(f"Failed to check locks and adjust attributes: {le}", "error")
+
                 # 1. Try to connect to an existing SolidWorks instance
                 sw_app = self.sw_service._get_sw_app()
                 if sw_app:
@@ -5274,6 +5328,22 @@ finally:
                             doc_type = 3
                             
                         try:
+                            # Pre-lock file to get write permission and register remote lock
+                            if self.git_service.is_git_repo():
+                                try:
+                                    self.git_service.lock_file(file)
+                                except Exception as le:
+                                    print(f"Pre-locking file '{file}' failed: {le}")
+                            
+                            # Force remove read-only attribute on disk to guarantee it opens read-write
+                            import stat
+                            try:
+                                if os.path.exists(abs_file_path):
+                                    mode = os.stat(abs_file_path).st_mode
+                                    os.chmod(abs_file_path, mode | stat.S_IWRITE)
+                            except Exception as chmod_e:
+                                print(f"Failed to clear read-only attribute on '{abs_file_path}': {chmod_e}")
+                            
                             # Open Doc (Options: 1 = swOpenDocOptions_Silent)
                             doc = sw_app.OpenDoc6(abs_file_path, doc_type, 1, "", errors_ref, warnings_ref)
                             if doc:
@@ -5281,6 +5351,8 @@ finally:
                                     title = self.sw_service._call_com_method(doc, 'GetTitle')
                                     # Option: 2 = swUserDecision
                                     self.sw_service._call_com_method(sw_app, 'ActivateDoc3', title, True, 2, errors_ref)
+                                  # Add to active locked files set in UI to track local status
+                                    self.files_locked_by_us.add(abs_file_path.lower())
                                 except Exception as ae:
                                     print(f"Failed to activate document: {ae}")
                                 self.task_queue.put(('success', f"Opened '{os.path.basename(file)}' in the running SolidWorks.", None))
@@ -5296,8 +5368,27 @@ finally:
                     errors = []
                     import subprocess
                     for file in files:
+                        abs_file_path = os.path.abspath(file)
+                        
+                        # Pre-lock file to get write permission and register remote lock
+                        if self.git_service.is_git_repo():
+                            try:
+                                self.git_service.lock_file(file)
+                            except Exception as le:
+                                print(f"Pre-locking file '{file}' failed: {le}")
+                        
+                        # Force remove read-only attribute on disk
+                        import stat
                         try:
-                            subprocess.Popen([path, os.path.abspath(file)])
+                            if os.path.exists(abs_file_path):
+                                mode = os.stat(abs_file_path).st_mode
+                                os.chmod(abs_file_path, mode | stat.S_IWRITE)
+                        except Exception as chmod_e:
+                            print(f"Failed to clear read-only attribute on '{abs_file_path}': {chmod_e}")
+                            
+                        try:
+                            subprocess.Popen([path, abs_file_path])
+                            self.files_locked_by_us.add(abs_file_path.lower())
                         except Exception as e:
                             errors.append(f"Failed to open {os.path.basename(file)} in SolidWorks: {e}")
                     if errors:
@@ -5305,8 +5396,27 @@ finally:
                 else:
                     errors = []
                     for file in files:
+                        abs_file_path = os.path.abspath(file)
+                        
+                        # Pre-lock file to get write permission and register remote lock
+                        if self.git_service.is_git_repo():
+                            try:
+                                self.git_service.lock_file(file)
+                            except Exception as le:
+                                print(f"Pre-locking file '{file}' failed: {le}")
+                        
+                        # Force remove read-only attribute on disk
+                        import stat
                         try:
-                            os.startfile(os.path.abspath(file))
+                            if os.path.exists(abs_file_path):
+                                mode = os.stat(abs_file_path).st_mode
+                                os.chmod(abs_file_path, mode | stat.S_IWRITE)
+                        except Exception as chmod_e:
+                            print(f"Failed to clear read-only attribute on '{abs_file_path}': {chmod_e}")
+                            
+                        try:
+                            os.startfile(abs_file_path)
+                            self.files_locked_by_us.add(abs_file_path.lower())
                         except Exception as e:
                             errors.append(f"Failed to open {os.path.basename(file)} in SolidWorks: {e}")
                     if errors:
