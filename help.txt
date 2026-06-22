@@ -27,9 +27,13 @@ The Dashboard is the central cockpit of the application, showing repository conf
 • Get Latest Version (Sync) (Button)
   - Downloads and applies (pulls) the latest changes from the remote server for the active branch.
   - **Conflict Auto-Backup**: If any merge conflicts are detected during synchronization, the client automatically backs up the original local versions of conflicted files into a `.backup/` folder in the workspace root with a timestamp (`[filename]_[timestamp].[ext]`) before showing the resolution dialog. This allows you to easily restore your local modifications if you accidentally overwrite them.
+  - **Optimized Check**: Performs a pre-fetch commit comparison. If the branch is already up-to-date with remote commits or already fully merged, the merge/pull is skipped to save time and system overhead.
 • Merge main branch into current branch (Button)
   - Merges updates from the shared 'main' (or 'master') branch into your developer branch. It automatically commits, pushes the merged branch back to the remote server, and safely switches the workspace back to your original developer branch.
   - Pre-merge conflict detection also triggers the same automatic local backup process to safeguard your local changes.
+  - **Optimized Check**: Checks if the target branch's commit is already merged or identical to the current branch tip, skipping unnecessary merge actions.
+• Cleanup LFS Cache (Button)
+  - Opens the Git LFS Cache Cleanup Wizard dialog. This scans `.git/lfs/objects/` for unused historical binary objects, excluding files in the current index and the last 2 commits (`HEAD`, `HEAD~1`). Users can purge these unused files in bulk to reclaim local disk space.
 • Auto Sync (Checkbox)
   - Toggles automated synchronization. When checked (ON), the application automatically executes "Get Latest Version (Sync)" followed by "Merge main branch into current branch" sequentially whenever the application starts or the workspace/repository is changed.
 • Live Monitor (Card & Status Panel)
@@ -38,6 +42,7 @@ The Dashboard is the central cockpit of the application, showing repository conf
     - Total Files: The total count of version-tracked files in the workspace (excluding ignored paths).
     - Open Files: Number of files from this project currently open in SolidWorks.
     - Locked Files: Number of files locked under Git LFS.
+    - Repository Size: The total physical size of all files tracked inside the Git repository directory (automatically computed and formatted in B, KB, MB, GB).
 
 ----------------------------------------------------------
 2. FILE MANAGER MODE

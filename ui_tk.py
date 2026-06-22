@@ -278,6 +278,323 @@ class MultiConflictResolutionDialog(tk.Toplevel):
         self.destroy()
 
 
+class LfsCleanupWizardDialog(tk.Toplevel):
+    def __init__(self, parent, git_service):
+        super().__init__(parent)
+        self.parent = parent
+        self.git_service = git_service
+        self.title("Git LFS Cache Cleanup Wizard")
+        self.geometry("520x440")
+        self.resizable(False, False)
+        self.configure(bg="#f3f4f6")
+        self.transient(parent)
+        self.grab_set()
+        
+        self.lfs_dir = os.path.normpath(os.path.join(self.git_service.repo_path, ".git", "lfs", "objects"))
+        self.unused_files = []
+        self.total_size_bytes = 0
+        self.freed_size_bytes = 0
+        self.kept_count = 0
+        self.total_count = 0
+        
+        self.create_widgets()
+        
+        # Center the window
+        self.update_idletasks()
+        x = parent.winfo_rootx() + (parent.winfo_width() - self.winfo_width()) // 2
+        y = parent.winfo_rooty() + (parent.winfo_height() - self.winfo_height()) // 2
+        self.geometry(f"+{x}+{y}")
+        
+        self.protocol("WM_DELETE_WINDOW", self.on_close)
+        
+        # Auto-run analysis when opened
+        self.start_analysis()
+
+    def create_widgets(self):
+        # Description
+        lbl_desc = ttk.Label(self, text="Cleans up the `.git/lfs/objects/` folder by deleting unused binaries.\nKeeps only LFS files from the last 2 commits (depth = 2) and current index.", 
+                             wraplength=480, justify="left", style="TLabel", font="TkDefaultFont")
+        lbl_desc.pack(padx=16, pady=(16, 12), anchor="w")
+        
+        # Card Frame
+        card = ttk.Frame(self, style="Card.TFrame")
+        card.pack(padx=16, pady=4, fill="both", expand=True)
+        
+        # Grid layout for stats inside the card
+        stats_frm = tk.Frame(card, bg="#ffffff")
+        stats_frm.pack(padx=16, pady=16, fill="both", expand=True)
+        stats_frm.columnconfigure(0, weight=0)
+        stats_frm.columnconfigure(1, weight=1)
+        
+        labels = [
+            ("LFS Cache Path:", 0),
+            ("Total Files in Cache:", 1),
+            ("Total Cache Size:", 2),
+            ("Kept Files (last 2 commits + index):", 3),
+            ("Files to Delete:", 4),
+            ("Estimated Space to Free:", 5)
+        ]
+        
+        self.val_labels = {}
+        for text, row in labels:
+            lbl_name = tk.Label(stats_frm, text=text, bg="#ffffff", fg="#374151", font="TkDefaultFont", anchor="w")
+            lbl_name.grid(row=row, column=0, sticky="w", pady=3)
+            
+            lbl_val = tk.Label(stats_frm, text="-", bg="#ffffff", fg="#1f2937", font="TkDefaultFont", anchor="w")
+            lbl_val.grid(row=row, column=1, sticky="w", padx=10, pady=3)
+            self.val_labels[text] = lbl_val
+            
+        self.val_labels["LFS Cache Path:"].config(text=self.lfs_dir, wraplength=320, justify="left")
+        
+        # Progress & Status Frame
+        self.progress_frm = tk.Frame(self, bg="#f3f4f6")
+        self.progress_frm.pack(padx=16, pady=8, fill="x")
+        
+        self.lbl_status = ttk.Label(self.progress_frm, text="Initializing...", style="TLabel", font="TkDefaultFont")
+        self.lbl_status.pack(anchor="w")
+        
+        self.progress = ttk.Progressbar(self.progress_frm, mode="determinate", style="Custom.Horizontal.TProgressbar")
+        self.progress.pack(fill="x", pady=(4, 0))
+        
+        # Buttons Frame
+        btn_frm = ttk.Frame(self, style="TFrame")
+        btn_frm.pack(padx=16, pady=16, fill="x", side="bottom")
+        
+        self.btn_close = ttk.Button(btn_frm, text="Close", command=self.on_close)
+        self.btn_close.pack(side="right", padx=(8, 0))
+        
+        self.btn_cleanup = ttk.Button(btn_frm, text="Cleanup Cache", style="Primary.TButton", command=self.start_cleanup, state="disabled")
+        self.btn_cleanup.pack(side="right", padx=(8, 0))
+        
+        self.btn_analyze = ttk.Button(btn_frm, text="Re-Analyze", command=self.start_analysis, state="disabled")
+        self.btn_analyze.pack(side="right")
+
+    def start_analysis(self):
+        self.btn_analyze.config(state="disabled")
+        self.btn_cleanup.config(state="disabled")
+        self.lbl_status.config(text="Analyzing LFS cache and commit history...")
+        self.progress.config(mode="indeterminate")
+        self.progress.start(10)
+        
+        threading.Thread(target=self.run_analysis, daemon=True).start()
+
+    def run_analysis(self):
+        try:
+            if not os.path.exists(self.lfs_dir):
+                def on_no_lfs():
+                    self.progress.stop()
+                    self.progress.config(mode="determinate", value=0)
+                    self.lbl_status.config(text="No LFS cache directory found.")
+                    self.btn_analyze.config(state="normal")
+                    for k in self.val_labels:
+                        if k != "LFS Cache Path:":
+                            self.val_labels[k].config(text="0")
+                self.parent.task_queue.put(('sw_status', None, on_no_lfs))
+                return
+                
+            kept_oids = set()
+            
+            def collect_oids(ref=None):
+                cmd = ["git", "lfs", "ls-files", "-l"]
+                if ref:
+                    cmd.append(ref)
+                try:
+                    out = self.git_service._run_lfs_cmd(cmd, check=False)
+                    if out:
+                        for line in out.splitlines():
+                            line = line.strip()
+                            if line:
+                                parts = line.split(maxsplit=2)
+                                if parts:
+                                    oid = parts[0]
+                                    if len(oid) == 64:
+                                        kept_oids.add(oid)
+                except Exception as e:
+                    print(f"Error listing LFS files for {ref or 'index'}: {e}")
+                    
+            collect_oids() # Current index / working tree
+            
+            has_head = False
+            try:
+                self.git_service._run_lfs_cmd(["git", "rev-parse", "--verify", "HEAD"], check=True)
+                has_head = True
+            except Exception:
+                pass
+                
+            if has_head:
+                collect_oids("HEAD")
+                has_parent = False
+                try:
+                    self.git_service._run_lfs_cmd(["git", "rev-parse", "--verify", "HEAD~1"], check=True)
+                    has_parent = True
+                except Exception:
+                    pass
+                if has_parent:
+                    collect_oids("HEAD~1")
+            
+            all_lfs_files = []
+            for root, dirs, files in os.walk(self.lfs_dir):
+                for f in files:
+                    if len(f) == 64:
+                        path = os.path.join(root, f)
+                        try:
+                            size = os.path.getsize(path)
+                            all_lfs_files.append((path, f, size))
+                        except Exception:
+                            pass
+            
+            self.unused_files = []
+            self.total_size_bytes = 0
+            unused_size_bytes = 0
+            self.kept_count = 0
+            self.total_count = len(all_lfs_files)
+            
+            for path, oid, size in all_lfs_files:
+                self.total_size_bytes += size
+                if oid in kept_oids:
+                    self.kept_count += 1
+                else:
+                    self.unused_files.append((path, size))
+                    unused_size_bytes += size
+            
+            def format_size(size_in_bytes):
+                if size_in_bytes < 1024:
+                    return f"{size_in_bytes} B"
+                elif size_in_bytes < 1024 * 1024:
+                    return f"{size_in_bytes / 1024:.2f} KB"
+                elif size_in_bytes < 1024 * 1024 * 1024:
+                    return f"{size_in_bytes / (1024 * 1024):.2f} MB"
+                else:
+                    return f"{size_in_bytes / (1024 * 1024 * 1024):.2f} GB"
+            
+            def on_done():
+                self.progress.stop()
+                self.progress.config(mode="determinate", value=0)
+                self.lbl_status.config(text="Analysis complete. Ready to clean up.")
+                
+                self.val_labels["Total Files in Cache:"].config(text=f"{self.total_count}")
+                self.val_labels["Total Cache Size:"].config(text=format_size(self.total_size_bytes))
+                self.val_labels["Kept Files (last 2 commits + index):"].config(text=f"{self.kept_count}")
+                self.val_labels["Files to Delete:"].config(text=f"{len(self.unused_files)}")
+                self.val_labels["Estimated Space to Free:"].config(text=format_size(unused_size_bytes))
+                
+                self.btn_analyze.config(state="normal")
+                if self.unused_files:
+                    self.btn_cleanup.config(state="normal")
+                else:
+                    self.btn_cleanup.config(state="disabled")
+                    self.lbl_status.config(text="Cache is already clean! No unused files to delete.")
+                    
+            self.parent.task_queue.put(('sw_status', None, on_done))
+            
+        except Exception as err:
+            def on_fail(e_msg=str(err)):
+                self.progress.stop()
+                self.progress.config(mode="determinate", value=0)
+                self.lbl_status.config(text=f"Analysis failed: {e_msg}")
+                self.btn_analyze.config(state="normal")
+            self.parent.task_queue.put(('sw_status', None, on_fail))
+
+    def start_cleanup(self):
+        if not self.unused_files:
+            return
+        
+        confirm = messagebox.askyesno(
+            "Confirm Cleanup",
+            f"Are you sure you want to delete {len(self.unused_files)} unused LFS cache files?\n"
+            f"This will free up local disk space. Deleted files can be re-downloaded if needed."
+        )
+        if not confirm:
+            return
+            
+        self.btn_analyze.config(state="disabled")
+        self.btn_cleanup.config(state="disabled")
+        self.btn_close.config(state="disabled")
+        self.lbl_status.config(text="Deleting unused LFS cache files...")
+        self.progress.config(mode="determinate", value=0)
+        
+        threading.Thread(target=self.run_cleanup, daemon=True).start()
+
+    def run_cleanup(self):
+        deleted_count = 0
+        self.freed_size_bytes = 0
+        total_to_delete = len(self.unused_files)
+        
+        try:
+            for idx, (path, size) in enumerate(self.unused_files):
+                try:
+                    if os.path.exists(path):
+                        os.remove(path)
+                        deleted_count += 1
+                        self.freed_size_bytes += size
+                except Exception as e:
+                    print(f"Failed to delete {path}: {e}")
+                
+                if (idx + 1) % 10 == 0 or (idx + 1) == total_to_delete:
+                    val = int(((idx + 1) / total_to_delete) * 100)
+                    def update_progress(v=val, count=deleted_count):
+                        self.progress.config(value=v)
+                        self.lbl_status.config(text=f"Deleted {count}/{total_to_delete} files...")
+                    self.parent.task_queue.put(('sw_status', None, update_progress))
+            
+            # Post-cleanup: clean up any empty folders under lfs_dir
+            cleaned_dirs = 0
+            for root, dirs, files in os.walk(self.lfs_dir, topdown=False):
+                for d in dirs:
+                    dir_path = os.path.join(root, d)
+                    try:
+                        if not os.listdir(dir_path):
+                            os.rmdir(dir_path)
+                            cleaned_dirs += 1
+                    except Exception as e:
+                        print(f"Failed to remove empty directory {dir_path}: {e}")
+            
+            def format_size(size_in_bytes):
+                if size_in_bytes < 1024:
+                    return f"{size_in_bytes} B"
+                elif size_in_bytes < 1024 * 1024:
+                    return f"{size_in_bytes / 1024:.2f} KB"
+                elif size_in_bytes < 1024 * 1024 * 1024:
+                    return f"{size_in_bytes / (1024 * 1024):.2f} MB"
+                else:
+                    return f"{size_in_bytes / (1024 * 1024 * 1024):.2f} GB"
+            
+            freed_str = format_size(self.freed_size_bytes)
+            log_msg = f"🧹 LFS CACHE CLEANUP: Deleted {deleted_count} unused files. Freed {freed_str}."
+            
+            def on_done():
+                self.progress.config(value=100)
+                self.lbl_status.config(text=f"Cleanup complete! Freed {freed_str}.")
+                messagebox.showinfo("Cleanup Complete", f"Successfully deleted {deleted_count} files.\nFreed {freed_str} of disk space.")
+                
+                self.parent.write_log(log_msg, "success")
+                
+                self.btn_analyze.config(state="normal")
+                self.btn_cleanup.config(state="disabled")
+                self.btn_close.config(state="normal")
+                
+                self.unused_files = []
+                self.val_labels["Total Files in Cache:"].config(text=f"{self.kept_count}")
+                self.val_labels["Total Cache Size:"].config(text=format_size(max(0, self.total_size_bytes - self.freed_size_bytes)))
+                self.val_labels["Files to Delete:"].config(text="0")
+                self.val_labels["Estimated Space to Free:"].config(text="0 B")
+                
+            self.parent.task_queue.put(('sw_status', None, on_done))
+            
+        except Exception as err:
+            def on_fail(e_msg=str(err)):
+                self.lbl_status.config(text=f"Cleanup failed: {e_msg}")
+                self.btn_analyze.config(state="normal")
+                self.btn_close.config(state="normal")
+            self.parent.task_queue.put(('sw_status', None, on_fail))
+
+    def on_close(self):
+        if self.btn_close.cget("state") == "disabled":
+            return
+        self.grab_release()
+        self.destroy()
+
+
 def queue_during_bg_tasks(method):
     import functools
     @functools.wraps(method)
@@ -728,6 +1045,8 @@ class GIT4SWApp(tk.Tk):
             self.btn_save_ver.state(["!disabled"])
             self.btn_save_all.state(["!disabled"])
             self.btn_sync.state(["!disabled"])
+            if hasattr(self, 'btn_cleanup_lfs'):
+                self.btn_cleanup_lfs.state(["!disabled"])
             self.btn_merge.state(["!disabled"])
             self.btn_discard.state(["!disabled"])
         else:
@@ -737,6 +1056,8 @@ class GIT4SWApp(tk.Tk):
             self.btn_save_ver.state(["disabled"])
             self.btn_save_all.state(["disabled"])
             self.btn_sync.state(["disabled"])
+            if hasattr(self, 'btn_cleanup_lfs'):
+                self.btn_cleanup_lfs.state(["disabled"])
             self.btn_merge.state(["disabled"])
             self.btn_discard.state(["disabled"])
             
@@ -1179,7 +1500,7 @@ class GIT4SWApp(tk.Tk):
         lbl_sync_desc.pack(anchor="w", padx=12, pady=1)
         
         sync_btn_frm = tk.Frame(sync_card, bg="#ffffff")
-        sync_btn_frm.pack(anchor="w", padx=12, pady=(4, 6))
+        sync_btn_frm.pack(fill="x", padx=12, pady=(4, 6))
 
         self.btn_sync = ttk.Button(sync_btn_frm, text="Get Latest Version (Sync)", style="Primary.TButton", command=self.sync_repository)
         self.btn_sync.pack(side="left", padx=(0, 8))
@@ -1205,6 +1526,9 @@ class GIT4SWApp(tk.Tk):
         )
         self.chk_auto_sync.pack(side="left", padx=(12, 0))
 
+        self.btn_cleanup_lfs = ttk.Button(sync_btn_frm, text="Cleanup LFS Cache", command=self.show_lfs_cleanup_wizard, width=18)
+        self.btn_cleanup_lfs.pack(side="right")
+
         # SolidWorks Monitor Card
         sw_card = ttk.Frame(view, style="Card.TFrame")
         sw_card.pack(fill="x", padx=16, pady=4)
@@ -1212,8 +1536,28 @@ class GIT4SWApp(tk.Tk):
         lbl_sw_title = ttk.Label(sw_card, text="Live Monitor", style="CardTitle.TLabel")
         lbl_sw_title.pack(anchor="w", padx=12, pady=(8, 2))
         
-        self.lbl_sw_status = ttk.Label(sw_card, text="No SolidWorks connection or active file.", style="Card.TLabel", wraplength=700)
-        self.lbl_sw_status.pack(anchor="w", padx=12, pady=(2, 6))
+        # Grid frame for side-by-side layout
+        self.sw_status_grid = tk.Frame(sw_card, bg="#ffffff")
+        self.sw_status_grid.pack(fill="x", padx=12, pady=(2, 8))
+        self.sw_status_grid.columnconfigure(0, weight=1)
+        self.sw_status_grid.columnconfigure(1, weight=1)
+        
+        # Left column labels
+        self.lbl_sw_status_active = tk.Label(self.sw_status_grid, text="• SolidWorks Status: Inactive", bg="#ffffff", fg="#1f2937", anchor="w", font="TkDefaultFont")
+        self.lbl_sw_status_active.grid(row=0, column=0, sticky="w", pady=0)
+        
+        self.lbl_sw_status_open = tk.Label(self.sw_status_grid, text="• Open Files: 0", bg="#ffffff", fg="#1f2937", anchor="w", font="TkDefaultFont")
+        self.lbl_sw_status_open.grid(row=1, column=0, sticky="w", pady=0)
+        
+        self.lbl_sw_status_locked = tk.Label(self.sw_status_grid, text="• Locked Files: 0", bg="#ffffff", fg="#1f2937", anchor="w", font="TkDefaultFont")
+        self.lbl_sw_status_locked.grid(row=2, column=0, sticky="w", pady=0)
+        
+        # Right column labels
+        self.lbl_sw_status_total = tk.Label(self.sw_status_grid, text="• Total Files: 0", bg="#ffffff", fg="#1f2937", anchor="w", font="TkDefaultFont")
+        self.lbl_sw_status_total.grid(row=0, column=1, sticky="w", pady=0)
+        
+        self.lbl_sw_status_repo_size = tk.Label(self.sw_status_grid, text="• Repository Size: -", bg="#ffffff", fg="#1f2937", anchor="w", font="TkDefaultFont")
+        self.lbl_sw_status_repo_size.grid(row=1, column=1, sticky="w", pady=0)
         
         return view
 
@@ -1225,6 +1569,8 @@ class GIT4SWApp(tk.Tk):
         if not self.git_service.is_git_repo():
             self.lbl_local_status.config(text="⚠️ Not a Git Repo", foreground="#ef4444")
             self.btn_sync.state(["disabled"])
+            if hasattr(self, 'btn_cleanup_lfs'):
+                self.btn_cleanup_lfs.state(["disabled"])
             self.btn_clone.state(["!disabled"])
             self.cb_branch.config(values=[], state="disabled")
             # [수정] 비활성화 시 전용 스타일 강제 적용
@@ -1238,6 +1584,8 @@ class GIT4SWApp(tk.Tk):
                 clean_url = re.sub(r'^(https?://)[^@/]+@', r'\1', url)
                 self.ent_remote_url.insert(0, clean_url)
             self.btn_sync.state(["!disabled"])
+            if hasattr(self, 'btn_cleanup_lfs'):
+                self.btn_cleanup_lfs.state(["!disabled"])
             self.btn_clone.state(["!disabled"])
             # [수정] 비활성화 시 전용 스타일 강제 적용
             self.btn_make_my_branch.config(style="MakeBranch.TButton", state="disabled")
@@ -3427,9 +3775,13 @@ class GIT4SWApp(tk.Tk):
             except Exception as e:
                 self.write_log(f"Failed to copy image to clipboard: {e}", "error")
 
-    # ==========================================
-    # GENERAL ACTIONS & QUEUE PROCESSING
-    # ==========================================
+    @queue_during_bg_tasks
+    def show_lfs_cleanup_wizard(self):
+        if not self.git_service.is_git_repo():
+            messagebox.showerror("Error", "Not a valid Git repository.")
+            return
+        LfsCleanupWizardDialog(self, self.git_service)
+
     @queue_during_bg_tasks
     def sync_repository(self, on_success_callback=None, silent=False):
         # --- Step 1: Check for open SolidWorks files (runs in GUI thread) ---
@@ -3629,6 +3981,8 @@ class GIT4SWApp(tk.Tk):
         # --- Step 2: Proceed with git sync in background thread ---
         self.btn_sync.config(text="Syncing...")
         self.btn_sync.state(["disabled"])
+        if hasattr(self, 'btn_cleanup_lfs'):
+            self.btn_cleanup_lfs.state(["disabled"])
         
         def run():
             self.increment_tasks()
@@ -5197,6 +5551,8 @@ finally:
                         self.btn_save_ver.state(["!disabled"])
                         self.btn_save_all.state(["!disabled"])
                         self.btn_sync.state(["!disabled"])
+                        if hasattr(self, 'btn_cleanup_lfs'):
+                            self.btn_cleanup_lfs.state(["!disabled"])
                         self.btn_merge.state(["!disabled"])
                         self.btn_discard.state(["!disabled"])
                         if hasattr(self, 'btn_clone'):
@@ -5208,6 +5564,8 @@ finally:
                         self.btn_save_ver.state(["disabled"])
                         self.btn_save_all.state(["disabled"])
                         self.btn_sync.state(["disabled"])
+                        if hasattr(self, 'btn_cleanup_lfs'):
+                            self.btn_cleanup_lfs.state(["disabled"])
                         self.btn_merge.state(["disabled"])
                         self.btn_discard.state(["disabled"])
                         if hasattr(self, 'btn_clone'):
@@ -5240,7 +5598,14 @@ finally:
                 elif msg_type == 'sw_status':
                     # SolidWorks live monitor state update
                     if content is not None:
-                        self.lbl_sw_status.config(text=content)
+                        if isinstance(content, dict):
+                            self.lbl_sw_status_active.config(text=f"• SolidWorks: {content.get('active', '-')}")
+                            self.lbl_sw_status_open.config(text=f"• Opened Files: {content.get('open_files', '-')}")
+                            self.lbl_sw_status_locked.config(text=f"• Locked Files: {content.get('locked_files', '-')}")
+                            self.lbl_sw_status_total.config(text=f"• Total Files: {content.get('total_files', '-')}")
+                            self.lbl_sw_status_repo_size.config(text=f"• Repository Size: {content.get('repo_size', '-')}")
+                        else:
+                            self.write_log(content, "info")
                     
                 if callback:
                     callback()
@@ -5397,29 +5762,53 @@ finally:
                                         
                                 threading.Thread(target=run_unlock, args=(rel_path, matched_path), daemon=True).start()
                             
-                # 5. Build status message for Dashboard
+                # 5. Build status message/dictionary for Dashboard
                 is_active = self.sw_service._get_sw_app() is not None
                 active_text = "Active" if is_active else "Inactive"
                 total_files = len(self.files_data) if getattr(self, 'files_data', None) else 0
                 num_open = len(open_docs) if open_docs else 0
                 num_locked = sum(1 for f in self.files_data if f.get('locked')) if getattr(self, 'files_data', None) else 0
                 
-                status_text = (
-                    f"• SolidWorks Status: {active_text}\n"
-                    f"• Total Files: {total_files}\n"
-                    f"• Open Files: {num_open}\n"
-                    f"• Locked Files: {num_locked}"
-                )
+                # Calculate Repository Size
+                repo_size = 0
+                try:
+                    for dirpath, dirnames, filenames in os.walk(self.git_service.repo_path):
+                        for f in filenames:
+                            fp = os.path.join(dirpath, f)
+                            if not os.path.islink(fp):
+                                repo_size += os.path.getsize(fp)
+                except Exception as e:
+                    print(f"Error walking repo path for size: {e}")
+
+                def format_size(size_in_bytes):
+                    if size_in_bytes < 1024:
+                        return f"{size_in_bytes} B"
+                    elif size_in_bytes < 1024 * 1024:
+                        return f"{size_in_bytes / 1024:.2f} KB"
+                    elif size_in_bytes < 1024 * 1024 * 1024:
+                        return f"{size_in_bytes / (1024 * 1024):.2f} MB"
+                    else:
+                        return f"{size_in_bytes / (1024 * 1024 * 1024):.2f} GB"
+
+                repo_size_str = format_size(repo_size)
+
+                status_data = {
+                    'active': active_text,
+                    'total_files': total_files,
+                    'open_files': num_open,
+                    'locked_files': num_locked,
+                    'repo_size': repo_size_str
+                }
                 
                 # Update status label
                 # If the set of open files changed (comparing normalized sets case-insensitively), trigger refresh
                 if curr_open_lower != last_open_lower:
                     if self.bg_tasks_count == 0:
-                        self.task_queue.put(('sw_status', status_text, self.refresh_file_list))
+                        self.task_queue.put(('sw_status', status_data, self.refresh_file_list))
                     else:
-                        self.task_queue.put(('sw_status', status_text, None))
+                        self.task_queue.put(('sw_status', status_data, None))
                 else:
-                    self.task_queue.put(('sw_status', status_text, None))
+                    self.task_queue.put(('sw_status', status_data, None))
                 
                 # 6. Save current set for next iteration
                 self.last_open_files = current_open_files

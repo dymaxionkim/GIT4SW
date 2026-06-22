@@ -18,7 +18,8 @@
 
 ## 1. Key Features and Characteristics
 
-* **Real-time SolidWorks API Integration Monitoring**: A background thread periodically tracks document objects in the active SolidWorks window. It automatically acquires a remote LFS Lock as soon as the user opens a CAD file and automatically releases the Lock when the window is closed.
+* **Real-time SolidWorks API Integration Monitoring & Repository Size**: A background thread periodically tracks document objects in the active SolidWorks window. It automatically acquires a remote LFS Lock as soon as the user opens a CAD file and automatically releases the Lock when the window is closed. Additionally, the dashboard displays the total physical **Repository Size** (formatted in B, KB, MB, GB), which is updated automatically.
+* **Git LFS Cache Cleanup Wizard (Cleanup LFS Cache)**: Provides a built-in GUI wizard to safely clean up the local `.git/lfs/objects/` directory. It scans and keeps only LFS files associated with the current index (working tree) and the last 2 commits (`HEAD`, `HEAD~1`), purging all other obsolete historical caches to free up substantial local disk space.
 * **Work Safety and Upload Prevention Features**:
   - When switching branches or completing a sync, if there are unsaved changes in SolidWorks, it guides the user via a dialog popup to save and close changes first to prevent file corruption and lock conflicts, ensuring safe data coordination.
   - **Safety Check During Upload**: If any of the target files for version upload are currently open in SolidWorks, it blocks the operation with a warning popup. Additionally, if a file locked by someone other than the user is included, users can choose whether to proceed by excluding only those specific files via a Yes/No warning window.
@@ -35,7 +36,7 @@
   - **Sequential Button Execution Queue**: If another action button is clicked while a background process is running ("Working"), the task is added to a waiting queue and starts sequentially after the current task is completely finished.
   - **Git Process Force Termination**: Provides a Terminate button in the System Log panel that can immediately and safely force-terminate the running Git subprocess tree; when terminated, all pending tasks in the queue are also automatically cleared.
 * **README.md Shortcut and Auto-sync in Dashboard**: A dedicated README.md edit button is provided to the right of the Active Branch area on the dashboard. Upon finishing editing and closing Notepad, the modified `README.md` file is automatically committed and pushed to the remote Git repository (`git add`, `commit`, `push`). If the file does not exist in the local repository, it automatically creates and applies it from the program template's `template/README.md` before opening Notepad.
-* **Auto Sync Function**: An Auto Sync checkbox has been added to the Synchronization category on the dashboard. This enables sequential processing of "Get Latest Version (Sync)" and "Merge main branch into current branch" tasks automatically upon program startup or immediately after repository switching, cloning, or new creation.
+* **Auto Sync & Optimized Version Comparison**: An Auto Sync checkbox has been added to the Synchronization category on the dashboard. This enables sequential processing of "Get Latest Version (Sync)" and "Merge main branch into current branch" tasks automatically upon program startup or immediately after repository switching, cloning, or new creation. To avoid redundant Git processes, the client fetches remote updates first and compares commit hashes; if the local branch is already at the same commit as the target remote/main branch, or is already an ancestor (already merged), the merge/pull operation is cleanly skipped.
 * **Powerful Conflict Resolution Popup (LFS Pointer Error Response)**:
   - If a conflict occurs during Sync/Merge/Upload, a multi-selection dialog rendered with system fonts is displayed. Users can select multiple files using the mouse and Ctrl/Shift combinations to perform bulk overwrite resolution (based on Local/Remote or branch name).
   - Even in situations where `git merge` fails due to Git LFS pointer mismatches, it detects the exception, reliably brings up the conflict dialog, and handles it.
@@ -152,6 +153,9 @@ Details and examples for each configuration item are as follows:
    - Select exactly one assembly (`.sldasm`) file and click the **[BOM]** button in the File Manager toolbar.
    - If the assembly has multiple configurations, select the target configuration in the dropdown popup window.
    - The extraction process runs in the background. Once completed, verify the generated `[assembly]__BOM.xlsx` (indented tree) and `[assembly]__PL.xlsx` (flat partlist) files under the `2D/BOM/` subfolder relative to the assembly's directory.
+9. **Git LFS Cache Cleanup (Cleanup LFS Cache)**:
+   - When local disk space becomes low, click the **[Cleanup LFS Cache]** button on the dashboard to launch the cleanup wizard dialog.
+   - The wizard automatically scans the `.git/lfs/objects/` path and identifies unused large binary files that do not belong to the current index or the last 2 commits (`HEAD`, `HEAD~1`). Clicking the [Cleanup Cache] button will safely remove these files to reclaim local disk space.
 
 ### 4.3 Maintainer Mode (Administrator Functions)
 
