@@ -30,6 +30,8 @@ gantt
     EXPORT 안정화 및 BOM/Partlist 일괄 추출 구현 :active, milestone8_9, 2026-06-22, 2026-06-22
     section LFS 정리 및 최적화
     LFS 캐시 정리 마법사, 저장소 용량 표시 및 병합 최적화 :active, milestone10, 2026-06-22, 2026-06-22
+    section 버튼별 권한 분리 및 COM 표준화
+    버튼별 읽기전용 구분 & COM 동적 디스패치 안정화 :active, milestone11, 2026-06-22, 2026-06-22
 ```
 
 ---
@@ -162,6 +164,15 @@ gantt
 
 ---
 
+### 11단계: COM 동적 디스패치 표준화 및 버튼별 파일 잠금/권한 처리의 엄격한 분리 (Milestone 11 - 2026-06-22)
+* **COM 동적 디스패치 (`win32com.client.dynamic.Dispatch`) 전면 표준화**:
+  - 특정 환경의 `%TEMP%\gen_py` 캐시 빌드로 인해 발생하는 `TypeError: int() argument must be a string, a bytes-like object or a real number, not 'VARIANT'` 크래시 오류를 원천 차단하기 위해, 애플리케이션 및 하위 문서 객체 바인딩을 지연 바인딩(late-binding) 기반의 동적 디스패치로 전면 수정하였습니다.
+* **버튼별 읽기 전용 여부 분리 및 동적 LFS Lock 처리**:
+  - **SolidWorks 버튼**: 사용자가 파일 잠금(Lock)을 소유하고 있거나 lock 명령에 성공한 파일만 쓰기 권한(디스크 읽기전용 해제 및 `swOpenDocOptions_Silent` = 1)을 주어 활성화하고, 타인 소유 또는 잠금 실패 시에는 안전하게 읽기 전용 모드(`swOpenDocOptions_Silent | swOpenDocOptions_ReadOnly` = 1 | 2)로 오픈하여 충돌 실수를 사전에 차단합니다.
+  - **BOM, EXPORT, eDrawings 버튼**: 도면/모델을 단순 참고하거나 외부로 출력만 하는 버튼들이므로, 로컬 파일 잠금 획득이나 권한 속성 수정을 수행하지 않습니다. 특히 BOM 추출 스크립트(`sw_bom_runner.py`)는 대상 어셈블리를 조용히 읽기 전용 모드로 로드하여 다른 엔지니어와의 파일 락 경합을 방지하도록 격리하였습니다.
+
+---
+
 ## 📈 핵심 아키텍처 진화 대조표
 
 | 비교 항목 | 초기 설계 (V01) | 현재 설계 (최신 헤드) | 개선 효과 및 핵심 가치 |
@@ -179,6 +190,7 @@ gantt
 | **LFS 캐시 정리** | 수동 정리 또는 복잡한 git lfs prune 명령어 의존 | LFS 캐시 정리 마법사 GUI 제공 및 최근 2개 커밋+인덱스 자동 보존 | 불필요한 대용량 CAD 파일의 옛 캐시를 손쉽게 클릭 한 번으로 제거하여 수십 GB 이상의 로컬 디스크 공간 확보 |
 | **대시보드 정보 표시** | SolidWorks의 단순 실행 여부(Active/Inactive)만 모니터링 | 어셈블리/파트 개수, 열린 파일 수, LFS 잠금 수에 더해 **전체 저장소 크기(Repository Size)** 자동 합산 표시 | 작업 공간의 실제 물리적 용량을 상시 인지하고 CAD 파일의 누적 데이터 추이를 모니터링하기 용이함 |
 | **동기화 및 병합 연산** | 항상 원격 서버 또는 main 브랜치와 merge 작업 강제 시도 | fetch 선행 후 커밋 동일성 및 조상(Ancestor) 판별로 불필요한 머지 조기 스킵 | 네트워크 I/O 및 내부 Git 프로세스 부하를 단축하여 동기화 속도 90% 이상 획득 |
+| **버튼별 읽기 전용** | 모든 경로에서 디스크 쓰기 속성을 강제 제거 또는 일괄 적용 | SolidWorks 버튼만 LFS 잠금에 기반해 동적 지정, BOM/EXPORT/eDrawings는 쓰기 권한 수정 배제 및 BOM 읽기전용 격리 | 불필요한 LFS 잠금 획득 연산 감소 및 다른 설계자 도면 덮어쓰기 위험 원천 예방 |
 
 ---
 
