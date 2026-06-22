@@ -60,6 +60,17 @@
     - **Watchdog Timeout Protection**: If SolidWorks hangs or encounters a deadlock (e.g., when loading a corrupted or heavy drawing file) for more than 3 minutes on a single file, a watchdog timer terminates the hung subprocess, kills the deadlocked SolidWorks process, spins up a fresh instance, and automatically resumes conversion from the next file in queue.
     - **Robust Encoding & Localized Name Support**: The stdout/stderr communication streams use UTF-8 and fallback replacement (`errors="replace"`), preventing any background reader thread crashes in the Tkinter GUI when printing non-ASCII configuration or file names (such as the Korean configuration name `기본`).
     - **Deadlock-Free Document Closing**: To prevent SolidWorks from hanging during document closing, `CloseDoc` is invoked using the document's Title (via `GetTitle()`) instead of the absolute file path. Furthermore, all active Python COM wrapper references to the files are cleared (`model = None`, etc.) and garbage collection is explicitly triggered (`gc.collect()` and `CoCollectFreeUnusedLibraries()`) before closing, releasing any lock on the files.
+* **Assembly BOM & Partlist Extraction (BOM button)**:
+  - A new **[BOM]** button is provided in the File Manager toolbar.
+  - It is enabled **only** when a single assembly (`.sldasm`) file is selected and no background tasks are running.
+  - Clicking this button recursively extracts a hierarchical BOM Tree and a flat Partlist, using the SolidWorks COM API to traverse the assembly hierarchy down to the lowest level.
+  - **Dynamic Configuration Selector Popup**: If the assembly has 2 or more configurations, it prompts the user with a configuration selection popup dialog. This query runs in a separate clean Python subprocess, completely bypassing COM apartment model clashes on the main GUI thread.
+  - **Smart Filtering**: Automatically excludes suppressed components and components marked as "Exclude from BOM" in SolidWorks.
+  - **Excel Formatting & Columns Schema**: Saves two sheets under `2D/BOM/` relative to the assembly's folder:
+    1. Hierarchical BOM Tree (`[assembly]__BOM.xlsx`): Displays the tree with indented `Partname` values (prepending `Depth - 1` space characters). If the `Partname` property is Null, it falls back to the base filename.
+    2. Flat Partlist (`[assembly]__PL.xlsx`): Aggregates all parts and sub-assemblies with total accumulated quantities.
+    - Standard columns are ordered strictly as: `Depth`, `Type`, `PartNumber`, `Partname`, `Qty`, `Material`, `Treatment`, `Weight`, `Description`, `File Name`, `Configuration`, `File Path`.
+  - **COM Reference & Document Cleanup**: Automatically closes the main assembly and all opened referenced sub-assemblies/part files recursively in SolidWorks, releasing all file handles.
 
 ---
 
@@ -137,6 +148,10 @@ Details and examples for each configuration item are as follows:
    - While filtering for the desired range of files in the file list, press the **[EXPORT]** button.
   - Check the target formats (PDF, DXF, STEP, etc.) and enter a `PREFIX` if there are prefix conditions.
   - Press the **[Start]** button; the SolidWorks engine will run in the background and batch convert and save the target files into the specified subdirectories (e.g., `2D/PDF/`, `2D/STEP/`) with high quality, maintaining black & white pen tables (for PDF) and AP214 color (for STEP).
+8. **Extract Assembly BOM and Partlist**:
+   - Select exactly one assembly (`.sldasm`) file and click the **[BOM]** button in the File Manager toolbar.
+   - If the assembly has multiple configurations, select the target configuration in the dropdown popup window.
+   - The extraction process runs in the background. Once completed, verify the generated `[assembly]__BOM.xlsx` (indented tree) and `[assembly]__PL.xlsx` (flat partlist) files under the `2D/BOM/` subfolder relative to the assembly's directory.
 
 ### 4.3 Maintainer Mode (Administrator Functions)
 
