@@ -4689,6 +4689,7 @@ class GIT4SWApp(tk.Tk):
             
             py_code = f"""
 import win32com.client
+import win32com.client.dynamic
 import pythoncom
 import json
 import sys
@@ -4697,7 +4698,7 @@ import os
 try:
     pythoncom.CoInitialize()
     raw_obj = win32com.client.GetActiveObject("SldWorks.Application")
-    sw_app = win32com.client.Dispatch(raw_obj)
+    sw_app = win32com.client.dynamic.Dispatch(raw_obj)
     
     path = {repr(target_path_fs)}
     config_names = []

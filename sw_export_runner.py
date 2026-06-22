@@ -65,9 +65,10 @@ def get_dynamic_sw_app(raw_obj):
         return None
     load_sw_typelib()
     try:
-        return win32com.client.Dispatch(raw_obj)
+        import win32com.client.dynamic
+        return win32com.client.dynamic.Dispatch(raw_obj)
     except Exception as e:
-        print(f"Warning: Failed to ensure early-binding dispatch wrapper: {e}", flush=True)
+        print(f"Warning: Failed to ensure dynamic dispatch wrapper: {e}", flush=True)
         try:
             return win32com.client.Dispatch(raw_obj)
         except Exception:

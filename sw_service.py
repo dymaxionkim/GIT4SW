@@ -5,6 +5,7 @@ import sys
 try:
     import win32com.client
     import pythoncom
+    import win32com.client.dynamic
     WIN32_AVAILABLE = True
 except ImportError:
     WIN32_AVAILABLE = False
@@ -24,7 +25,8 @@ class SolidWorksService:
             
             # Connect to active SolidWorks object
             # Note: "SldWorks.Application" or version-specific CLSIDs like "SldWorks.Application.30"
-            self.sw_app = win32com.client.GetActiveObject("SldWorks.Application")
+            raw_sw = win32com.client.GetActiveObject("SldWorks.Application")
+            self.sw_app = win32com.client.dynamic.Dispatch(raw_sw)
             return True
         except Exception:
             self.sw_app = None

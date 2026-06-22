@@ -29,7 +29,8 @@ except ImportError:
     def load_sw_typelib():
         return None
     def get_dynamic_sw_app(raw_obj):
-        return win32com.client.Dispatch(raw_obj)
+        import win32com.client.dynamic
+        return win32com.client.dynamic.Dispatch(raw_obj)
     def get_component_model(comp):
         try:
             return comp.GetModelDoc2()

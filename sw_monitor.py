@@ -51,7 +51,8 @@ class SolidWorksMonitorService:
                     self.sw_app = None
                     
             # Try to get active SolidWorks instance
-            self.sw_app = win32com.client.GetActiveObject("SldWorks.Application")
+            raw_sw = win32com.client.GetActiveObject("SldWorks.Application")
+            self.sw_app = win32com.client.dynamic.Dispatch(raw_sw)
             return self.sw_app
         except Exception:
             self.sw_app = None
