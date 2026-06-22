@@ -155,3 +155,18 @@ Details and examples for each configuration item are as follows:
 * If you accidentally chose to resolve a conflict by selecting "Theirs" (Remote Version) and lost your local changes, you can retrieve them from the `.backup/` folder in your workspace root.
 * All original conflicted local files are copied here before the conflict prompt is shown. The files are named using the pattern `[filename]_[YYYYMMDD_HHMMSS].[ext]`.
 * Simply copy the backup file back to its original location and rename it to restore your work.
+
+#### 4.4.3 SOLIDWORKS CAM Add-in Popup Appearing During EXPORT
+
+If unexpected popup windows from **SOLIDWORKS CAM** appear while running the EXPORT batch conversion, it means the SOLIDWORKS CAM add-in is currently enabled in your SolidWorks installation. This add-in can interfere with the automated background conversion process by displaying its own initialization or warning dialogs, which will block progress.
+
+**Resolution**: Disable the SOLIDWORKS CAM add-in in SolidWorks before running EXPORT:
+1. Open SolidWorks.
+2. Go to **Tools → Add-ins...**
+3. In the Add-ins dialog, find **SOLIDWORKS CAM** in the list.
+4. Uncheck **both** the "Active Add-ins" checkbox (immediate load) and the "Start Up" checkbox (load on startup).
+5. Click **OK** and close SolidWorks.
+6. Run EXPORT again — the popups will no longer appear.
+
+> [!NOTE]
+> You only need to do this once. After disabling SOLIDWORKS CAM, your setting is remembered by SolidWorks and will remain disabled on subsequent EXPORT runs.
