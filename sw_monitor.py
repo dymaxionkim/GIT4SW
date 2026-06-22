@@ -138,24 +138,150 @@ class SolidWorksMonitorService:
         if not sw:
             return True # If SW crashed meanwhile, proceed anyway
             
+        orig_ref_prompt = True
+        orig_warn_save = False
+        orig_rebuild_err = False
+        orig_load_ext_ref = 0
+        orig_lightweight_resolve = 0
+        orig_large_assembly_resolve = 0
+        try:
+            orig_ref_prompt = sw.GetUserPreferenceToggle(15)   # swExtRefNoPromptOrSave
+            orig_warn_save = sw.GetUserPreferenceToggle(249)    # swWarnSaveUpdateErrors
+            orig_rebuild_err = sw.GetUserPreferenceToggle(119)  # swShowErrorsEveryRebuild
+            orig_load_ext_ref = sw.GetUserPreferenceIntegerValue(242) # swLoadExternalReferences
+            orig_lightweight_resolve = sw.GetUserPreferenceIntegerValue(243) # swAssemblyLoadLightweightResolve
+            orig_large_assembly_resolve = sw.GetUserPreferenceIntegerValue(245) # swLargeAssemblyModeResolveLightweight
+            
+            sw.SetUserPreferenceToggle(15, True)   # Suppress reference prompts
+            sw.SetUserPreferenceToggle(249, False) # Suppress save update warnings
+            sw.SetUserPreferenceToggle(119, False) # Suppress rebuild error dialogs
+            sw.SetUserPreferenceIntegerValue(246, 1) # Continue on rebuild errors
+            sw.SetUserPreferenceIntegerValue(242, 1) # Load all references silently
+            sw.SetUserPreferenceIntegerValue(243, 1) # Resolve lightweight silently
+            sw.SetUserPreferenceIntegerValue(245, 1) # Resolve large assembly lightweight silently
+        except Exception as pref_e:
+            print(f"Warning: Failed to set user preferences: {pref_e}")
+
         try:
             if choice == 'save_and_close':
                 # SolidWorks API ModelDoc2::Save3
-                # 1 = swSaveAsOptions_Silent
+                # 5 = swSaveAsOptions_Silent (1) | swSaveAsOptions_SaveReferenced (4)
                 # We pass reference values as long, but pythoncom allows simple arguments
-                # doc_obj.Save3(1, 0, 0)
+                # doc_obj.Save3(5, 0, 0)
                 try:
                     # In some python environments, dynamic dispatch is needed
-                    doc_obj.Save3(1, 0, 0)
+                    doc_obj.Save3(5, 0, 0)
                 except Exception as e:
                     print(f"Standard Save3 failed, trying Save: {e}")
                     doc_obj.Save()
+            elif choice == 'close_only':
+                pass
             
-            # Close document using SW Application CloseDoc
-            # CloseDoc takes the Title of the document
-            sw.CloseDoc(target_doc['title'])
+            # Add a small delay for SolidWorks internal engine state synchronization
+            import time
+            time.sleep(0.2)
+
+            # Step 1: Close the main target document using QuitDoc FIRST.
+            # This releases the active document lock and parent-child reference links.
+            title = target_doc['title']
+            sw.QuitDoc(title)
+            base_title, _ = os.path.splitext(title)
+            if base_title != title:
+                sw.QuitDoc(base_title)
+
+            # Allow SolidWorks to settle and release COM reference locks
+            time.sleep(0.3)
+
+            # Step 2: Clean up all REMAINING open documents (referenced/linked assemblies and skeletons)
+            # using a dependency-aware iterative cleanup loop to avoid reference prompts.
+            try:
+                iteration = 0
+                last_doc_count = -1
+                stuck_count = 0
+                
+                while iteration < 10:  # Try up to 10 passes to resolve nested references
+                    all_docs = self._call_com_method(sw, 'GetDocuments')
+                    if not all_docs:
+                        break
+                    
+                    current_count = len(all_docs)
+                    if current_count == last_doc_count:
+                        stuck_count += 1
+                        if stuck_count > 2:
+                            break
+                    else:
+                        stuck_count = 0
+                    last_doc_count = current_count
+                    
+                    parent_docs = []  # assemblies and drawings
+                    child_docs = []   # parts
+                    
+                    for d in all_docs:
+                        try:
+                            d_title = self._call_com_method(d, 'GetTitle')
+                            if not d_title:
+                                continue
+                            try:
+                                dtype = d.GetType()
+                            except Exception:
+                                dtype = getattr(d, 'GetType')
+                                if callable(dtype):
+                                    dtype = dtype()
+                                    
+                            title_lower = d_title.lower()
+                            if dtype in (2, 3) or title_lower.endswith(".sldasm") or title_lower.endswith(".slddrw"):
+                                parent_docs.append((d, d_title))
+                            else:
+                                child_docs.append((d, d_title))
+                        except Exception:
+                            pass
+                    
+                    closed_any = False
+                    # Close parents first to release references on children
+                    for d, d_title in parent_docs:
+                        try:
+                            sw.QuitDoc(d_title)
+                            base_d_title, _ = os.path.splitext(d_title)
+                            if base_d_title != d_title:
+                                sw.QuitDoc(base_d_title)
+                            closed_any = True
+                        except Exception:
+                            pass
+                            
+                    if closed_any:
+                        time.sleep(0.1)
+                        
+                    # Close children
+                    for d, d_title in child_docs:
+                        try:
+                            sw.QuitDoc(d_title)
+                            base_d_title, _ = os.path.splitext(d_title)
+                            if base_d_title != d_title:
+                                sw.QuitDoc(base_d_title)
+                            closed_any = True
+                        except Exception:
+                            pass
+                            
+                    if not closed_any:
+                        break
+                    time.sleep(0.1)
+                    iteration += 1
+            except Exception as e_post:
+                print(f"Warning: Failed to cleanup remaining referenced docs: {e_post}")
+
             return True
         except Exception as e:
             print(f"COM Error while closing file: {e}")
             # If we fail to close, ask the user if they want to proceed anyway
             return False
+        finally:
+            # Restore user preferences to original state
+            try:
+                sw.SetUserPreferenceToggle(15, orig_ref_prompt)
+                sw.SetUserPreferenceToggle(249, orig_warn_save)
+                sw.SetUserPreferenceToggle(119, orig_rebuild_err)
+                sw.SetUserPreferenceIntegerValue(242, orig_load_ext_ref)
+                sw.SetUserPreferenceIntegerValue(243, orig_lightweight_resolve)
+                sw.SetUserPreferenceIntegerValue(245, orig_large_assembly_resolve)
+            except:
+                pass

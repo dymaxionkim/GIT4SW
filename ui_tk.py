@@ -3437,23 +3437,169 @@ class GIT4SWApp(tk.Tk):
 
             sw = self.sw_service._get_sw_app()
             if sw:
-                for doc in open_docs:
-                    doc_obj = doc.get('doc_obj')
-                    if not doc_obj:
-                        continue
-                    try:
-                        if ans is True:  # Yes: save and close
+                orig_ref_prompt = True
+                orig_warn_save = False
+                orig_rebuild_err = False
+                orig_load_ext_ref = 0
+                orig_lightweight_resolve = 0
+                orig_large_assembly_resolve = 0
+                try:
+                    orig_ref_prompt = sw.GetUserPreferenceToggle(15)   # swExtRefNoPromptOrSave
+                    orig_warn_save = sw.GetUserPreferenceToggle(249)    # swWarnSaveUpdateErrors
+                    orig_rebuild_err = sw.GetUserPreferenceToggle(119)  # swShowErrorsEveryRebuild
+                    orig_load_ext_ref = sw.GetUserPreferenceIntegerValue(242) # swLoadExternalReferences
+                    orig_lightweight_resolve = sw.GetUserPreferenceIntegerValue(243) # swAssemblyLoadLightweightResolve
+                    orig_large_assembly_resolve = sw.GetUserPreferenceIntegerValue(245) # swLargeAssemblyModeResolveLightweight
+                    
+                    sw.SetUserPreferenceToggle(15, True)   # Suppress reference prompts
+                    sw.SetUserPreferenceToggle(249, False) # Suppress save update warnings
+                    sw.SetUserPreferenceToggle(119, False) # Suppress rebuild error dialogs
+                    sw.SetUserPreferenceIntegerValue(246, 1) # Continue on rebuild errors
+                    sw.SetUserPreferenceIntegerValue(242, 1) # Load all references silently
+                    sw.SetUserPreferenceIntegerValue(243, 1) # Resolve lightweight silently
+                    sw.SetUserPreferenceIntegerValue(245, 1) # Resolve large assembly lightweight silently
+                except Exception as pref_e:
+                    print(f"Warning: Failed to set user preferences: {pref_e}")
+
+                try:
+                    import time, os
+
+                    # Collect all titles of documents we want to explicitly close
+                    target_titles = set()
+                    for doc in open_docs:
+                        t = doc.get('title')
+                        if t:
+                            target_titles.add(t)
+
+                    # Step 1: Save any docs that need saving (ans is True)
+                    if ans is True:
+                        for doc in open_docs:
+                            doc_obj = doc.get('doc_obj')
+                            if not doc_obj:
+                                continue
                             try:
-                                doc_obj.Save3(1, 0, 0)
+                                doc_obj.Save3(5, 0, 0)  # swSaveAsOptions_Silent (1) | swSaveAsOptions_SaveReferenced (4)
                             except Exception:
                                 try:
                                     doc_obj.Save()
                                 except Exception:
                                     pass
-                        # Close regardless of save choice
-                        sw.CloseDoc(doc['title'])
-                    except Exception as ce:
-                        print(f"DEBUG: Failed to close {doc['title']}: {ce}")
+
+                    time.sleep(0.2)
+
+                    # Step 2: Close the target documents using QuitDoc FIRST.
+                    # This releases the active document lock and parent-child reference links.
+                    for doc in open_docs:
+                        title = doc.get('title', '')
+                        if not title:
+                            continue
+                        try:
+                            sw.QuitDoc(title)
+                            base_title, _ = os.path.splitext(title)
+                            if base_title != title:
+                                sw.QuitDoc(base_title)
+                        except Exception as ce:
+                            print(f"DEBUG: Failed to close {title}: {ce}")
+
+                    # Allow SolidWorks to settle and release COM reference locks
+                    time.sleep(0.3)
+
+                    # Step 3: Clean up all REMAINING open documents (referenced/linked assemblies and skeletons)
+                    # using a dependency-aware iterative cleanup loop to avoid reference prompts.
+                    try:
+                        iteration = 0
+                        last_doc_count = -1
+                        stuck_count = 0
+                        
+                        while iteration < 10:  # Try up to 10 passes to resolve nested references
+                            try:
+                                all_open = sw.GetDocuments()
+                            except Exception:
+                                val = getattr(sw, 'GetDocuments')
+                                all_open = val() if callable(val) else val
+                            
+                            if not all_open:
+                                break
+                            
+                            current_count = len(all_open)
+                            if current_count == last_doc_count:
+                                stuck_count += 1
+                                if stuck_count > 2:
+                                    break
+                            else:
+                                stuck_count = 0
+                            last_doc_count = current_count
+                            
+                            parent_docs = []  # assemblies and drawings
+                            child_docs = []   # parts
+                            
+                            for d in all_open:
+                                try:
+                                    try:
+                                        d_title = d.GetTitle()
+                                    except Exception:
+                                        d_title = getattr(d, 'GetTitle')
+                                    if not d_title:
+                                        continue
+                                    try:
+                                        dtype = d.GetType()
+                                    except Exception:
+                                        dtype = getattr(d, 'GetType')
+                                        if callable(dtype):
+                                            dtype = dtype()
+                                            
+                                    title_lower = d_title.lower()
+                                    if dtype in (2, 3) or title_lower.endswith(".sldasm") or title_lower.endswith(".slddrw"):
+                                        parent_docs.append((d, d_title))
+                                    else:
+                                        child_docs.append((d, d_title))
+                                except Exception:
+                                    pass
+                            
+                            closed_any = False
+                            # Close parents first to release reference locks on children
+                            for d, d_title in parent_docs:
+                                try:
+                                    sw.QuitDoc(d_title)
+                                    base_d_title, _ = os.path.splitext(d_title)
+                                    if base_d_title != d_title:
+                                        sw.QuitDoc(base_d_title)
+                                    closed_any = True
+                                except Exception:
+                                    pass
+                                    
+                            if closed_any:
+                                time.sleep(0.1)
+                                
+                            # Close children
+                            for d, d_title in child_docs:
+                                try:
+                                    sw.QuitDoc(d_title)
+                                    base_d_title, _ = os.path.splitext(d_title)
+                                    if base_d_title != d_title:
+                                        sw.QuitDoc(base_d_title)
+                                    closed_any = True
+                                except Exception:
+                                    pass
+                                    
+                            if not closed_any:
+                                break
+                            time.sleep(0.1)
+                            iteration += 1
+                    except Exception as e_post:
+                        print(f"Warning: Failed to cleanup remaining referenced docs: {e_post}")
+
+                finally:
+                    # Restore user preferences to original state
+                    try:
+                        sw.SetUserPreferenceToggle(15, orig_ref_prompt)
+                        sw.SetUserPreferenceToggle(249, orig_warn_save)
+                        sw.SetUserPreferenceToggle(119, orig_rebuild_err)
+                        sw.SetUserPreferenceIntegerValue(242, orig_load_ext_ref)
+                        sw.SetUserPreferenceIntegerValue(243, orig_lightweight_resolve)
+                        sw.SetUserPreferenceIntegerValue(245, orig_large_assembly_resolve)
+                    except:
+                        pass
 
         # --- Step 2: Proceed with git sync in background thread ---
         self.btn_sync.config(text="Syncing...")
@@ -3990,7 +4136,7 @@ class GIT4SWApp(tk.Tk):
         # Create toplevel popup
         pop = tk.Toplevel(self)
         pop.title("Solidworks EXPORT")
-        pop.geometry("420x425")
+        pop.geometry("420x390")
         pop.resizable(False, False)
         
         # Apply window background color matching main GUI
@@ -4021,17 +4167,6 @@ class GIT4SWApp(tk.Tk):
         
         cb_step_asm = tk.Checkbutton(lf, text="STEP_ASM (.sldasm)", variable=step_asm_var, bg="#f3f4f6", activebackground="#f3f4f6", selectcolor="#ffffff", fg="#1f2937", font="TkDefaultFont")
         cb_step_asm.pack(anchor="w", padx=15, pady=2)
-        
-        # BOM Export Option Frame
-        bom_lf = tk.LabelFrame(pop, text="BOM Options", bg="#f3f4f6", fg="#059669", font="TkDefaultFont", relief="groove")
-        bom_lf.pack(fill="x", padx=20, pady=(5, 5))
-        
-        bom_var = tk.BooleanVar(value=True)
-        rb_bom_on = tk.Radiobutton(bom_lf, text="BOM Export On", variable=bom_var, value=True, bg="#f3f4f6", activebackground="#f3f4f6", fg="#1f2937", font="TkDefaultFont", selectcolor="#ffffff")
-        rb_bom_on.pack(side="left", padx=15, pady=5)
-        
-        rb_bom_off = tk.Radiobutton(bom_lf, text="BOM Export Off", variable=bom_var, value=False, bg="#f3f4f6", activebackground="#f3f4f6", fg="#1f2937", font="TkDefaultFont", selectcolor="#ffffff")
-        rb_bom_off.pack(side="left", padx=15, pady=5)
         
         # Input Frame
         input_frm = ttk.Frame(pop, style="TFrame")
@@ -4084,7 +4219,7 @@ class GIT4SWApp(tk.Tk):
                     match = True
                 elif f_lower.endswith(".sldprt") and "STEP" in formats:
                     match = True
-                elif f_lower.endswith(".sldasm") and ("STEP_ASM" in formats or bom_var.get()):
+                elif f_lower.endswith(".sldasm") and "STEP_ASM" in formats:
                     match = True
                     
                 if match:
@@ -4092,52 +4227,14 @@ class GIT4SWApp(tk.Tk):
                         final_list.append(f_rel)
                         
             return final_list, formats
-
-        def update_bom_state(*args):
-            # Check sldasm presence in the visible list matching prefix
-            prefix_val = ent_prefix.get().strip()
-            if prefix_val == "*" or prefix_val == "":
-                prefix_val = ""
-                
-            visible_files = []
-            for item in self.tree.get_children():
-                vals = self.tree.item(item, 'values')
-                if vals:
-                    visible_files.append(vals[0])
-                    
-            has_sldasm = False
-            for f_rel in visible_files:
-                if f_rel.lower().endswith(".sldasm"):
-                    base_name = os.path.basename(f_rel)
-                    if prefix_val == "" or base_name.startswith(prefix_val):
-                        has_sldasm = True
-                        break
-                        
-            if has_sldasm:
-                rb_bom_on.configure(state="normal")
-                rb_bom_off.configure(state="normal")
-            else:
-                bom_var.set(False)
-                rb_bom_on.configure(state="disabled")
-                rb_bom_off.configure(state="disabled")
-
-        # Bind events
-        cb_pdf.configure(command=update_bom_state)
-        cb_dxf.configure(command=update_bom_state)
-        cb_step.configure(command=update_bom_state)
-        cb_step_asm.configure(command=update_bom_state)
-        ent_prefix.bind("<KeyRelease>", update_bom_state)
-        
-        # Run state update immediately
-        update_bom_state()
         
         def start_action():
             filtered_files, formats = get_filtered_files_list()
             if getattr(self, "_export_active_files", None) is not None:
                 filtered_files = [f for f in filtered_files if f in self._export_active_files]
-            if not formats and not (bom_var.get() and any(f.lower().endswith(".sldasm") for f in filtered_files)):
-                # If neither format is selected, nor BOM is selected for assembly files, show error
-                messagebox.showerror("Error", "Please select at least one format or enable BOM Export.")
+            if not formats:
+                # If neither format is selected, show error
+                messagebox.showerror("Error", "Please select at least one format.")
                 return
                 
             if not filtered_files:
@@ -4176,7 +4273,6 @@ class GIT4SWApp(tk.Tk):
                 "formats": formats,
                 "prefix": prefix_val,
                 "output_dir": out_dir_val,
-                "export_bom": bom_var.get(),
                 "files": filtered_files
             }
             
