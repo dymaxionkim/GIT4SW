@@ -391,6 +391,12 @@ class GIT4SWApp(tk.Tk):
                   background=[("active", "#dc2626"), ("disabled", "#fee2e2")],
                   foreground=[("active", "#ffffff"), ("disabled", "#f87171")])
 
+        # BOM Button Style
+        style.configure("BOM.TButton", padding=6, background="#2563eb", foreground="#ffffff", borderwidth=0)
+        style.map("BOM.TButton",
+                  background=[("active", "#1d4ed8"), ("disabled", "#e5e7eb")],
+                  foreground=[("active", "#ffffff"), ("disabled", "#9ca3af")])
+
         # Progressbar (Emerald green theme)
         style.configure("Custom.Horizontal.TProgressbar",
                         thickness=14,
@@ -1595,27 +1601,30 @@ class GIT4SWApp(tk.Tk):
         actions_frm = ttk.Frame(main_panel)
         actions_frm.pack(fill="x", pady=6)
         
-        self.btn_lock = ttk.Button(actions_frm, text="Lock", style="Primary.TButton", command=self.lock_file)
+        self.btn_lock = ttk.Button(actions_frm, text="Lock", style="Primary.TButton", width=6, command=self.lock_file)
         self.btn_lock.pack(side="left", padx=4)
         
-        self.btn_unlock = ttk.Button(actions_frm, text="Unlock File", command=self.unlock_file)
+        self.btn_unlock = ttk.Button(actions_frm, text="Unlock", width=8, command=self.unlock_file)
         self.btn_unlock.pack(side="left", padx=4)
         
-        self.btn_force_unlock = ttk.Button(actions_frm, text="Force Unlock", style="Danger.TButton", command=self.force_unlock_file)
+        self.btn_force_unlock = ttk.Button(actions_frm, text="Force Unlock", style="Danger.TButton", width=12, command=self.force_unlock_file)
         self.btn_force_unlock.pack(side="left", padx=4)
         
-        self.btn_discard = ttk.Button(actions_frm, text="Discard", style="Danger.TButton", command=self.discard_changes)
+        self.btn_discard = ttk.Button(actions_frm, text="Discard", style="Danger.TButton", width=8, command=self.discard_changes)
         self.btn_discard.pack(side="left", padx=4)
         
-        self.btn_edrawings = ttk.Button(actions_frm, text="eDrawings", style="Primary.TButton", command=self.open_external_viewer)
- 
+        self.btn_edrawings = ttk.Button(actions_frm, text="eDrawings", style="Primary.TButton", width=9, command=self.open_external_viewer)
         self.btn_edrawings.pack(side="left", padx=4)
         
-        self.btn_solidworks = ttk.Button(actions_frm, text="Solidworks", style="Primary.TButton", command=self.open_solidworks)
+        self.btn_solidworks = ttk.Button(actions_frm, text="Solidworks", style="Primary.TButton", width=10, command=self.open_solidworks)
         self.btn_solidworks.pack(side="left", padx=4)
         
-        self.btn_export = ttk.Button(actions_frm, text="EXPORT", style="Primary.TButton", command=self.open_export_dialog)
+        self.btn_export = ttk.Button(actions_frm, text="EXPORT", style="Primary.TButton", width=8, command=self.open_export_dialog)
         self.btn_export.pack(side="left", padx=4)
+        
+        self.btn_bom = ttk.Button(actions_frm, text="BOM", style="BOM.TButton", width=5, command=self.generate_bom_action)
+        self.btn_bom.state(["disabled"])
+        self.btn_bom.pack(side="left", padx=4)
         
         self.lbl_selected_count = ttk.Label(actions_frm, text="Selected files: 0", style="TLabel")
         self.lbl_selected_count.pack(side="right", padx=8)
@@ -3262,12 +3271,28 @@ class GIT4SWApp(tk.Tk):
             self.write_log(f"Failed to launch Git Graph terminal: {e}", "error")
 
     def on_file_selected_change(self):
+        # 1. Update BOM button activation state based on selection & background task status
+        selected_items = self.tree.selection()
+        is_bom_enabled = False
+        if getattr(self, 'bg_tasks_count', 0) == 0 and len(selected_items) == 1:
+            values = self.tree.item(selected_items[0], 'values')
+            if values:
+                filepath = values[0]
+                ext = os.path.splitext(filepath)[1].lower()
+                if ext == '.sldasm':
+                    is_bom_enabled = True
+        
+        if is_bom_enabled:
+            self.btn_bom.state(["!disabled"])
+        else:
+            self.btn_bom.state(["disabled"])
+
+        # 2. Existing view 1 CAD thumbnail preview logic
         if getattr(self, 'current_view_index', 0) != 1:
             self.preview_container.pack_forget()
             self._current_preview_image = None
             return
 
-        selected_items = self.tree.selection()
         if len(selected_items) == 1:
             values = self.tree.item(selected_items[0], 'values')
             if values:
@@ -4195,6 +4220,214 @@ class GIT4SWApp(tk.Tk):
         else:
             self.write_log(f"eDrawings executable not found at path: {path}. Please check config.json.", "error")
 
+    def generate_bom_action(self):
+        selected_items = self.tree.selection()
+        if not selected_items:
+            self.write_log("⚠️ Select a SolidWorks Assembly (.sldasm) file first.", "warning")
+            return
+        values = self.tree.item(selected_items[0], 'values')
+        if not values:
+            return
+        filepath = values[0]
+        ext = os.path.splitext(filepath)[1].lower()
+        if ext != '.sldasm':
+            self.write_log("⚠️ BOM generation is only supported for SolidWorks Assembly (.sldasm) files.", "warning")
+            return
+
+        full_path = os.path.join(self.workspace_path, filepath)
+
+        # Connect to SolidWorks via a separate subprocess to avoid GUI thread COM apartment clashes
+        config_names = []
+        try:
+            import json
+            import sys
+            
+            target_path_fs = os.path.normpath(full_path).replace('\\', '/')
+            
+            py_code = f"""
+import win32com.client
+import pythoncom
+import json
+import sys
+import os
+
+try:
+    pythoncom.CoInitialize()
+    raw_obj = win32com.client.GetActiveObject("SldWorks.Application")
+    sw_app = win32com.client.Dispatch(raw_obj)
+    
+    path = {repr(target_path_fs)}
+    config_names = []
+    
+    # 1. Try to check open documents first
+    try:
+        val_docs = getattr(sw_app, 'GetDocuments', None)
+        open_docs = val_docs() if callable(val_docs) else val_docs
+        if open_docs:
+            for d in open_docs:
+                try:
+                    path_val = getattr(d, 'GetPathName', None)
+                    d_path = path_val() if callable(path_val) else path_val
+                    if d_path and os.path.normpath(d_path).lower() == os.path.normpath(path).lower():
+                        cfg_val = getattr(d, 'GetConfigurationNames', None)
+                        cfg_list = cfg_val() if callable(cfg_val) else cfg_val
+                        if cfg_list:
+                            config_names = list(cfg_list)
+                            break
+                except:
+                    pass
+    except:
+        pass
+        
+    # 2. Fallback to app GetConfigurationNames
+    if not config_names:
+        try:
+            val_cfg = getattr(sw_app, 'GetConfigurationNames', None)
+            if val_cfg:
+                if callable(val_cfg):
+                    val = val_cfg(path)
+                else:
+                    val = val_cfg
+                if val:
+                    config_names = list(val)
+        except:
+            pass
+            
+    print(json.dumps(config_names))
+except Exception as e:
+    print(json.dumps([]))
+finally:
+    try:
+        pythoncom.CoUninitialize()
+    except:
+        pass
+"""
+            # Run the query using the current python interpreter without opening a shell window
+            creation_flags = 0
+            if sys.platform == 'win32':
+                creation_flags = subprocess.CREATE_NO_WINDOW
+                
+            res = subprocess.run(
+                [sys.executable, '-c', py_code],
+                capture_output=True,
+                text=True,
+                creationflags=creation_flags,
+                timeout=5.0
+            )
+            
+            if res.returncode == 0:
+                output_str = res.stdout.strip()
+                if output_str:
+                    config_names = json.loads(output_str)
+        except Exception as e:
+            self.write_log(f"⚠️ Warning: Failed to query SolidWorks configurations: {e}", "warning")
+
+        if len(config_names) >= 2:
+            # Create modal select dialog
+            dialog = tk.Toplevel(self)
+            dialog.title("Select Configuration")
+            dialog.geometry("380x160")
+            dialog.resizable(False, False)
+            dialog.configure(bg="#f3f4f6")
+            dialog.transient(self)
+            dialog.grab_set()
+
+            # Center the dialog
+            dialog.update_idletasks()
+            width = dialog.winfo_width()
+            height = dialog.winfo_height()
+            x = (dialog.winfo_screenwidth() // 2) - (width // 2)
+            y = (dialog.winfo_screenheight() // 2) - (height // 2)
+            dialog.geometry(f"+{x}+{y}")
+
+            lbl = tk.Label(dialog, text="Select Configuration for BOM extraction:", bg="#f3f4f6", fg="#1f2937", font="TkDefaultFont")
+            lbl.pack(pady=(15, 5))
+
+            selected_config = tk.StringVar(value=config_names[0])
+            cb = ttk.Combobox(dialog, textvariable=selected_config, values=config_names, state="readonly", width=30)
+            cb.pack(pady=5)
+            cb.set(config_names[0])
+
+            def on_ok():
+                dialog.destroy()
+                self.start_bom_runner_process(full_path, filepath, selected_config.get())
+
+            def on_cancel():
+                dialog.destroy()
+                self.write_log("ℹ️ BOM extraction cancelled by user.", "info")
+
+            btn_frm = ttk.Frame(dialog)
+            btn_frm.pack(pady=15)
+
+            btn_ok = ttk.Button(btn_frm, text="OK", command=on_ok, width=10)
+            btn_ok.pack(side="left", padx=10)
+
+            btn_cancel = ttk.Button(btn_frm, text="Cancel", command=on_cancel, width=10)
+            btn_cancel.pack(side="left", padx=10)
+        else:
+            # Proceed directly if 0 or 1 configuration is found
+            self.start_bom_runner_process(full_path, filepath, None)
+
+    def start_bom_runner_process(self, full_path, filepath, config_name):
+        # Start task in UI
+        self.increment_tasks()
+        self.btn_bom.state(["disabled"]) # Disable during task execution
+        msg_suffix = f" (Config: {config_name})" if config_name else ""
+        self.write_log(f"🚀 Starting BOM extraction for {os.path.basename(filepath)}{msg_suffix}...", "info")
+
+        def run_bom():
+            try:
+                import sys
+                import subprocess
+                import os
+                
+                script_dir = os.path.dirname(os.path.abspath(__file__))
+                runner_path = os.path.join(script_dir, "sw_bom_runner.py")
+                
+                env_vars = os.environ.copy()
+                env_vars["PYTHONIOENCODING"] = "utf-8"
+                
+                cmd = [sys.executable, "-u", runner_path, full_path]
+                if config_name:
+                    cmd.extend(["--config", config_name])
+                
+                proc = subprocess.Popen(
+                    cmd,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.STDOUT,
+                    text=True,
+                    bufsize=1,
+                    encoding="utf-8",
+                    errors="replace",
+                    env=env_vars
+                )
+                
+                # Read stdout line by line and print to log/console
+                for line in proc.stdout:
+                    clean_line = line.strip()
+                    if clean_line:
+                        print(f"[BOM Runner] {clean_line}")
+                        if clean_line.startswith("Error:"):
+                            self.task_queue.put(('log', (f"⚠️ {clean_line}", "warning"), None))
+                        elif "Saving to Excel:" in clean_line or "Traversing" in clean_line:
+                            self.task_queue.put(('log', (f"ℹ️ {clean_line}", "info"), None))
+                
+                proc.wait()
+                returncode = proc.returncode
+                
+                if returncode == 0:
+                    base_name = os.path.splitext(os.path.basename(filepath))[0]
+                    self.task_queue.put(('success', f"✅ BOM Tree and Partlist successfully saved for '{base_name}' in 2D/BOM/ folder.", None))
+                else:
+                    self.task_queue.put(('error', f"❌ BOM extraction failed with exit code {returncode}.", None))
+            except Exception as e:
+                self.task_queue.put(('error', f"❌ Failed to run BOM extraction: {e}", None))
+            finally:
+                self.decrement_tasks()
+                
+        import threading
+        threading.Thread(target=run_bom, daemon=True).start()
+
     def open_export_dialog(self):
         self._export_active_files = None
         # Create toplevel popup
@@ -4943,6 +5176,7 @@ class GIT4SWApp(tk.Tk):
                     self.bg_tasks_count += 1
                     self.lbl_status_indicator.config(text="● Working", fg="#ef4444")
                     self.update_terminate_btn_state(True)
+                    self.on_file_selected_change()
                 elif msg_type == 'bg_task_end':
                     self.bg_tasks_count = max(0, self.bg_tasks_count - 1)
                     if self.bg_tasks_count == 0:
@@ -4986,6 +5220,7 @@ class GIT4SWApp(tk.Tk):
                     self.btn_restore_latest.state(["!disabled"])
                     self.btn_edrawings.state(["!disabled"])
                     self.btn_solidworks.state(["!disabled"])
+                    self.on_file_selected_change()
                 
                 if msg_type == 'success':
                     self.write_log(content, "success")
