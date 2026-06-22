@@ -448,7 +448,7 @@ def run_single_export(file_abs, target_formats, output_dir, workspace_path):
                     dest_dir_step = os.path.join(file_dir, output_dir, "STEP_ASM")
                     os.makedirs(dest_dir_step, exist_ok=True)
                     if config_name:
-                        dest_file_path = os.path.join(dest_dir_step, f"{base_filename}_{config_name}.step")
+                        dest_file_path = os.path.join(dest_dir_step, f"{base_filename}__{config_name}.step")
                     else:
                         dest_file_path = os.path.join(dest_dir_step, f"{base_filename}.step")
                         
@@ -541,7 +541,7 @@ def run_single_export(file_abs, target_formats, output_dir, workspace_path):
                             print(f"Switching to configuration: {config_name} for STEP export")
                             model.ShowConfiguration2(config_name)
                             time.sleep(2) # Delay for configuration switching rebuild
-                            dest_file_path = os.path.join(dest_dir, f"{base_filename}_{config_name}{target_ext}")
+                            dest_file_path = os.path.join(dest_dir, f"{base_filename}__{config_name}{target_ext}")
                         except Exception as show_conf_err:
                             print(f"Failed to show configuration {config_name}: {show_conf_err}")
                             dest_file_path = os.path.join(dest_dir, base_filename + target_ext)
