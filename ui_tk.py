@@ -650,52 +650,105 @@ class FileCommitHistoryDialog(tk.Toplevel):
                 
             # 4. Process based on document type
             if doc_type in (1, 2):  # PART / ASSEMBLY
-                # Load SOLIDWORKS Utilities
-                sw_util = sw_app.GetAddInObject("Utilities.UtilitiesApp")
-                if not sw_util:
-                    sw_app.LoadAddIn("gtswutilities.dll")
+                # ── 4-A. Load SOLIDWORKS Utilities add-in ──────────────────
+                print("Getting SOLIDWORKS Utilities add-in...", flush=True)
+                sw_util = None
+                try:
                     sw_util = sw_app.GetAddInObject("Utilities.UtilitiesApp")
+                except Exception as _e1:
+                    print(f"GetAddInObject attempt 1 failed: {_e1}", flush=True)
+
                 if not sw_util:
-                    raise RuntimeError("SOLIDWORKS Utilities add-in could not be loaded. Please enable 'SOLIDWORKS Utilities' in Tools > Add-Ins.")
-                    
-                long_status = win32com.client.VARIANT(pythoncom.VT_BYREF | pythoncom.VT_I4, 0)
-                sw_util_comp_geom = sw_util.GetToolInterface(2, long_status) # 2 = Compare Geometry
-                if not sw_util_comp_geom or long_status.value != 0:
-                    raise RuntimeError(f"Failed to get Compare Geometry tool interface (Error status: {long_status.value})")
-                    
-                # Open both
-                open_document(theirs_temp_path)
-                open_document(ours_temp_path)
-                
+                    # Try loading the add-in DLL and retrying
+                    print("Trying to load Utilities add-in DLL...", flush=True)
+                    try:
+                        sw_app.LoadAddIn("gtswutilities.dll")
+                        time.sleep(2)  # give SW time to register the add-in
+                        sw_util = sw_app.GetAddInObject("Utilities.UtilitiesApp")
+                    except Exception as _e2:
+                        print(f"LoadAddIn / GetAddInObject attempt 2 failed: {_e2}", flush=True)
+
+                if not sw_util:
+                    raise RuntimeError(
+                        "SOLIDWORKS Utilities 애드인을 로드할 수 없습니다.\n"
+                        "SolidWorks → 도구 → 애드인 → 'SOLIDWORKS Utilities'를 체크한 후 다시 시도해 주세요."
+                    )
+                print("SOLIDWORKS Utilities add-in loaded.", flush=True)
+
+                # ── 4-B. Get CompareGeometry tool interface ─────────────────
+                print("Getting CompareGeometry tool interface...", flush=True)
+                try:
+                    # GetToolInterface(toolID, status) – toolID 2 = gtSwToolCompareGeometry
+                    # long_status is an output parameter; use a simple list to capture it
+                    _status_holder = win32com.client.VARIANT(pythoncom.VT_BYREF | pythoncom.VT_I4, 0)
+                    sw_util_comp_geom = sw_util.GetToolInterface(2, _status_holder)
+                    _status_val = _status_holder.value if hasattr(_status_holder, 'value') else 0
+                except Exception as _e3:
+                    print(f"GetToolInterface raised: {_e3}", flush=True)
+                    sw_util_comp_geom = None
+                    _status_val = -1
+
+                if not sw_util_comp_geom:
+                    raise RuntimeError(
+                        f"CompareGeometry 인터페이스를 가져올 수 없습니다 (status={_status_val}).\n"
+                        "SOLIDWORKS Utilities가 올바르게 설치되어 있는지 확인해 주세요."
+                    )
+                print(f"CompareGeometry interface obtained (status={_status_val}).", flush=True)
+
                 if self.cancel_event.is_set():
                     return
-                    
-                # Run built-in geometry comparison (Show UI)
-                vol_status = win32com.client.VARIANT(pythoncom.VT_BYREF | pythoncom.VT_I4, 0)
+
+                # ── 4-C. Run CompareGeometry3 ───────────────────────────────
+                # NOTE: CompareGeometry3 opens the documents internally from the
+                # file paths supplied; do NOT pre-open them first.
+                #
+                # CompareGeometry3 signature:
+                #   (File1, Config1, File2, Config2,
+                #    Options,       ← 1 = gtGdfFaceAndVolumeCompare
+                #    ReportOption,  ← 2 = gtResultShowUI (shows comparison in SW UI)
+                #    ReportPath, AddToBinder, Overwrite,
+                #    VolDiffStatus, FaceDiffStatus)  ← output longs
+                #
+                vol_status  = win32com.client.VARIANT(pythoncom.VT_BYREF | pythoncom.VT_I4, 0)
                 face_status = win32com.client.VARIANT(pythoncom.VT_BYREF | pythoncom.VT_I4, 0)
-                
-                print("Running SOLIDWORKS Compare Geometry tool...", flush=True)
-                res_comp = sw_util_comp_geom.CompareGeometry3(
-                    theirs_temp_path, "",  # Reference document (_THEIRS)
-                    ours_temp_path, "",    # Modified document (_OURS)
-                    2,                     # CompareType: gtGdfFaceAndVolumeCompare (value 2)
-                    1,                     # ReportType: gtResultShowUI (value 1)
-                    "",                    # ReportPath (empty for ShowUI)
-                    False,                 # AddToBinder
-                    True,                  # Overwrite
-                    vol_status,
-                    face_status
-                )
-                
+
+                ref_path  = os.path.normpath(theirs_temp_path)  # _THEIRS = Reference
+                mod_path  = os.path.normpath(ours_temp_path)    # _OURS   = Modified
+
+                print(f"CompareGeometry3: ref={ref_path}", flush=True)
+                print(f"CompareGeometry3: mod={mod_path}", flush=True)
+                print("Running CompareGeometry3...", flush=True)
+
+                try:
+                    res_comp = sw_util_comp_geom.CompareGeometry3(
+                        ref_path, "",   # Reference document (_THEIRS)
+                        mod_path, "",   # Modified document  (_OURS)
+                        1,              # Options: gtGdfFaceAndVolumeCompare = 1
+                        2,              # ReportOption: gtResultShowUI = 2
+                        "",             # ReportPath (empty → show UI only)
+                        False,          # AddToBinder
+                        True,           # Overwrite
+                        vol_status,
+                        face_status,
+                    )
+                    print(f"CompareGeometry3 returned: {res_comp} "
+                          f"(vol={vol_status.value}, face={face_status.value})", flush=True)
+                except Exception as _cg_err:
+                    raise RuntimeError(f"CompareGeometry3 호출 중 오류: {_cg_err}")
+
                 if res_comp != 0:
-                    raise RuntimeError(f"CompareGeometry3 failed with error code: {res_comp}")
-                    
-                # Keep temporary CAD models so the user can interact with them in SolidWorks
+                    raise RuntimeError(
+                        f"CompareGeometry3 오류 코드: {res_comp}\n"
+                        f"VolStatus={vol_status.value}, FaceStatus={face_status.value}"
+                    )
+
+                # Keep temporary CAD files so the user can interact in SolidWorks
                 self.temp_files_to_clean = [ours_temp_path, theirs_temp_path]
-                
+
                 # Success callback
                 if not self.cancel_event.is_set():
                     self.after(0, self._on_diff_success)
+
                     
             elif doc_type == 3:  # DRAWING (.slddrw)
                 model_theirs = open_document(theirs_temp_path)
