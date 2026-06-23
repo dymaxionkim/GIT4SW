@@ -3766,13 +3766,15 @@ class GIT4SWApp(tk.Tk):
                     except ValueError:
                         pass
                 
-                # 3. Walk commits and add nodes/edges
+                # 3. Walk commits and add nodes
                 visited = set()
+                all_commits = []
                 
                 for commit in repo.iter_commits("--all"):
                     if commit.hexsha in visited:
                         continue
                     visited.add(commit.hexsha)
+                    all_commits.append(commit)
                     
                     short_sha = commit.hexsha[:7]
                     summary = commit.summary
@@ -3806,8 +3808,11 @@ class GIT4SWApp(tk.Tk):
                         size=size
                     )
                     
+                # 4. Add edges (only if both parent and child nodes are present in the network)
+                for commit in all_commits:
                     for parent in commit.parents:
-                        net.add_edge(parent.hexsha, commit.hexsha, arrows="to", color="#888888")
+                        if parent.hexsha in visited:
+                            net.add_edge(parent.hexsha, commit.hexsha, arrows="to", color="#888888")
                 
                 # Write HTML and open in browser
                 net.write_html(output_filename)
