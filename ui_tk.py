@@ -554,6 +554,19 @@ class FileCommitHistoryDialog(tk.Toplevel):
             else:
                 raise ValueError(f"Unsupported file extension for diff: {ext}")
                 
+            # Helper to get the document title safely (handling property/method differences in early/late binding)
+            def get_doc_title(model_doc):
+                if not model_doc:
+                    return ""
+                try:
+                    title_val = model_doc.GetTitle
+                    return title_val() if callable(title_val) else title_val
+                except Exception:
+                    try:
+                        return getattr(model_doc, 'GetTitle')
+                    except Exception:
+                        return ""
+                        
             # Helper to open a file in SOLIDWORKS (visible, read-only)
             def open_document(file_path):
                 print(f"Opening in SolidWorks: {file_path}", flush=True)
@@ -638,13 +651,15 @@ class FileCommitHistoryDialog(tk.Toplevel):
                     
                 # Get sheet counts
                 try:
-                    sheets_theirs = model_theirs.GetSheetNames()
+                    sheets_theirs_val = model_theirs.GetSheetNames
+                    sheets_theirs = sheets_theirs_val() if callable(sheets_theirs_val) else sheets_theirs_val
                     num_sheets_theirs = len(sheets_theirs) if sheets_theirs else 1
                 except Exception:
                     num_sheets_theirs = 1
                     
                 try:
-                    sheets_ours = model_ours.GetSheetNames()
+                    sheets_ours_val = model_ours.GetSheetNames
+                    sheets_ours = sheets_ours_val() if callable(sheets_ours_val) else sheets_ours_val
                     num_sheets_ours = len(sheets_ours) if sheets_ours else 1
                 except Exception:
                     num_sheets_ours = 1
@@ -682,7 +697,7 @@ class FileCommitHistoryDialog(tk.Toplevel):
                 # Close documents immediately to release files
                 for model in opened_docs:
                     try:
-                        title = model.GetTitle()
+                        title = get_doc_title(model)
                         print(f"Closing drawing: {title}", flush=True)
                         model = None
                         import gc
@@ -690,7 +705,7 @@ class FileCommitHistoryDialog(tk.Toplevel):
                         pythoncom.CoCollectFreeUnusedLibraries()
                         sw_app.CloseDoc(title)
                     except Exception as close_err:
-                        print(f"Failed to close doc {title}: {close_err}", flush=True)
+                        print(f"Failed to close doc: {close_err}", flush=True)
                 opened_docs.clear()
                 
                 # Verify PDF creation
@@ -762,7 +777,7 @@ class FileCommitHistoryDialog(tk.Toplevel):
             if sw_app and opened_docs:
                 for model in opened_docs:
                     try:
-                        title = model.GetTitle()
+                        title = get_doc_title(model)
                         sw_app.CloseDoc(title)
                     except Exception:
                         pass
