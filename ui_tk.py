@@ -3280,6 +3280,15 @@ class GIT4SWApp(tk.Tk):
                         
                 # Merge other local branches into main one by one
                 for b in other_branches:
+                    try:
+                        main_commit = repo.commit("main")
+                        b_commit = repo.commit(b)
+                        if repo.is_ancestor(b_commit, main_commit):
+                            self.write_log(f"Branch '{b}' is already identical or merged into main. Skipping merge.", "info")
+                            continue
+                    except Exception as e_sha:
+                        self.write_log(f"Warning: Could not compare commits for '{b}' and 'main': {e_sha}", "warning")
+
                     self.write_log(f"Merging local branch '{b}' into main...", "info")
                     conflicted_files = self.git_service.check_merge_conflicts(b)
                     if conflicted_files:

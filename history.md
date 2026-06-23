@@ -185,6 +185,8 @@ gantt
   - 이로 인해 BOM 러너가 종료될 때, 원래 사용자가 열어둔 파일(Pre-existing files)과 BOM 동작을 위해 시스템이 연 파일(BOM-specific files)을 구별할 수 없어 전체가 닫히거나 닫히지 않는 누수 위험이 있었습니다.
   - 이를 해결하기 위해 BOM 버튼을 클릭한 최초 순간(설정 조회 이전)에 SolidWorks에서 열려 있던 파일들의 절대 경로 목록을 `self.sw_open_before_bom`에 실시간으로 수집하고, 이를 BOM 러너(`sw_bom_runner.py`)에 `--open-before` 매개변수로 명시적 주입하도록 구성했습니다.
   - BOM 러너는 이 목록에 기재된 파일들만 "원래 열려 있던 파일"로 판정하여 유지하고, 그 외 BOM 진행 과정(설정 조회 + BOM 추출) 중 동적으로 로드된 임시/참조 파일들만 선별하여 안전하게 일괄 CloseDoc/QuitDoc 처리합니다.
+* **일괄 병합(Merge all branches into main) 최적화**:
+  - 관리자(Maintainer) 모드에서 여러 브랜치를 `main` 브랜치로 순차 병합할 때, 대상 개발 브랜치가 이미 `main` 브랜치에 병합되어 있거나 커밋이 완전히 동일한 경우(`is_ancestor` 판정) 불필요한 merge 작업을 생략(Skip)하여 일괄 병합 전체 소요 시간을 획기적으로 줄였습니다.
 
 ---
 
