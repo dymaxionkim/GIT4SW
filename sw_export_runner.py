@@ -241,52 +241,88 @@ def close_all_documents_without_saving(swApp, already_open_paths=None):
     if not swApp:
         print("close_all_documents_without_saving: swApp is None", flush=True)
         return
-    
+
     orig_user_control = True
     try:
         orig_user_control = swApp.UserControl
         swApp.UserControl = False
-        print(f"close_all_documents_without_saving: Set UserControl to False (was {orig_user_control})", flush=True)
-    except Exception as uc_err:
-        print(f"close_all_documents_without_saving: Failed to set UserControl to False: {uc_err}", flush=True)
+    except Exception:
+        pass
+
+    # 경로 정규화 헬퍼: 슬래시 방향과 대소문자를 통일하여 매칭 실패 방지
+    def _norm(p):
+        if not p:
+            return ""
+        return os.path.normpath(p).replace("\\", "/").lower()
+
+    # already_open_paths를 동일한 정규화 방식으로 재구성
+    normalized_already_open = set()
+    if already_open_paths:
+        for ap in already_open_paths:
+            if ap:
+                normalized_already_open.add(_norm(ap))
+                base = os.path.basename(ap)
+                if base:
+                    normalized_already_open.add(_norm(base))
+                    no_ext = os.path.splitext(base)[0]
+                    if no_ext:
+                        normalized_already_open.add(no_ext.lower())
+
+    def _is_already_open(path, title):
+        if not normalized_already_open:
+            return False
+        np = _norm(path)
+        nt = _norm(title)
+        if np and np in normalized_already_open:
+            return True
+        if nt:
+            if nt in normalized_already_open:
+                return True
+            no_ext = os.path.splitext(nt)[0]
+            if no_ext and no_ext in normalized_already_open:
+                return True
+        return False
+
+    # GetDocuments()로 열린 문서 목록을 조회하는 헬퍼
+    def _get_open_docs():
+        try:
+            val = getattr(swApp, 'GetDocuments')
+            return val() if callable(val) else val
+        except Exception:
+            try:
+                return swApp.GetDocuments()
+            except Exception as e:
+                print(f"close_all_documents_without_saving: GetDocuments() failed: {e}", flush=True)
+                return None
 
     try:
-        # Safe cleanup loop for remaining dependent/referenced documents.
-        # Prioritizes closing parent documents (assemblies, drawings) first to release references on parts.
         time.sleep(0.2)
         iteration = 0
         last_doc_count = -1
         stuck_count = 0
-        
+
         while iteration < 50:
-            try:
-                try:
-                    docs_left = swApp.GetDocuments()
-                except Exception:
-                    val = getattr(swApp, 'GetDocuments')
-                    docs_left = val() if callable(val) else val
-            except Exception:
-                break
-                
+            docs_left = _get_open_docs()
+
             if not docs_left:
                 break
-                
+
             current_count = len(docs_left)
+            print(f"close_all_documents_without_saving: iteration {iteration + 1}, {current_count} document(s) open.", flush=True)
             if current_count == last_doc_count:
                 stuck_count += 1
-                if stuck_count > 3:
-                    print(f"close_all_documents_without_saving: detected stuck count ({current_count} docs), escaping to avoid deadlock loop", flush=True)
+                if stuck_count > 5:
+                    print(f"close_all_documents_without_saving: detected stuck count ({current_count} docs), breaking.", flush=True)
                     break
             else:
                 stuck_count = 0
             last_doc_count = current_count
-            
-            parent_files = []  # list of dict
-            child_files = []   # list of dict
-            
+
+            parent_files = []
+            child_files = []
+
             for d in docs_left:
                 try:
-                    # Get path
                     try:
                         path_val = d.GetPathName
                         path = path_val() if callable(path_val) else path_val
@@ -294,8 +330,7 @@ def close_all_documents_without_saving(swApp, already_open_paths=None):
                         path = getattr(d, 'GetPathName')
                         if callable(path):
                             path = path()
-                            
-                    # Get title
+
                     try:
                         title_val = d.GetTitle
                         title = title_val() if callable(title_val) else title_val
@@ -303,49 +338,32 @@ def close_all_documents_without_saving(swApp, already_open_paths=None):
                         title = getattr(d, 'GetTitle')
                         if callable(title):
                             title = title()
-                            
+
                     if not title:
                         title = path
-                        
                     if not title:
                         continue
-                        
-                    # Check visibility
-                    is_visible = True
-                    try:
-                        is_visible = d.Visible
-                    except:
-                        try:
-                            is_visible = getattr(d, 'Visible')
-                        except:
-                            pass
-                            
-                    # If already_open_paths is provided, skip closing files that were already open,
-                    # but only if they are visible (meaning the user is actively working on them in the UI).
-                    if already_open_paths and is_visible:
-                        norm_path = os.path.normpath(path or title).lower()
-                        title_lower = (title or "").lower()
-                        if norm_path in already_open_paths or title_lower in already_open_paths:
-                            continue
-                            
+
+                    # EXPORT 실행 전부터 열려있던 문서는 skip
+                    if _is_already_open(path, title):
+                        continue
+
                     try:
                         dtype = d.GetType()
                     except Exception:
                         dtype = getattr(d, 'GetType')
                         if callable(dtype):
                             dtype = dtype()
-                            
+
                     path_lower = (path or "").lower()
                     title_lower = (title or "").lower()
-                    
-                    # dtype: 2 = swDocASSEMBLY, 3 = swDocDRAWING
-                    is_parent = (dtype in (2, 3) or 
-                                 path_lower.endswith(".sldasm") or 
+
+                    is_parent = (dtype in (2, 3) or
+                                 path_lower.endswith(".sldasm") or
                                  path_lower.endswith(".slddrw") or
                                  title_lower.endswith(".sldasm") or
                                  title_lower.endswith(".slddrw"))
-                                 
-                    # Generate unique closing identifiers
+
                     ids = []
                     if path:
                         ids.append(path)
@@ -361,27 +379,22 @@ def close_all_documents_without_saving(swApp, already_open_paths=None):
                         title_no_ext = os.path.splitext(title)[0]
                         if title_no_ext:
                             ids.append(title_no_ext)
-                    
+
                     uniq_ids = []
                     for iid in ids:
                         if iid and isinstance(iid, str):
                             iid_s = iid.strip()
                             if iid_s and iid_s not in uniq_ids:
                                 uniq_ids.append(iid_s)
-                                
-                    doc_entry = {
-                        'title': title,
-                        'path': path,
-                        'uniq_ids': uniq_ids
-                    }
+
+                    doc_entry = {'title': title, 'path': path, 'uniq_ids': uniq_ids}
                     if is_parent:
                         parent_files.append(doc_entry)
                     else:
                         child_files.append(doc_entry)
                 except Exception as doc_err:
                     print(f"Error inspecting document: {doc_err}", flush=True)
-            
-            # Clear all COM object references in the current context before closing
+
             docs_left = None
             d = None
             import gc
@@ -390,75 +403,188 @@ def close_all_documents_without_saving(swApp, already_open_paths=None):
                 pythoncom.CoCollectFreeUnusedLibraries()
             except:
                 pass
-            
+
+            if not parent_files and not child_files:
+                break
+
+            print(f"  Closing {len(parent_files)} parent(s) + {len(child_files)} child(ren)...", flush=True)
+
             closed_any = False
-            # Close parents first to break references
             for doc_entry in parent_files:
                 title = doc_entry['title']
                 path = doc_entry['path']
                 uniq_ids = doc_entry['uniq_ids']
-                try:
-                    print(f"close_all_documents_without_saving: closing parent '{title}' (path: '{path}')", flush=True)
-                    for identifier in uniq_ids:
-                        try:
-                            print(f"  Attempting CloseDoc('{identifier}')", flush=True)
-                            res = swApp.CloseDoc(identifier)
-                            print(f"    CloseDoc Result: {res}", flush=True)
-                            if res:
-                                closed_any = True
-                        except Exception as e_close:
-                            print(f"    Warning: CloseDoc parent '{identifier}' error: {e_close}", flush=True)
-                        try:
-                            print(f"  Attempting QuitDoc('{identifier}')", flush=True)
-                            res = swApp.QuitDoc(identifier)
-                            print(f"    QuitDoc Result: {res}", flush=True)
-                            closed_any = True
-                        except Exception as e_quit:
-                            print(f"    Warning: QuitDoc parent '{identifier}' error: {e_quit}", flush=True)
-                except Exception as e:
-                    print(f"Error closing parent {title}: {e}", flush=True)
-                    
+                print(f"Closing parent: '{title}' (path: '{path}')", flush=True)
+                closed_this = False
+                for identifier in uniq_ids:
+                    try:
+                        swApp.CloseDoc(identifier)
+                        closed_this = True
+                        closed_any = True
+                        print(f"  Closed via CloseDoc('{identifier}')", flush=True)
+                        break
+                    except:
+                        pass
+                    try:
+                        swApp.QuitDoc(identifier)
+                        closed_this = True
+                        closed_any = True
+                        print(f"  Closed via QuitDoc('{identifier}')", flush=True)
+                        break
+                    except:
+                        pass
+                if not closed_this:
+                    print(f"  ⚠️ Failed to close parent: {title} (path: {path})", flush=True)
+
             if closed_any:
-                time.sleep(0.2)
-                
-            # Close children second
+                time.sleep(0.3)
+
             for doc_entry in child_files:
                 title = doc_entry['title']
                 path = doc_entry['path']
                 uniq_ids = doc_entry['uniq_ids']
-                try:
-                    print(f"close_all_documents_without_saving: closing child '{title}' (path: '{path}')", flush=True)
-                    for identifier in uniq_ids:
-                        try:
-                            print(f"  Attempting CloseDoc('{identifier}')", flush=True)
-                            res = swApp.CloseDoc(identifier)
-                            print(f"    CloseDoc Result: {res}", flush=True)
-                            if res:
-                                closed_any = True
-                        except Exception as e_close:
-                            print(f"    Warning: CloseDoc child '{identifier}' error: {e_close}", flush=True)
-                        try:
-                            print(f"  Attempting QuitDoc('{identifier}')", flush=True)
-                            res = swApp.QuitDoc(identifier)
-                            print(f"    QuitDoc Result: {res}", flush=True)
-                            closed_any = True
-                        except Exception as e_quit:
-                            print(f"    Warning: QuitDoc child '{identifier}' error: {e_quit}", flush=True)
-                except Exception as e:
-                    print(f"Error closing child {title}: {e}", flush=True)
-                    
-            time.sleep(0.2)
+                print(f"Closing child: '{title}' (path: '{path}')", flush=True)
+                closed_this = False
+                for identifier in uniq_ids:
+                    try:
+                        swApp.CloseDoc(identifier)
+                        closed_this = True
+                        closed_any = True
+                        print(f"  Closed via CloseDoc('{identifier}')", flush=True)
+                        break
+                    except:
+                        pass
+                    try:
+                        swApp.QuitDoc(identifier)
+                        closed_this = True
+                        closed_any = True
+                        print(f"  Closed via QuitDoc('{identifier}')", flush=True)
+                        break
+                    except:
+                        pass
+                if not closed_this:
+                    print(f"  ⚠️ Failed to close child: {title} (path: {path})", flush=True)
+
+            time.sleep(0.3)
+            gc.collect()
+            try:
+                pythoncom.CoCollectFreeUnusedLibraries()
+            except:
+                pass
             iteration += 1
-            
+
+        # ----- Final verification pass -----
+        for verify_iter in range(3):
+            docs_remaining = _get_open_docs()
+            if not docs_remaining:
+                print("close_all_documents_without_saving: cleanup verified - all newly opened documents are closed.", flush=True)
+                break
+
+            still_open = []
+            for d in docs_remaining:
+                try:
+                    p_val = d.GetPathName
+                    path = p_val() if callable(p_val) else p_val
+                    if not path:
+                        tv = d.GetTitle
+                        path = tv() if callable(tv) else tv
+                    tv2 = d.GetTitle
+                    title = tv2() if callable(tv2) else tv2
+                    if not _is_already_open(path, title):
+                        still_open.append({'title': title, 'path': path})
+                except:
+                    pass
+
+            if not still_open:
+                print(f"close_all_documents_without_saving: {len(docs_remaining)} pre-existing document(s) remain open (expected).", flush=True)
+                break
+
+            for entry in still_open:
+                print(f"⚠️ document failed to close and is still open: '{entry['title']}' (path: {entry['path']})", flush=True)
+            print(f"Verification retry {verify_iter + 1}/3: {len(still_open)} document(s) still open. Retrying close...", flush=True)
+
+            parents = [e for e in still_open if (e['path'] or "").lower().endswith((".sldasm", ".slddrw")) or (e['title'] or "").lower().endswith((".sldasm", ".slddrw"))]
+            children = [e for e in still_open if e not in parents]
+
+            def _try_close(entry):
+                ids = []
+                p = entry['path']
+                t = entry['title']
+                if p:
+                    ids.append(p)
+                    b = os.path.basename(p)
+                    if b:
+                        ids.append(b)
+                        ids.append(os.path.splitext(b)[0])
+                if t:
+                    ids.append(t)
+                    ids.append(os.path.splitext(t)[0])
+                seen_ids = []
+                for i in ids:
+                    if i and isinstance(i, str) and i.strip() and i.strip() not in seen_ids:
+                        seen_ids.append(i.strip())
+                closed = False
+                for identifier in seen_ids:
+                    try:
+                        swApp.CloseDoc(identifier)
+                        closed = True
+                        break
+                    except:
+                        pass
+                    try:
+                        swApp.QuitDoc(identifier)
+                        closed = True
+                        break
+                    except:
+                        pass
+                return closed
+
+            closed_any = False
+            for e in parents:
+                if _try_close(e):
+                    closed_any = True
+            if closed_any:
+                time.sleep(0.3)
+            closed_any2 = False
+            for e in children:
+                if _try_close(e):
+                    closed_any2 = True
+            if closed_any or closed_any2:
+                time.sleep(0.3)
+
+        # 최종 재확인
+        docs_final = _get_open_docs()
+        if docs_final:
+            leftover = []
+            for d in docs_final:
+                try:
+                    p_val = d.GetPathName
+                    p = p_val() if callable(p_val) else p_val
+                    if not p:
+                        tv = d.GetTitle
+                        p = tv() if callable(tv) else tv
+                    tv2 = d.GetTitle
+                    t = tv2() if callable(tv2) else tv2
+                    if not _is_already_open(p, t):
+                        leftover.append((t, p))
+                except:
+                    pass
+            if leftover:
+                print("Error: close_all_documents_without_saving FAILED - the following documents could not be closed:", flush=True)
+                for t, p in leftover:
+                    print(f"Error:   - '{t}' (path: {p})", flush=True)
+            else:
+                print(f"close_all_documents_without_saving: {len(docs_final)} pre-existing document(s) remain open (expected).", flush=True)
+        else:
+            print("close_all_documents_without_saving: cleanup OK - no documents remain open.", flush=True)
+
     except Exception as e:
         print(f"Error in close_all_documents_without_saving cleanup: {e}", flush=True)
     finally:
-        # Restore UserControl to its original state
         try:
             swApp.UserControl = orig_user_control
-            print(f"close_all_documents_without_saving: Restored UserControl to {orig_user_control}", flush=True)
-        except Exception as uc_err:
-            print(f"close_all_documents_without_saving: Failed to restore UserControl: {uc_err}", flush=True)
+        except Exception:
+            pass
     print("close_all_documents_without_saving: end", flush=True)
 
 def run_single_export(file_abs, target_formats, output_dir, workspace_path, every_configurations=True):
@@ -472,26 +598,12 @@ def run_single_export(file_abs, target_formats, output_dir, workspace_path, ever
         print("Failed to bind to active SolidWorks instance for single export.")
         sys.exit(1)
         
+    # --- 핵심 수정: already_open_paths를 GetDocuments()로 채우지 않음 ---
+    # BOM과 동일한 원리: EXPORT 서브프로세스는 배치 모드에서 호출되며,
+    # 이전 서브프로세스가 열어둔 파일들이 GetDocuments()에 남아있을 수 있다.
+    # 이를 already_open_paths에 넣으면 닫지 못하게 되므로, 빈 집합을 사용한다.
+    # 닫기 시에는 현재 열린 모든 문서를 닫되, already_open_paths가 비어있으므로 모두 닫기 대상이 된다.
     already_open_paths = set()
-    try:
-        val_docs = getattr(swApp, 'GetDocuments', None)
-        open_docs_before = val_docs() if callable(val_docs) else val_docs
-        if open_docs_before:
-            for d in open_docs_before:
-                try:
-                    p_val = getattr(d, 'GetPathName', None)
-                    p = p_val() if callable(p_val) else p_val
-                    if p:
-                        already_open_paths.add(os.path.normpath(p).lower())
-                    else:
-                        t_val = getattr(d, 'GetTitle', None)
-                        t = t_val() if callable(t_val) else t_val
-                        if t:
-                            already_open_paths.add(t.lower())
-                except:
-                    pass
-    except Exception as doc_err:
-        print(f"Warning: Failed to get initial open documents: {doc_err}", flush=True)
         
     model = None
     try:
@@ -515,19 +627,26 @@ def run_single_export(file_abs, target_formats, output_dir, workspace_path, ever
             print(f"Failed to set user preferences in single export: {pref_e}")
                 
         f_lower = file_abs.lower()
+        # 공통 플래그:
+        #   1   = swOpenDocOptions_Silent
+        #   2   = swOpenDocOptions_ReadOnly
+        #   32  = swOpenDocOptions_LoadModel        (도면/어셈블리: 참조 모델/컴포넌트 로드)
+        #   64  = swOpenDocOptions_IgnoreActivationAndSuppression
+        #         (부모 어셈블리 자동 활성화/로딩 억제 - sldprt/slddrw/sldasm 모두 적용하여
+        #          부모 어셈블리가 함께 열리는 현상을 차단)
+        #   128 = swOpenDocOptions_AutoMissingComponentResolve
         if f_lower.endswith(".slddrw"):
             doc_type = 3  # swDocDRAWING
-            # 1 = swOpenDocOptions_Silent, 32 = swOpenDocOptions_LoadModel, 2 = swOpenDocOptions_ReadOnly, 128 = swOpenDocOptions_AutoMissingComponentResolve
-            open_options = 1 | 32 | 2 | 128
+            # 도면: 참조 모델은 LoadModel(32)로 정상 로드, 부모 어셈블리 자동 로딩만 64로 차단.
+            open_options = 1 | 32 | 64 | 2 | 128
         elif f_lower.endswith(".sldprt"):
             doc_type = 1  # swDocPART
-            # Flag 64 = swOpenDocOptions_IgnoreActivationAndSuppression: prevents parent assembly auto-loading
             # 1 = swOpenDocOptions_Silent, 64 = IgnoreActivation, 2 = ReadOnly, 128 = AutoMissingComponentResolve
             open_options = 1 | 64 | 2 | 128
         elif f_lower.endswith(".sldasm"):
             doc_type = 2  # swDocASSEMBLY
-            # 1 = swOpenDocOptions_Silent, 32 = swOpenDocOptions_LoadModel, 2 = swOpenDocOptions_ReadOnly, 128 = swOpenDocOptions_AutoMissingComponentResolve
-            open_options = 1 | 32 | 2 | 128
+            # 어셈블리: 컴포넌트는 LoadModel(32)로 정상 로드, 부모 어셈블리 자동 로딩만 64로 차단.
+            open_options = 1 | 32 | 64 | 2 | 128
         else:
             print(f"Unsupported file format: {file_abs}")
             sys.exit(1)
@@ -545,6 +664,11 @@ def run_single_export(file_abs, target_formats, output_dir, workspace_path, ever
         print(f"Opening: {file_abs}")
         error = win32com.client.VARIANT(pythoncom.VT_BYREF | pythoncom.VT_I4, 0)
         warning = win32com.client.VARIANT(pythoncom.VT_BYREF | pythoncom.VT_I4, 0)
+
+        # --- 핵심 수정: already_open_paths를 GetDocuments()로 갱신하지 않음 ---
+        # BOM과 동일한 원리: 이전 서브프로세스가 닫지 못한 파일이 GetDocuments()에 남아있을 수 있어,
+        # 이를 already_open_paths에 넣으면 닫지 못하게 된다. already_open_paths는 빈 집합을 사용한다.
+        # 닫기 시에는 현재 열린 모든 문서를 닫는다.
 
         model = swApp.OpenDoc6(file_abs, doc_type, open_options, "", error, warning)
 
@@ -1024,6 +1148,10 @@ def run_export(job_file):
 
     has_errors = False
     was_already_running = False
+    # --- 핵심 수정: already_open_paths를 GetDocuments()로 채우지 않음 ---
+    # BOM과 동일한 원리: 배치 모드에서 서브프로세스가 순차적으로 호출되며,
+    # 이전 서브프로세스가 닫지 못한 파일이 GetDocuments()에 남아있을 수 있다.
+    # 이를 already_open_paths에 넣으면 닫지 못하게 되므로, 빈 집합을 사용한다.
     already_open_paths = set()
 
     # Initialize COM
@@ -1036,26 +1164,6 @@ def run_export(job_file):
         print("[ERROR] Failed to start or bind SolidWorks instance.", flush=True)
         pythoncom.CoUninitialize()
         sys.exit(1)
-
-    try:
-        val_docs = getattr(swApp, 'GetDocuments', None)
-        open_docs_before = val_docs() if callable(val_docs) else val_docs
-        if open_docs_before:
-            for d in open_docs_before:
-                try:
-                    p_val = getattr(d, 'GetPathName', None)
-                    p = p_val() if callable(p_val) else p_val
-                    if p:
-                        already_open_paths.add(os.path.normpath(p).lower())
-                    else:
-                        t_val = getattr(d, 'GetTitle', None)
-                        t = t_val() if callable(t_val) else t_val
-                        if t:
-                            already_open_paths.add(t.lower())
-                except:
-                    pass
-    except Exception as doc_err:
-        print(f"Warning: Failed to get initial open documents: {doc_err}", flush=True)
 
     # Apply configuration and preferences to the bound swApp instance (always executed)
     try:
@@ -1274,7 +1382,19 @@ def run_export(job_file):
         # Close all open documents and exit SolidWorks if we started it
         if swApp:
             try:
-                close_all_documents_without_saving(swApp, already_open_paths)
+                # --- 핵심 수정: already_open_paths를 GetDocuments()로 갱신하지 않음 ---
+                # BOM과 동일한 원리: 배치 처리 중 서브프로세스가 닫지 못한 파일이
+                # GetDocuments()에 남아있을 수 있어, 이를 already_open_paths에 넣으면
+                # 닫지 못하게 된다. already_open_paths는 빈 집합을 사용하여 모든 문서를 닫는다.
+                # (SolidWorks가 이미 실행 중이었다면 사용자가 열어둔 파일도 닫히지만,
+                #  EXPORT는 배치 처리이므로 작업 완료 후 모든 파일을 닫는 것이 안전)
+                if was_already_running:
+                    print("Closing all documents opened during export...", flush=True)
+                    close_all_documents_without_saving(swApp, already_open_paths)
+                else:
+                    # SolidWorks를 새로 시작했다면: 모든 문서를 닫고 ExitApp으로 종료
+                    print("Closing all documents (SolidWorks was launched by export runner)...", flush=True)
+                    close_all_documents_without_saving(swApp, already_open_paths=None)
             except Exception as close_err:
                 print(f"Error during final documents cleanup: {close_err}")
                 

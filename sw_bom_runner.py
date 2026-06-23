@@ -151,40 +151,30 @@ def main():
     all_bom_rows = []
     already_open_paths = set()
     try:
+        # --- 핵심 수정: already_open_paths는 --open-before 인자로만 구성 ---
+        # GetDocuments()로 갱신하면 컨피그 조회 서브프로세스가 열어둔 파일(어셈블리 +
+        # 의존성 파일들)이 already_open_paths에 들어가서 닫지 못하게 된다.
+        # --open-before는 UI에서 BOM 버튼 클릭 시점에 사용자가 미리 열어둔 파일 목록만
+        # 포함하므로, 이것만 신뢰할 수 있다. --open-before가 없으면 빈 집합(=모두 닫기).
         if args.open_before:
-            # Populate already_open_paths from the passed arguments
             for path_str in args.open_before.split(','):
                 path_str_clean = path_str.strip()
                 if path_str_clean:
                     already_open_paths.add(os.path.normpath(path_str_clean).lower())
+            print(f"already_open_paths from --open-before: {len(already_open_paths)} file(s)", flush=True)
+            for ap in sorted(already_open_paths):
+                print(f"  PRE-EXISTING: {ap}", flush=True)
         else:
-            # Get list of already open documents before opening our target assembly
-            try:
-                val_docs = getattr(swApp, 'GetDocuments', None)
-                open_docs_before = val_docs() if callable(val_docs) else val_docs
-                if open_docs_before:
-                    for d in open_docs_before:
-                        try:
-                            p_val = getattr(d, 'GetPathName', None)
-                            p = p_val() if callable(p_val) else p_val
-                            if p:
-                                already_open_paths.add(os.path.normpath(p).lower())
-                            else:
-                                t_val = getattr(d, 'GetTitle', None)
-                                t = t_val() if callable(t_val) else t_val
-                                if t:
-                                    already_open_paths.add(t.lower())
-                        except:
-                            pass
-            except Exception as doc_err:
-                print(f"Warning: Failed to get initial open documents: {doc_err}", flush=True)
+            print("No --open-before provided. All open documents will be closed.", flush=True)
 
         # Load SolidWorks early-bound typelibs
         load_sw_typelib()
 
-        # Open document silently and read-only (swOpenDocOptions_Silent = 1, swOpenDocOptions_ReadOnly = 2)
+        # Open document silently and read-only.
+        # swOpenDocOptions_Silent = 1, swOpenDocOptions_ReadOnly = 2,
+        # swOpenDocOptions_IgnoreActivationAndSuppression = 64 (부모 어셈블리 자동 로딩 억제).
         doc_type = 2 # swDocASSEMBLY
-        options = 1 | 2 
+        options = 1 | 2 | 64
         error = win32com.client.VARIANT(pythoncom.VT_BYREF | pythoncom.VT_I4, 0)
         warning = win32com.client.VARIANT(pythoncom.VT_BYREF | pythoncom.VT_I4, 0)
 
@@ -516,11 +506,54 @@ def main():
         try:
             print(f"Closing documents opened during BOM extraction in SolidWorks...", flush=True)
 
+            # UserControl을 임시로 False로 설정하여 백그라운드 닫기가 UI에 방해받지 않도록 함
+            orig_user_control = True
+            try:
+                orig_user_control = swApp.UserControl
+                swApp.UserControl = False
+            except Exception:
+                pass
+
+            # 경로 정규화 헬퍼: 슬래시 방향과 대소문자를 통일하여 매칭 실패 방지
+            def _norm(p):
+                if not p:
+                    return ""
+                return os.path.normpath(p).replace("\\", "/").lower()
+
+            # already_open_paths를 동일한 정규화 방식으로 재구성
+            normalized_already_open = set()
+            for ap in already_open_paths:
+                if ap:
+                    normalized_already_open.add(_norm(ap))
+                    # 타이틀(파일명) 형태도 추가
+                    base = os.path.basename(ap)
+                    if base:
+                        normalized_already_open.add(_norm(base))
+                        no_ext = os.path.splitext(base)[0]
+                        if no_ext:
+                            normalized_already_open.add(no_ext.lower())
+
+            def _is_already_open(path, title):
+                """path/title이 BOM 실행 전부터 열려있던 문서인지 판단 (정규화 매칭)"""
+                np = _norm(path)
+                nt = _norm(title)
+                # 경로 전체 매칭
+                if np and np in normalized_already_open:
+                    return True
+                # 타이틀 매칭 (확장자 포함/제외 모두)
+                if nt:
+                    if nt in normalized_already_open:
+                        return True
+                    no_ext = os.path.splitext(nt)[0]
+                    if no_ext and no_ext in normalized_already_open:
+                        return True
+                return False
+
             # Close referenced/newly opened files in multiple iterations to resolve dependency locks
             # Assemblies/Drawings must be closed before the parts they reference can be successfully closed.
             last_doc_count = -1
             stuck_count = 0
-            for iteration in range(15):
+            for iteration in range(20):
                 docs_left = None
                 try:
                     val = getattr(swApp, 'GetDocuments')
@@ -533,9 +566,10 @@ def main():
                     break
 
                 current_count = len(docs_left)
+                print(f"BOM cleanup iteration {iteration + 1}: {current_count} document(s) open.", flush=True)
                 if current_count == last_doc_count:
                     stuck_count += 1
-                    if stuck_count > 3:
+                    if stuck_count > 5:
                         print(f"BOM cleanup: detected stuck document count ({current_count} docs), breaking to prevent infinite loop.", flush=True)
                         break
                 else:
@@ -555,24 +589,12 @@ def main():
                             title = title_val() if callable(title_val) else title_val
                             path = title
 
-                        norm_path = os.path.normpath(path).lower()
                         title_val = d.GetTitle
                         title = title_val() if callable(title_val) else title_val
-                        
-                        # Check visibility
-                        is_visible = True
-                        try:
-                            is_visible = d.Visible
-                        except:
-                            try:
-                                is_visible = getattr(d, 'Visible')
-                            except:
-                                pass
                                 
-                        # Close only documents that were NOT already open before starting the script,
-                        # but always close invisible referenced/background documents to release locks.
-                        is_newly_opened = (norm_path not in already_open_paths) and (title.lower() not in already_open_paths)
-                        if is_newly_opened or not is_visible:
+                        # BOM 실행 전부터 열려있던 문서가 아닌 경우(=새로 열린 경우) 닫기 대상.
+                        is_pre_existing = _is_already_open(path, title)
+                        if not is_pre_existing:
                             try:
                                 dtype = d.GetType()
                             except:
@@ -620,6 +642,9 @@ def main():
                                 parent_files.append(doc_entry)
                             else:
                                 child_files.append(doc_entry)
+                        else:
+                            # BOM 실행 전부터 열려있던 문서는 로그만 출력
+                            print(f"  Skipping (pre-existing): {title} (path: {path})", flush=True)
                     except Exception as e_inspect:
                         print(f"Warning: Failed to inspect document for cleanup: {e_inspect}", flush=True)
 
@@ -635,6 +660,8 @@ def main():
                 if not parent_files and not child_files:
                     break
 
+                print(f"  Closing {len(parent_files)} parent(s) + {len(child_files)} child(ren)...", flush=True)
+
                 closed_any = False
                 # Close parents first to release references on children
                 for doc_entry in parent_files:
@@ -644,23 +671,24 @@ def main():
                     print(f"Closing newly opened/referenced parent document: {title} (path: {path})", flush=True)
                     for identifier in uniq_ids:
                         try:
-                            print(f"  Attempting CloseDoc('{identifier}')", flush=True)
-                            res = swApp.CloseDoc(identifier)
-                            print(f"    CloseDoc Result: {res}", flush=True)
-                            if res:
-                                closed_any = True
-                        except Exception as e_close_parent:
-                            print(f"    Warning: Failed to CloseDoc parent '{identifier}': {e_close_parent}", flush=True)
-                        try:
-                            print(f"  Attempting QuitDoc('{identifier}')", flush=True)
-                            res = swApp.QuitDoc(identifier)
-                            print(f"    QuitDoc Result: {res}", flush=True)
+                            swApp.CloseDoc(identifier)
                             closed_any = True
+                            print(f"  Closed via CloseDoc('{identifier}')", flush=True)
+                            break
+                        except Exception as e_close_parent:
+                            pass
+                        try:
+                            swApp.QuitDoc(identifier)
+                            closed_any = True
+                            print(f"  Closed via QuitDoc('{identifier}')", flush=True)
+                            break
                         except Exception as e_quit_parent:
-                            print(f"    Warning: Failed to QuitDoc parent '{identifier}': {e_quit_parent}", flush=True)
+                            pass
+                    else:
+                        print(f"  ⚠️ Failed to close parent: {title} (path: {path})", flush=True)
 
                 if closed_any:
-                    time.sleep(0.2)
+                    time.sleep(0.3)
 
                 # Close children second
                 for doc_entry in child_files:
@@ -670,22 +698,162 @@ def main():
                     print(f"Closing newly opened/referenced child document: {title} (path: {path})", flush=True)
                     for identifier in uniq_ids:
                         try:
-                            print(f"  Attempting CloseDoc('{identifier}')", flush=True)
-                            res = swApp.CloseDoc(identifier)
-                            print(f"    CloseDoc Result: {res}", flush=True)
-                            if res:
-                                closed_any = True
-                        except Exception as e_close_child:
-                            print(f"    Warning: Failed to CloseDoc child '{identifier}': {e_close_child}", flush=True)
-                        try:
-                            print(f"  Attempting QuitDoc('{identifier}')", flush=True)
-                            res = swApp.QuitDoc(identifier)
-                            print(f"    QuitDoc Result: {res}", flush=True)
+                            swApp.CloseDoc(identifier)
                             closed_any = True
+                            print(f"  Closed via CloseDoc('{identifier}')", flush=True)
+                            break
+                        except Exception as e_close_child:
+                            pass
+                        try:
+                            swApp.QuitDoc(identifier)
+                            closed_any = True
+                            print(f"  Closed via QuitDoc('{identifier}')", flush=True)
+                            break
                         except Exception as e_quit_child:
-                            print(f"    Warning: Failed to QuitDoc child '{identifier}': {e_quit_child}", flush=True)
+                            pass
+                    else:
+                        print(f"  ⚠️ Failed to close child: {title} (path: {path})", flush=True)
 
-                time.sleep(0.2)
+                time.sleep(0.3)
+                # COM 참조 해제 후 가비지 컬렉션으로 락 해제 시도
+                gc.collect()
+                try:
+                    pythoncom.CoCollectFreeUnusedLibraries()
+                except:
+                    pass
+
+            # UserControl 복원
+            try:
+                swApp.UserControl = orig_user_control
+            except Exception:
+                pass
+
+            # ----- Final verification pass -----
+            # 닫기 루프가 끝난 뒤에도 여전히 열려 있는 문서가 있는지 확인한다.
+            # 이 중 BOM 실행 중 새로 열린(already_open_paths에 없는) 문서가 남아 있다면
+            # 닫기 명령이 실패한 것이므로 경고를 출력하고 추가 닫기 시도를 한다.
+            for verify_iter in range(3):
+                docs_remaining = None
+                try:
+                    val = getattr(swApp, 'GetDocuments')
+                    docs_remaining = val() if callable(val) else val
+                except:
+                    pass
+
+                if not docs_remaining:
+                    print("BOM cleanup verified: all newly opened documents are closed.", flush=True)
+                    break
+
+                # 수집 대상: BOM 실행 중 새로 열렸으나 아직 열려 있는 문서
+                still_open = []
+                for d in docs_remaining:
+                    try:
+                        path_val = d.GetPathName
+                        path = path_val() if callable(path_val) else path_val
+                        if not path:
+                            tv = d.GetTitle
+                            path = tv() if callable(tv) else tv
+                        tv2 = d.GetTitle
+                        title = tv2() if callable(tv2) else tv2
+
+                        is_pre_existing = _is_already_open(path, title)
+                        if not is_pre_existing:
+                            still_open.append({'title': title, 'path': path})
+                    except Exception as ie:
+                        print(f"Warning: Failed to inspect remaining document: {ie}", flush=True)
+
+                if not still_open:
+                    print(f"BOM cleanup verified: {len(docs_remaining)} document(s) remain open but all were open before BOM run.", flush=True)
+                    break
+
+                # 닫기 시도가 있었으나 실패한 문서들에 대해 경고 출력
+                for entry in still_open:
+                    print(f"⚠️ Warning: document failed to close and is still open: '{entry['title']}' (path: {entry['path']})", flush=True)
+                print(f"Verification retry {verify_iter + 1}/3: {len(still_open)} newly opened document(s) still open. Retrying close...", flush=True)
+
+                # 부모(asm/drw)부터 닫기
+                parents = [e for e in still_open if (e['path'] or "").lower().endswith((".sldasm", ".slddrw")) or (e['title'] or "").lower().endswith((".sldasm", ".slddrw"))]
+                children = [e for e in still_open if e not in parents]
+
+                def _try_close(entry):
+                    ids = []
+                    p = entry['path']
+                    t = entry['title']
+                    if p:
+                        ids.append(p)
+                        b = os.path.basename(p)
+                        if b:
+                            ids.append(b)
+                            ids.append(os.path.splitext(b)[0])
+                    if t:
+                        ids.append(t)
+                        ids.append(os.path.splitext(t)[0])
+                    seen = []
+                    for i in ids:
+                        if i and isinstance(i, str) and i.strip() and i.strip() not in seen:
+                            seen.append(i.strip())
+                    closed = False
+                    for identifier in seen:
+                        try:
+                            swApp.CloseDoc(identifier)
+                            print(f"  Retry CloseDoc('{identifier}') OK", flush=True)
+                            closed = True
+                            break
+                        except Exception as e1:
+                            pass
+                        try:
+                            swApp.QuitDoc(identifier)
+                            print(f"  Retry QuitDoc('{identifier}') OK", flush=True)
+                            closed = True
+                            break
+                        except Exception as e2:
+                            pass
+                    return closed
+
+                closed_any = False
+                for e in parents:
+                    if _try_close(e):
+                        closed_any = True
+                if closed_any:
+                    time.sleep(0.3)
+                closed_any2 = False
+                for e in children:
+                    if _try_close(e):
+                        closed_any2 = True
+                if closed_any or closed_any2:
+                    time.sleep(0.3)
+
+            # 최종 재확인: 여전히 남아있는 새로 열린 문서가 있으면 명확한 에러 메시지 출력
+            docs_final = None
+            try:
+                val = getattr(swApp, 'GetDocuments')
+                docs_final = val() if callable(val) else val
+            except:
+                pass
+
+            if docs_final:
+                leftover = []
+                for d in docs_final:
+                    try:
+                        pv = d.GetPathName
+                        p = pv() if callable(pv) else pv
+                        if not p:
+                            tv = d.GetTitle
+                            p = tv() if callable(tv) else tv
+                        tv2 = d.GetTitle
+                        t = tv2() if callable(tv2) else tv2
+                        if not _is_already_open(p, t):
+                            leftover.append((t, p))
+                    except:
+                        pass
+                if leftover:
+                    print("Error: BOM cleanup FAILED - the following newly opened documents could not be closed:", flush=True)
+                    for t, p in leftover:
+                        print(f"Error:   - '{t}' (path: {p})", flush=True)
+                else:
+                    print(f"BOM cleanup OK: {len(docs_final)} pre-existing document(s) remain open (expected).", flush=True)
+            else:
+                print("BOM cleanup OK: no documents remain open.", flush=True)
         except Exception as e_close_all:
             print(f"Warning: Error during referenced docs cleanup: {e_close_all}", file=sys.stderr, flush=True)
 
