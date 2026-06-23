@@ -651,27 +651,62 @@ class FileCommitHistoryDialog(tk.Toplevel):
             # 4. Process based on document type
             if doc_type in (1, 2):  # PART / ASSEMBLY
                 # ── 4-A. Load SOLIDWORKS Utilities add-in ──────────────────
+                # The Utilities add-in is registered as CLSID {F80FA0F1-B13D-11d4-944A-000629992CFE}
+                # and its loader DLL lives at <SW_install>\sldUtils\SwLoaderSw.dll
                 print("Getting SOLIDWORKS Utilities add-in...", flush=True)
                 sw_util = None
-                try:
-                    sw_util = sw_app.GetAddInObject("Utilities.UtilitiesApp")
-                except Exception as _e1:
-                    print(f"GetAddInObject attempt 1 failed: {_e1}", flush=True)
+
+                # Strategy 1: GetAddInObject by ProgID (works if already loaded in SW)
+                for _prog_id in ("Utilities.UtilitiesApp",
+                                 "{F80FA0F1-B13D-11d4-944A-000629992CFE}"):
+                    try:
+                        sw_util = sw_app.GetAddInObject(_prog_id)
+                        if sw_util:
+                            print(f"GetAddInObject succeeded with '{_prog_id}'.", flush=True)
+                            break
+                    except Exception as _e1:
+                        print(f"GetAddInObject('{_prog_id}') failed: {_e1}", flush=True)
 
                 if not sw_util:
-                    # Try loading the add-in DLL and retrying
-                    print("Trying to load Utilities add-in DLL...", flush=True)
+                    # Strategy 2: LoadAddIn using SwLoaderSw.dll (the real in-process loader)
+                    print("Trying to load Utilities via SwLoaderSw.dll...", flush=True)
+                    _sw_inst_dirs = [
+                        r"C:\Program Files\SOLIDWORKS Corp\SOLIDWORKS",
+                        r"C:\Program Files (x86)\SOLIDWORKS Corp\SOLIDWORKS",
+                    ]
+                    # Also try to get the installation dir from SW itself
                     try:
-                        sw_app.LoadAddIn("gtswutilities.dll")
-                        time.sleep(2)  # give SW time to register the add-in
-                        sw_util = sw_app.GetAddInObject("Utilities.UtilitiesApp")
-                    except Exception as _e2:
-                        print(f"LoadAddIn / GetAddInObject attempt 2 failed: {_e2}", flush=True)
+                        _exe_path = sw_app.ExecutablePath  # e.g. C:\...\SLDWORKS.exe
+                        _sw_inst_dirs.insert(0, os.path.dirname(_exe_path))
+                    except Exception:
+                        pass
+
+                    for _inst_dir in _sw_inst_dirs:
+                        _dll_path = os.path.join(_inst_dir, "sldUtils", "SwLoaderSw.dll")
+                        if not os.path.exists(_dll_path):
+                            print(f"DLL not found: {_dll_path}", flush=True)
+                            continue
+                        print(f"LoadAddIn: {_dll_path}", flush=True)
+                        try:
+                            sw_app.LoadAddIn(_dll_path)
+                            time.sleep(2)  # give SW time to register
+                            sw_util = sw_app.GetAddInObject("Utilities.UtilitiesApp")
+                            if sw_util:
+                                print("Utilities add-in loaded via SwLoaderSw.dll.", flush=True)
+                                break
+                            # Also retry with CLSID
+                            sw_util = sw_app.GetAddInObject("{F80FA0F1-B13D-11d4-944A-000629992CFE}")
+                            if sw_util:
+                                print("Utilities add-in loaded (CLSID after LoadAddIn).", flush=True)
+                                break
+                        except Exception as _e2:
+                            print(f"LoadAddIn attempt failed for {_dll_path}: {_e2}", flush=True)
 
                 if not sw_util:
                     raise RuntimeError(
                         "SOLIDWORKS Utilities 애드인을 로드할 수 없습니다.\n"
-                        "SolidWorks → 도구 → 애드인 → 'SOLIDWORKS Utilities'를 체크한 후 다시 시도해 주세요."
+                        "SolidWorks → 도구 → 애드인(Add-Ins) → 'SOLIDWORKS Utilities'를 체크한 후\n"
+                        "다시 시도해 주세요."
                     )
                 print("SOLIDWORKS Utilities add-in loaded.", flush=True)
 
@@ -878,7 +913,9 @@ class FileCommitHistoryDialog(tk.Toplevel):
             tb = traceback.format_exc()
             print(f"Error in visual diff:\n{tb}", flush=True)
             if not self.cancel_event.is_set():
-                self.after(0, lambda: self._on_diff_error(f"{e}\n\n{tb}"))
+                # Capture e and tb as default args to avoid NameError when the
+                # except-clause variable is cleared before the lambda executes.
+                self.after(0, lambda _e=str(e), _tb=tb: self._on_diff_error(f"{_e}\n\n{_tb}"))
                 
         finally:
             # Clean up drawing documents if they are still open (e.g., if error occurred)
