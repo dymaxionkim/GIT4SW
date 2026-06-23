@@ -445,8 +445,8 @@ class FileCommitHistoryDialog(tk.Toplevel):
         import pythoncom
         import win32com.client
         import shutil
-        import cv2
-        import numpy as np
+        import subprocess
+        import os
         import time
         
         # Initialize COM for this thread
@@ -454,16 +454,15 @@ class FileCommitHistoryDialog(tk.Toplevel):
         
         ours_temp_path = None
         theirs_temp_path = None
-        ours_img_path = None
-        theirs_img_path = None
-        diff_result_path = None
+        ours_pdf_path = None
+        theirs_pdf_path = None
         
         sw_app = None
         opened_docs = []
         
         try:
             # 1. Setup paths
-            backup_dir = os.path.join(self.parent.workspace_path, ".backup")
+            backup_dir = os.path.normpath(os.path.join(self.parent.workspace_path, ".backup"))
             os.makedirs(backup_dir, exist_ok=True)
             
             # Normalize path for git show (must be relative to repo and use forward slashes)
@@ -475,18 +474,25 @@ class FileCommitHistoryDialog(tk.Toplevel):
             base, ext = os.path.splitext(os.path.basename(git_file_path))
             ext_lower = ext.lower()
             
-            ours_temp_path = os.path.join(backup_dir, f"{base}__OURS{ext}")
-            theirs_temp_path = os.path.join(backup_dir, f"{base}__THEIRS{ext}")
+            ours_temp_path = os.path.join(backup_dir, f"{base}_OURS{ext}")
+            theirs_temp_path = os.path.join(backup_dir, f"{base}_THEIRS{ext}")
             
-            ours_img_path = os.path.join(backup_dir, f"{base}__OURS.png")
-            theirs_img_path = os.path.join(backup_dir, f"{base}__THEIRS.png")
-            diff_result_path = os.path.join(backup_dir, f"{base}__DIFF_RESULT.png")
+            ours_pdf_path = os.path.join(backup_dir, f"{base}_OURS.pdf")
+            theirs_pdf_path = os.path.join(backup_dir, f"{base}_THEIRS.pdf")
             
-            # Remove previous images/temp files if they exist
-            for temp_file in [ours_temp_path, theirs_temp_path, ours_img_path, theirs_img_path, diff_result_path]:
+            # Remove previous temp/image/pdf files if they exist
+            for temp_file in [ours_temp_path, theirs_temp_path, ours_pdf_path, theirs_pdf_path]:
                 if os.path.exists(temp_file):
                     try:
                         os.remove(temp_file)
+                    except Exception:
+                        pass
+            
+            # Clean up old drawing diff pngs in the .backup directory
+            for f in os.listdir(backup_dir):
+                if f.startswith(f"{base}_DIFF") and f.endswith(".png"):
+                    try:
+                        os.remove(os.path.join(backup_dir, f))
                     except Exception:
                         pass
             
@@ -536,131 +542,229 @@ class FileCommitHistoryDialog(tk.Toplevel):
             except Exception:
                 raise RuntimeError("SOLIDWORKS is not currently running. Please open SOLIDWORKS first.")
                 
-            # Document Type and options mapping
+            sw_app.Visible = True  # Ensure visible
+            
+            # Document Type mapping
             if ext_lower == ".sldprt":
                 doc_type = 1  # swDocPART
-                open_options = 1 | 64 | 2 | 128  # Silent | IgnoreActivation | ReadOnly | AutoMissingComponentResolve
             elif ext_lower == ".sldasm":
                 doc_type = 2  # swDocASSEMBLY
-                open_options = 1 | 32 | 2 | 128  # Silent | LoadModel | ReadOnly | AutoMissingComponentResolve
             elif ext_lower == ".slddrw":
                 doc_type = 3  # swDocDRAWING
-                open_options = 1 | 32 | 2 | 128  # Silent | LoadModel | ReadOnly | AutoMissingComponentResolve
             else:
                 raise ValueError(f"Unsupported file extension for diff: {ext}")
                 
-            # 4. Helper to open and save PNG
-            def export_model_to_png(file_path, png_path):
-                print(f"Opening model in SolidWorks: {file_path}", flush=True)
+            # Helper to open a file in SOLIDWORKS (visible, read-only)
+            def open_document(file_path):
+                print(f"Opening in SolidWorks: {file_path}", flush=True)
                 error = win32com.client.VARIANT(pythoncom.VT_BYREF | pythoncom.VT_I4, 0)
                 warning = win32com.client.VARIANT(pythoncom.VT_BYREF | pythoncom.VT_I4, 0)
                 
-                model = sw_app.OpenDoc6(file_path, doc_type, open_options, "", error, warning)
+                # Open read-only (2) and auto-resolve missing references (128)
+                model = sw_app.OpenDoc6(file_path, doc_type, 2 | 128, "", error, warning)
                 if not model:
                     raise RuntimeError(f"Failed to open document in SOLIDWORKS: {os.path.basename(file_path)} (Error: {error.value})")
                 
                 opened_docs.append(model)
+                return model
+                
+            # 4. Process based on document type
+            if doc_type in (1, 2):  # PART / ASSEMBLY
+                # Load SOLIDWORKS Utilities
+                sw_util = sw_app.GetAddInObject("Utilities.UtilitiesApp")
+                if not sw_util:
+                    sw_app.LoadAddIn("gtswutilities.dll")
+                    sw_util = sw_app.GetAddInObject("Utilities.UtilitiesApp")
+                if not sw_util:
+                    raise RuntimeError("SOLIDWORKS Utilities add-in could not be loaded. Please enable 'SOLIDWORKS Utilities' in Tools > Add-Ins.")
+                    
+                long_status = win32com.client.VARIANT(pythoncom.VT_BYREF | pythoncom.VT_I4, 0)
+                sw_util_comp_geom = sw_util.GetToolInterface(2, long_status) # 2 = Compare Geometry
+                if not sw_util_comp_geom or long_status.value != 0:
+                    raise RuntimeError(f"Failed to get Compare Geometry tool interface (Error status: {long_status.value})")
+                    
+                # Open both
+                open_document(theirs_temp_path)
+                open_document(ours_temp_path)
                 
                 if self.cancel_event.is_set():
                     return
+                    
+                # Run built-in geometry comparison (Show UI)
+                vol_status = win32com.client.VARIANT(pythoncom.VT_BYREF | pythoncom.VT_I4, 0)
+                face_status = win32com.client.VARIANT(pythoncom.VT_BYREF | pythoncom.VT_I4, 0)
                 
-                # Activate Doc
-                sw_app.ActivateDoc3(model.GetTitle(), True, 2, 0)
+                print("Running SOLIDWORKS Compare Geometry tool...", flush=True)
+                res_comp = sw_util_comp_geom.CompareGeometry3(
+                    theirs_temp_path, "",  # Reference document (_THEIRS)
+                    ours_temp_path, "",    # Modified document (_OURS)
+                    2,                     # CompareType: gtGdfFaceAndVolumeCompare (value 2)
+                    1,                     # ReportType: gtResultShowUI (value 1)
+                    "",                    # ReportPath (empty for ShowUI)
+                    False,                 # AddToBinder
+                    True,                  # Overwrite
+                    vol_status,
+                    face_status
+                )
                 
-                # Show isometric view for 3D, Zoom to fit
-                if doc_type in (1, 2):
-                    model.ShowNamedView2("*Isometric", 7)
-                model.ViewZoomtofit2()
+                if res_comp != 0:
+                    raise RuntimeError(f"CompareGeometry3 failed with error code: {res_comp}")
+                    
+                # Keep temporary CAD models so the user can interact with them in SolidWorks
+                self.temp_files_to_clean = [ours_temp_path, theirs_temp_path]
                 
-                # Save as PNG
-                print(f"Saving image to {png_path}", flush=True)
-                model.SaveAs3(png_path, 0, 9) # 9 = Silent | AvoidDialogueOnSave
+                # Success callback
+                if not self.cancel_event.is_set():
+                    self.after(0, self._on_diff_success)
+                    
+            elif doc_type == 3:  # DRAWING (.slddrw)
+                model_theirs = open_document(theirs_temp_path)
+                model_ours = open_document(ours_temp_path)
                 
-                time.sleep(0.5)
+                if self.cancel_event.is_set():
+                    return
+                    
+                # Get sheet counts
+                try:
+                    sheets_theirs = model_theirs.GetSheetNames()
+                    num_sheets_theirs = len(sheets_theirs) if sheets_theirs else 1
+                except Exception:
+                    num_sheets_theirs = 1
+                    
+                try:
+                    sheets_ours = model_ours.GetSheetNames()
+                    num_sheets_ours = len(sheets_ours) if sheets_ours else 1
+                except Exception:
+                    num_sheets_ours = 1
+                    
+                num_sheets = min(num_sheets_theirs, num_sheets_ours)
+                warning_msg = None
+                if num_sheets_theirs != num_sheets_ours:
+                    warning_msg = f"Sheet count mismatch! Ours: {num_sheets_ours}, Theirs: {num_sheets_theirs}. Only comparing first {num_sheets} sheet(s)."
+                    print(warning_msg, flush=True)
+                    
+                # Save both as PDF
+                print("Saving drawing versions as PDF...", flush=True)
+                model_theirs.SaveAs3(theirs_pdf_path, 0, 9) # 9 = Silent + Avoid Save dialogs
+                model_ours.SaveAs3(ours_pdf_path, 0, 9)
                 
-                # Verify image was created
-                if not os.path.exists(png_path):
-                    raise RuntimeError(f"SOLIDWORKS failed to export image to {os.path.basename(png_path)}")
-            
-            # Export both
-            export_model_to_png(ours_temp_path, ours_img_path)
-            if self.cancel_event.is_set():
-                return
+                # Close documents immediately to release files
+                for model in opened_docs:
+                    try:
+                        title = model.GetTitle()
+                        sw_app.CloseDoc(title)
+                    except Exception:
+                        pass
+                opened_docs.clear()
                 
-            export_model_to_png(theirs_temp_path, theirs_img_path)
-            if self.cancel_event.is_set():
-                return
-            
-            # 5. Image Comparison using OpenCV
-            print("Performing image diff comparison...", flush=True)
-            img_ours = cv2.imread(ours_img_path)
-            img_theirs = cv2.imread(theirs_img_path)
-            
-            if img_ours is None or img_theirs is None:
-                raise RuntimeError("Could not read exported images from disk.")
+                # Verify PDF creation
+                if not os.path.exists(theirs_pdf_path) or not os.path.exists(ours_pdf_path):
+                    raise RuntimeError("Failed to export drawing versions to PDF in SOLIDWORKS.")
+                    
+                # Clean up temporary slddrw files right away
+                for path in [ours_temp_path, theirs_temp_path]:
+                    if path and os.path.exists(path):
+                        try:
+                            os.remove(path)
+                        except Exception:
+                            pass
+                ours_temp_path = None
+                theirs_temp_path = None
                 
-            # Ensure identical resolution
-            h1, w1 = img_ours.shape[:2]
-            h2, w2 = img_theirs.shape[:2]
-            if (h1, w1) != (h2, w2):
-                img_theirs = cv2.resize(img_theirs, (w1, h1))
-                
-            # Diff calculation
-            diff = cv2.absdiff(img_ours, img_theirs)
-            gray = cv2.cvtColor(diff, cv2.COLOR_BGR2GRAY)
-            _, thresh = cv2.threshold(gray, 10, 255, cv2.THRESH_BINARY)
-            
-            # Dilate diff mask for visibility
-            kernel = np.ones((5, 5), np.uint8)
-            thresh_dilated = cv2.dilate(thresh, kernel, iterations=2)
-            
-            # Color overlay: mark changes in red on the OURS image
-            highlight = img_ours.copy()
-            highlight[thresh_dilated == 255] = [0, 0, 255] # Red in BGR
-            
-            # Horizontal stack: Ours | Theirs | Diff
-            combined = np.hstack((img_ours, img_theirs, highlight))
-            cv2.imwrite(diff_result_path, combined)
-            
-            # 6. Open the result image
-            print("Opening diff result image...", flush=True)
-            os.startfile(diff_result_path)
-            
-            # Success callback to UI
-            if not self.cancel_event.is_set():
-                self.after(0, self._on_diff_success)
-            
+                # Resolve ImageMagick path
+                im_path = self.parent.load_imagemagick_path()
+                if not os.path.exists(im_path):
+                    im_path = "compare"  # Fallback to system path command
+                    
+                diff_images = []
+                for i in range(num_sheets):
+                    if self.cancel_event.is_set():
+                        return
+                        
+                    if num_sheets == 1:
+                        diff_img_path = os.path.join(backup_dir, f"{base}_DIFF.png")
+                    else:
+                        diff_img_path = os.path.join(backup_dir, f"{base}_DIFF_Page{i+1}.png")
+                        
+                    cmd_compare = [
+                        im_path,
+                        "-density", "300",
+                        f"{ours_pdf_path}[{i}]",
+                        f"{theirs_pdf_path}[{i}]",
+                        "-fuzz", "5%",
+                        "-metric", "AE",
+                        "-highlight-color", "Red",
+                        diff_img_path
+                    ]
+                    print(f"Running ImageMagick compare: {' '.join(cmd_compare)}", flush=True)
+                    res_comp = subprocess.run(cmd_compare, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+                    
+                    # ImageMagick compare returns:
+                    # 0: identical, 1: different (expected success case), >= 2: error.
+                    if res_comp.returncode >= 2:
+                        err_out = res_comp.stderr.decode('utf-8', errors='replace')
+                        raise RuntimeError(f"ImageMagick compare failed on page {i+1} (Code {res_comp.returncode}): {err_out}\nEnsure ImageMagick is correctly installed.")
+                        
+                    if not os.path.exists(diff_img_path):
+                        raise RuntimeError(f"Compare did not generate the diff image for page {i+1}.")
+                        
+                    diff_images.append(diff_img_path)
+                    
+                # Success callback
+                if not self.cancel_event.is_set():
+                    self.after(0, lambda: self._on_drawing_diff_success(diff_images, warning_msg))
+                    
         except Exception as e:
             import traceback
             tb = traceback.format_exc()
             print(f"Error in visual diff:\n{tb}", flush=True)
             if not self.cancel_event.is_set():
                 self.after(0, lambda: self._on_diff_error(f"{e}\n\n{tb}"))
-            
+                
         finally:
-            # Clean up opened SolidWorks documents
-            if sw_app:
+            # Clean up drawing documents if they are still open (e.g., if error occurred)
+            if sw_app and opened_docs:
                 for model in opened_docs:
                     try:
                         title = model.GetTitle()
                         sw_app.CloseDoc(title)
-                    except Exception as e_close:
-                        print(f"Error closing doc: {e_close}")
-            
-            # Clean up temporary CAD files (keep the images for viewing, delete the temporary models)
-            for path in [ours_temp_path, theirs_temp_path]:
+                    except Exception:
+                        pass
+                        
+            # Clean up temporary PDFs
+            for path in [ours_pdf_path, theirs_pdf_path]:
                 if path and os.path.exists(path):
                     try:
                         os.remove(path)
                     except Exception:
                         pass
                         
+            # Clean up drawing temporary CAD files if they exist and weren't cleaned
+            if ext_lower == ".slddrw":
+                for path in [ours_temp_path, theirs_temp_path]:
+                    if path and os.path.exists(path):
+                        try:
+                            os.remove(path)
+                        except Exception:
+                            pass
+                            
             pythoncom.CoUninitialize()
             
     def _on_diff_success(self):
         self.lbl_status.config(text="Visual Diff successfully completed!", foreground="#10b981")
         self.btn_diff.state(["!disabled"])
         self.btn_exit.state(["!disabled"])
+        
+    def _on_drawing_diff_success(self, diff_images, warning_msg=None):
+        status_text = "Visual Diff successfully completed!"
+        if warning_msg:
+            status_text += f" ({warning_msg})"
+        self.lbl_status.config(text=status_text, foreground="#10b981")
+        self.btn_diff.state(["!disabled"])
+        self.btn_exit.state(["!disabled"])
+        
+        # Open the results popup window
+        DrawingDiffResultsDialog(self, diff_images)
         
     def _on_diff_error(self, err_msg):
         self.lbl_status.config(text="Visual Diff failed.", foreground="#ef4444")
@@ -671,7 +775,94 @@ class FileCommitHistoryDialog(tk.Toplevel):
     def on_exit(self):
         self.cancel_event.set()
         self.grab_release()
+        
+        # Clean up any temporary files registered for cleanup
+        if hasattr(self, 'temp_files_to_clean'):
+            for path in self.temp_files_to_clean:
+                if path and os.path.exists(path):
+                    try:
+                        os.remove(path)
+                    except Exception:
+                        pass
+                        
         self.destroy()
+
+
+class DrawingDiffResultsDialog(tk.Toplevel):
+    def __init__(self, parent, diff_images):
+        super().__init__(parent)
+        self.parent = parent
+        self.diff_images = diff_images
+        self.title("Drawing Diff Results")
+        self.geometry("500x350")
+        self.configure(bg="#f3f4f6")
+        self.transient(parent)
+        self.grab_set()
+        
+        # Header Label
+        lbl_title = ttk.Label(self, text="Drawing Comparison Results", font=("TkDefaultFont", 12, "bold"), background="#f3f4f6")
+        lbl_title.pack(anchor="w", padx=16, pady=(16, 4))
+        
+        lbl_desc = ttk.Label(self, text="Select a page to view the comparison image (Red highlights show differences):", font=("TkDefaultFont", 9), background="#f3f4f6", foreground="#4b5563")
+        lbl_desc.pack(anchor="w", padx=16, pady=(0, 12))
+        
+        # Frame for Listbox and scrollbar
+        list_frame = ttk.Frame(self)
+        list_frame.pack(fill="both", expand=True, padx=16, pady=4)
+        
+        scrollbar = ttk.Scrollbar(list_frame, orient="vertical")
+        scrollbar.pack(side="right", fill="y")
+        
+        self.listbox = tk.Listbox(
+            list_frame, 
+            yscrollcommand=scrollbar.set, 
+            font=("TkDefaultFont", 10),
+            bg="#ffffff",
+            fg="#1f2937",
+            selectbackground="#059669",
+            selectforeground="#ffffff",
+            relief="flat",
+            borderwidth=1
+        )
+        self.listbox.pack(side="left", fill="both", expand=True)
+        scrollbar.config(command=self.listbox.yview)
+        
+        # Populate Listbox
+        for img in self.diff_images:
+            name = os.path.basename(img)
+            self.listbox.insert("end", name)
+            
+        self.listbox.bind("<Double-Button-1>", self.on_view_selected)
+        
+        # Bottom Button Frame
+        btn_frm = ttk.Frame(self)
+        btn_frm.pack(fill="x", side="bottom", padx=16, pady=16)
+        
+        btn_view = ttk.Button(btn_frm, text="View Image", command=self.on_view_selected, style="Primary.TButton")
+        btn_view.pack(side="right", padx=(8, 0))
+        
+        btn_close = ttk.Button(btn_frm, text="Close", command=self.destroy)
+        btn_close.pack(side="right")
+        
+        # Center the window relative to parent
+        self.update_idletasks()
+        x = parent.winfo_rootx() + (parent.winfo_width() - self.winfo_width()) // 2
+        y = parent.winfo_rooty() + (parent.winfo_height() - self.winfo_height()) // 2
+        self.geometry(f"+{x}+{y}")
+        
+    def on_view_selected(self, event=None):
+        selected_indices = self.listbox.curselection()
+        if not selected_indices:
+            return
+        idx = selected_indices[0]
+        img_path = self.diff_images[idx]
+        if os.path.exists(img_path):
+            try:
+                os.startfile(img_path)
+            except Exception as e:
+                messagebox.showerror("Error", f"Failed to open image view:\n{e}", parent=self)
+        else:
+            messagebox.showerror("Error", f"Image file not found:\n{img_path}", parent=self)
 
 
 class LfsCleanupWizardDialog(tk.Toplevel):
@@ -1645,6 +1836,7 @@ class GIT4SWApp(tk.Tk):
             "git-lfs_path",
             "solidworks_path",
             "edrawings_path",
+            "imagemagick_path",
             "github_token",
             "default_local_path",
             "organization_name"
@@ -5088,6 +5280,18 @@ class GIT4SWApp(tk.Tk):
                 with open(config_path, "r", encoding="utf-8") as f:
                     config = json.load(f)
                     return config.get("edrawings_path", default_path)
+            except Exception:
+                return default_path
+        return default_path
+
+    def load_imagemagick_path(self):
+        config_path = "config.json"
+        default_path = "C:\\Users\\dhkima\\scoop\\shims\\compare.exe"
+        if os.path.exists(config_path):
+            try:
+                with open(config_path, "r", encoding="utf-8") as f:
+                    config = json.load(f)
+                    return config.get("imagemagick_path", default_path)
             except Exception:
                 return default_path
         return default_path

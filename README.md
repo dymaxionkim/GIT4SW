@@ -80,8 +80,9 @@
   - It is enabled **only** when a single file is selected and no background tasks are running. When disabled, the button text is dimmed for clear state recognition.
   - Clicking this button opens a popup window. To prevent the main GUI thread from freezing, it queries the file's Git commit history (`git log`) in a background thread and lists the commits in a Treeview table with Date, Author, and Commit summary.
   - The dialog contains a scrollbar, a "Diff" button, and an "Exit" button. Selecting a commit enables the "Diff" button.
-  - When clicked, it connects to the active SOLIDWORKS session via COM, exports isometric views of both the current file (`__OURS`) and the selected commit file (`__THEIRS`, automatically resolving Git LFS pointers to original binary files via `git lfs smudge`), and performs a pixel-by-pixel difference analysis using OpenCV.
-  - It highlights differences with a red mask overlay, merges them side-by-side (Ours | Theirs | Diff Highlight) in a single image saved to `.backup/`, and immediately displays it in the system's default image viewer.
+  - When clicked, it copies the current file as `_OURS` and extracts the selected commit version as `_THEIRS` (automatically resolving Git LFS pointers to original binary files via `git lfs smudge`) inside the `.backup/` directory.
+  - **Parts & Assemblies (.sldprt, .sldasm)**: It loads the **SOLIDWORKS Utilities** add-in and launches the built-in **Compare Geometry** tool in SolidWorks via COM, loading both versions and allowing you to visually analyze the volume and face changes directly in SolidWorks.
+  - **Drawings (.slddrw)**: It opens both drawings in SolidWorks, exports them to PDF, closes the SolidWorks files, and executes the **ImageMagick compare** utility on each sheet page. A comparison results dialog pops up displaying a list of compared sheets, and double-clicking a page opens the highlighted red overlay difference image in your default image viewer.
 
 
 
@@ -95,11 +96,12 @@
   - **Git**: `git` version 2.x or higher (path can be specified)
   - **Git LFS**: Extension for handling large files and binary locks
   - **uv**: High-speed Python package and virtual environment manager
+  - **ImageMagick**: Required for drawing (.slddrw) file visual diff pixel comparisons (compare executable must be registered in PATH or configured. Scoop installation `scoop install imagemagick` is highly recommended).
 
   > [!TIP]
-  > You can easily install `git`, `git-lfs`, and `uv` using the **Scoop package manager**:
+  > You can easily install `git`, `git-lfs`, `uv`, and `imagemagick` using the **Scoop package manager**:
   > ```powershell
-  > scoop install git git-lfs uv
+  > scoop install git git-lfs uv imagemagick
   > ```
 
 ---

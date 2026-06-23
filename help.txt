@@ -83,6 +83,10 @@ The File Manager provides file-level checkout, checking-in, and local modificati
   - Opens the selected CAD file in the eDrawings application for quick, lightweight viewing.
 • Solidworks (Button)
   - Opens the selected CAD file in the active instance of SolidWorks.
+• Diff (Button)
+  - Opens a popup displaying the commit history of the selected file. Selecting a commit allows you to run a visual diff comparison between your current local version and the selected historical commit.
+  - Parts and assemblies (.sldprt, .sldasm) are compared using SolidWorks' built-in Compare Geometry tool (requires SOLIDWORKS Utilities add-in).
+  - Drawings (.slddrw) are converted to PDFs and compared page-by-page using the ImageMagick 'compare' command, highlighting differences in red. (Requires ImageMagick to be installed on your system, scoop install is recommended).
 • EXPORT (Button)
   - Launches a compact dialog window to perform bulk conversion of drawings (.slddrw), parts (.sldprt), and assemblies (.sldasm) to various formats (PDF, DXF, STEP, STEP_ASM).
   - Supports multi-selection of formats, custom file name prefix filters (PREFIX), and target subdirectory configurations (OUTPUT_DIR, defaults to "2D").
@@ -131,7 +135,7 @@ Dedicated to project administrators/maintainers to oversee integration and initi
 Configure system and application paths to ensure integration runs smoothly.
 
 • Path Configurations (Entries)
-  - Custom executable/folder paths for Git, Git LFS, SolidWorks, eDrawings, GitHub Personal Access Token, default local directory, and default GitHub organization name. Note: The "auto_sync" configuration parameter is saved in config.json as a boolean (true/false) to enable or disable automatic synchronization. It is managed via the Auto Sync checkbox in Dashboard Mode and is excluded from manual editing in Config Mode.
+  - Custom executable/folder paths for Git, Git LFS, SolidWorks, eDrawings, ImageMagick, GitHub Personal Access Token, default local directory, and default GitHub organization name. Note: The "auto_sync" configuration parameter is saved in config.json as a boolean (true/false) to enable or disable automatic synchronization. It is managed via the Auto Sync checkbox in Dashboard Mode and is excluded from manual editing in Config Mode.
 • Save Configuration (Button)
   - Saves all configured values to config.json and re-initializes Git and COM connections.
 
