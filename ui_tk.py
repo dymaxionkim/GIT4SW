@@ -3736,37 +3736,30 @@ class GIT4SWApp(tk.Tk):
         def run():
             try:
                 import git
-                from pyvis.network import Network
+                from graphviz import Digraph
                 import webbrowser
+                import os
                 
                 repo_path = self.workspace_path
-                output_filename = os.path.join(repo_path, "git_graph.html")
+                backup_dir = os.path.join(repo_path, ".backup")
+                os.makedirs(backup_dir, exist_ok=True)
+                output_html = os.path.join(backup_dir, "git_graph_interactive.html")
                 
-                # 1. Git repository load
                 repo = self.git_service.repo
                 if not repo:
                     raise RuntimeError("Failed to load Git repository.")
                 
-                # 2. Initialize Pyvis Network
-                net = Network(height="750px", width="100%", bgcolor="#222222", font_color="white")
-                net.barnes_hut()
+                # 1. Initialize Graphviz
+                dot = Digraph(comment="Git Commit Graph", format="svg")
+                dot.attr(rankdir="TB", size="20,20")
+                dot.attr("node", shape="box", style="rounded,filled", fontname="Arial")
+                dot.attr("edge", arrowhead="vee", arrowsize="0.8")
                 
-                # Collect branches and tags
-                commit_branches = {}
-                for branch in repo.branches:
-                    try:
-                        commit_branches[branch.commit.hexsha] = branch.name
-                    except ValueError:
-                        pass
+                commit_branches = {
+                    b.commit.hexsha: b.name for b in repo.branches if b.commit
+                }
+                commit_tags = {t.commit.hexsha: t.name for t in repo.tags if t.commit}
                 
-                commit_tags = {}
-                for tag in repo.tags:
-                    try:
-                        commit_tags[tag.commit.hexsha] = tag.name
-                    except ValueError:
-                        pass
-                
-                # 3. Walk commits and add nodes
                 visited = set()
                 all_commits = []
                 
@@ -3778,52 +3771,87 @@ class GIT4SWApp(tk.Tk):
                     
                     short_sha = commit.hexsha[:7]
                     summary = commit.summary
+                    node_label = f"{short_sha}\n{summary[:30]}"
                     
-                    node_label = short_sha
-                    title_hover = (
-                        f"<b>Commit:</b> {commit.hexsha}<br>"
-                        f"<b>Author:</b> {commit.author.name}<br>"
-                        f"<b>Date:</b> {commit.authored_datetime}<br><br>"
-                        f"<b>Message:</b> {summary}"
-                    )
+                    fillcolor = "#EBF3F9"
+                    color = "#1C6497"
+                    penwidth = "1"
                     
-                    color = "#1E88E5" # Default commit: Blue
-                    size = 15
-                    
+                    decorations = []
                     if commit.hexsha in commit_branches:
-                        node_label = f"[{commit_branches[commit.hexsha]}] {short_sha}"
-                        color = "#4CAF50" # Branch: Green
-                        size = 22
-                        
+                        decorations.append(f"[{commit_branches[commit.hexsha]}]")
+                        fillcolor = "#D4EDDA"
+                        color = "#28A745"
+                        penwidth = "2"
                     if commit.hexsha in commit_tags:
-                        node_label = f"tag: {commit_tags[commit.hexsha]} ({short_sha})"
-                        color = "#FFC107" # Tag: Yellow
-                        size = 20
+                        decorations.append(f"tag: {commit_tags[commit.hexsha]}")
+                        fillcolor = "#FFF3CD"
+                        color = "#FFC107"
                         
-                    net.add_node(
+                    if decorations:
+                        node_label = f"{' '.join(decorations)}\n{node_label}"
+                        
+                    dot.node(
                         commit.hexsha,
                         label=node_label,
-                        title=title_hover,
+                        fillcolor=fillcolor,
                         color=color,
-                        size=size
+                        penwidth=penwidth
                     )
                     
-                # 4. Add edges (only if both parent and child nodes are present in the network)
                 for commit in all_commits:
                     for parent in commit.parents:
                         if parent.hexsha in visited:
-                            net.add_edge(parent.hexsha, commit.hexsha, arrows="to", color="#888888")
+                            dot.edge(parent.hexsha, commit.hexsha)
+                            
+                # 2. Render Graphviz graph to SVG text data (in-memory pipe)
+                svg_data = dot.pipe().decode("utf-8")
                 
-                # Write HTML and open in browser
-                net.write_html(output_filename)
+                # 3. HTML template with svg-pan-zoom script
+                html_template = f"""<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="UTF-8">
+    <title>Git Commit Graph</title>
+    <script src="https://cdn.jsdelivr.net/npm/svg-pan-zoom@3.6.1/dist/svg-pan-zoom.min.js"></script>
+    <style>
+        html, body {{ margin: 0; padding: 0; width: 100%; height: 100%; overflow: hidden; }}
+        #container {{ width: 100%; height: 100%; background-color: #fafafa; }}
+        svg {{ width: 100%; height: 100%; }}
+    </style>
+</head>
+<body>
+    <div id="container">
+        {svg_data}
+    </div>
+    <script>
+        window.onload = function() {{
+            var svgElement = document.querySelector('#container svg');
+            if (svgElement) {{
+                svgPanZoom(svgElement, {{
+                    zoomEnabled: true,
+                    controlIconsEnabled: true,
+                    fit: true,
+                    center: true,
+                    minZoom: 0.1,
+                    maxZoom: 10
+                }});
+            }}
+        }};
+    </script>
+</body>
+</html>"""
                 
-                # Open HTML file in browser
-                webbrowser.open("file://" + os.path.realpath(output_filename))
+                # 4. Save and open HTML
+                with open(output_html, "w", encoding="utf-8") as f:
+                    f.write(html_template)
+                    
+                webbrowser.open("file://" + os.path.realpath(output_html))
                 
                 def on_done():
-                    self.write_log(f"Interactive Git graph successfully generated and opened.", "success")
+                    self.write_log(f"Interactive Graphviz graph successfully generated in .backup and opened.", "success")
                     
-                self.task_queue.put(('success', "Interactive Git graph generated successfully!", on_done))
+                self.task_queue.put(('success', "Interactive Graphviz graph generated successfully!", on_done))
                 
             except Exception as e:
                 self.task_queue.put(('error', f"Failed to generate browse graph:\n{e}", None))
