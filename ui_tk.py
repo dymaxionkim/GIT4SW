@@ -466,7 +466,13 @@ class FileCommitHistoryDialog(tk.Toplevel):
             backup_dir = os.path.join(self.parent.workspace_path, ".backup")
             os.makedirs(backup_dir, exist_ok=True)
             
-            base, ext = os.path.splitext(os.path.basename(self.file_rel_path))
+            # Normalize path for git show (must be relative to repo and use forward slashes)
+            git_file_path = self.file_rel_path
+            if os.path.isabs(git_file_path):
+                git_file_path = os.path.relpath(git_file_path, self.parent.workspace_path)
+            git_file_path = git_file_path.replace("\\", "/")
+            
+            base, ext = os.path.splitext(os.path.basename(git_file_path))
             ext_lower = ext.lower()
             
             ours_temp_path = os.path.join(backup_dir, f"{base}__OURS{ext}")
@@ -486,7 +492,8 @@ class FileCommitHistoryDialog(tk.Toplevel):
             
             # 2. Copy/Extract files
             # Copy OURS
-            shutil.copy2(os.path.join(self.parent.workspace_path, self.file_rel_path), ours_temp_path)
+            src_ours = os.path.normpath(os.path.join(self.parent.workspace_path, self.file_rel_path))
+            shutil.copy2(src_ours, ours_temp_path)
             
             # Fetch and smudge THEIRS
             repo = self.parent.git_service.repo
@@ -495,7 +502,7 @@ class FileCommitHistoryDialog(tk.Toplevel):
                 if os.path.exists(self.parent.git_service.git_path):
                     git_path = self.parent.git_service.git_path
                     
-            cmd = [git_path, "show", f"{hexsha}:{self.file_rel_path}"]
+            cmd = [git_path, "show", f"{hexsha}:{git_file_path}"]
             res = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, cwd=self.parent.workspace_path)
             if res.returncode != 0:
                 raise RuntimeError(f"Git show failed: {res.stderr.decode('utf-8', errors='replace')}")
@@ -624,9 +631,11 @@ class FileCommitHistoryDialog(tk.Toplevel):
                 self.after(0, self._on_diff_success)
             
         except Exception as e:
-            print(f"Error in visual diff: {e}", flush=True)
+            import traceback
+            tb = traceback.format_exc()
+            print(f"Error in visual diff:\n{tb}", flush=True)
             if not self.cancel_event.is_set():
-                self.after(0, lambda: self._on_diff_error(str(e)))
+                self.after(0, lambda: self._on_diff_error(f"{e}\n\n{tb}"))
             
         finally:
             # Clean up opened SolidWorks documents
@@ -654,9 +663,10 @@ class FileCommitHistoryDialog(tk.Toplevel):
         self.btn_exit.state(["!disabled"])
         
     def _on_diff_error(self, err_msg):
-        self.lbl_status.config(text=f"Visual Diff failed: {err_msg}", foreground="#ef4444")
+        self.lbl_status.config(text="Visual Diff failed.", foreground="#ef4444")
         self.btn_diff.state(["!disabled"])
         self.btn_exit.state(["!disabled"])
+        messagebox.showerror("Visual Diff Error", err_msg, parent=self)
         
     def on_exit(self):
         self.cancel_event.set()
