@@ -77,11 +77,13 @@
   - **COM 및 문서 클린업**: BOM 추출 완료 시 SolidWorks에서 함께 열렸던 하위 참조 부품 및 어셈블리 문서들을 메모리 참조 해제(GC 호출)와 함께 자동으로 연쇄 폐쇄(`CloseDoc`) 정리하여 리소스 락을 남기지 않습니다.
 * **개별 파일 커밋 이력 조회 및 Visual Diff 비교 (Diff 버튼)**:
   - File Manager 탭의 파일 목록 툴바에 전용 **[Diff]** 버튼이 추가되었습니다.
-  - 하나의 파일만 선택되었을 때 활성화되며, 비활성화 시에는 버튼이 흐릿하게 표시되어 직관적으로 식별할 수 있습니다.
+  - 파트(`.sldprt`) 또는 도면(`.slddrw`) 파일 하나만 선택되었을 때 활성화되며, 비활성화 시에는 버튼이 흐릿하게 표시되어 직관적으로 식별할 수 있습니다.
   - 이 버튼을 누르면 메인 GUI 스레드가 멈추지 않도록 백그라운드 스레드를 통해 해당 파일의 전체 Git 커밋 이력(`git log`)을 조회하여 팝업 테이블(Treeview)에 날짜, 작성자, 커밋 요약 메시지와 함께 보여줍니다.
   - 사용자가 특정 커밋을 선택한 뒤 **[Diff]** 버튼을 누르면, 현재 파일 복사본(`_OURS`) 및 선택된 커밋 버전(`_THEIRS`, Git LFS 자동 변환 지원)을 `.backup/` 디렉토리에 임시 저장합니다.
-  - **파트 및 어셈블리 (.sldprt, .sldasm)**: SOLIDWORKS Utilities 애드온을 활성화한 후 내장된 **지오메트리 비교 (Compare Geometry)** 도구를 COM API를 통해 호출하여, SolidWorks 화면 상에서 직접 지오메트리 비교 패널을 실행하고 시각적 분석 결과를 확인하도록 진입시킵니다.
-  - **도면 (.slddrw)**: 두 도면을 SolidWorks에서 임시로 열어 PDF 파일로 일괄 변환 후, **ImageMagick compare** 유틸리티를 호출하여 페이지별 픽셀 오버레이 차분 비교 이미지(차이가 나는 부분을 Red 마스크로 표시)를 생성합니다. 비교 완료 시 새로운 비교 결과 팝업창에서 페이지 목록을 보여주며, 사용자가 더블 클릭하면 기본 이미지 뷰어로 즉시 확인이 가능합니다.
+  - 이후 두 파일을 SolidWorks에서 불러들입니다. 실행 중인 SolidWorks가 없다면 새로 실행합니다. 로드가 완료되면 사용자에게 SolidWorks 메뉴를 통한 수동 비교를 안내하는 알림 팝업을 띄웁니다:
+    - **파트 (.sldprt)**: "도구>비교>지오메트리 메뉴를 이용하여 비교하세요." (Use Tools > Compare > Geometry menu to compare.)
+    - **도면 (.slddrw)**: "도구>비교>Draw Compare 메뉴를 이용하여 비교하세요." (Use Tools > Compare > Draw Compare menu to compare.)
+  - 두 파일은 SolidWorks에 열린 상태로 유지되어 사용자가 직접 검사하고 상호작용할 수 있으며, 이후 문서를 닫거나 SolidWorks를 강제 종료하는 등의 추가 동작은 수행하지 않습니다.
 
 
 
@@ -95,12 +97,11 @@
   - **Git**: `git` 버전 2.x 이상 (경로 지정 가능)
   - **Git LFS**: 대형 파일 및 바이너리 락 처리를 위한 확장 기능
   - **uv**: 고속 Python 패키지 및 가상환경 관리자
-  - **ImageMagick**: 도면(.slddrw) 파일의 시각적 비교(Visual Diff) 기능을 사용하기 위한 픽셀 분석 유틸리티 (환경변수 PATH에 실행 파일 등록 필수. `scoop install imagemagick` 명령어로 설치할 것을 적극 권장합니다.)
 
   > [!TIP]
-  > **Scoop 패키지 관리자**를 사용하여 `git`, `git-lfs`, `uv`, `imagemagick`을 손쉽게 설치할 수 있습니다:
+  > **Scoop 패키지 관리자**를 사용하여 `git`, `git-lfs`, `uv`를 손쉽게 설치할 수 있습니다:
   > ```powershell
-  > scoop install git git-lfs uv imagemagick
+  > scoop install git git-lfs uv
   > ```
 
 ---

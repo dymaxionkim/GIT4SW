@@ -84,9 +84,12 @@ The File Manager provides file-level checkout, checking-in, and local modificati
 • Solidworks (Button)
   - Opens the selected CAD file in the active instance of SolidWorks.
 • Diff (Button)
-  - Opens a popup displaying the commit history of the selected file. Selecting a commit allows you to run a visual diff comparison between your current local version and the selected historical commit.
-  - Parts and assemblies (.sldprt, .sldasm) are compared using SolidWorks' built-in Compare Geometry tool (requires SOLIDWORKS Utilities add-in).
-  - Drawings (.slddrw) are converted to PDFs and compared page-by-page using the ImageMagick 'compare' command, highlighting differences in red. (Requires ImageMagick to be installed on your system, scoop install is recommended).
+  - Enabled only when a single part (.sldprt) or drawing (.slddrw) file is selected and no background tasks are running.
+  - Opens a popup displaying the commit history of the selected file. Selecting a commit and clicking the Diff button copies the current version as `_OURS` and extracts the selected commit version as `_THEIRS` (with Git LFS smudge support) into the `.backup/` directory.
+  - Both files are then opened in SolidWorks (auto-launching SolidWorks if it is not already running). An informational popup is displayed prompting the user to run the comparison manually via the SolidWorks menu:
+    - Parts (.sldprt): "Use Tools > Compare > Geometry menu to compare."
+    - Drawings (.slddrw): "Use Tools > Compare > Draw Compare menu to compare."
+  - Both files are left open in SolidWorks for the user to inspect; no documents are closed and SolidWorks is not terminated afterwards.
 • EXPORT (Button)
   - Launches a compact dialog window to perform bulk conversion of drawings (.slddrw), parts (.sldprt), and assemblies (.sldasm) to various formats (PDF, DXF, STEP, STEP_ASM).
   - Supports multi-selection of formats, custom file name prefix filters (PREFIX), and target subdirectory configurations (OUTPUT_DIR, defaults to "2D").

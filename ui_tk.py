@@ -448,72 +448,50 @@ class FileCommitHistoryDialog(tk.Toplevel):
         import subprocess
         import os
         import time
-        
+
         # Initialize COM for this thread
         pythoncom.CoInitialize()
-        
-        ours_temp_path = None
-        theirs_temp_path = None
-        ours_pdf_path = None
-        theirs_pdf_path = None
-
-        sw_app = None
-        opened_docs = []
-        _keep_docs_open = False  # True = leave SW docs open for user to inspect
 
         try:
             # 1. Setup paths
             backup_dir = os.path.normpath(os.path.join(self.parent.workspace_path, ".backup"))
             os.makedirs(backup_dir, exist_ok=True)
-            
+
             # Normalize path for git show (must be relative to repo and use forward slashes)
             git_file_path = self.file_rel_path
             if os.path.isabs(git_file_path):
                 git_file_path = os.path.relpath(git_file_path, self.parent.workspace_path)
             git_file_path = git_file_path.replace("\\", "/")
-            
+
             base, ext = os.path.splitext(os.path.basename(git_file_path))
             ext_lower = ext.lower()
-            
+
             ours_temp_path = os.path.join(backup_dir, f"{base}_OURS{ext}")
             theirs_temp_path = os.path.join(backup_dir, f"{base}_THEIRS{ext}")
-            
-            ours_pdf_path = os.path.join(backup_dir, f"{base}_OURS.pdf")
-            theirs_pdf_path = os.path.join(backup_dir, f"{base}_THEIRS.pdf")
-            
-            # Remove previous temp/image/pdf files if they exist
-            for temp_file in [ours_temp_path, theirs_temp_path, ours_pdf_path, theirs_pdf_path]:
+
+            # Remove previous temp files if they exist
+            for temp_file in [ours_temp_path, theirs_temp_path]:
                 if os.path.exists(temp_file):
                     try:
                         os.remove(temp_file)
                     except Exception:
                         pass
-            
-            # Clean up old drawing diff pngs in the .backup directory
-            for f in os.listdir(backup_dir):
-                if f.startswith(f"{base}_DIFF") and f.endswith(".png"):
-                    try:
-                        os.remove(os.path.join(backup_dir, f))
-                    except Exception:
-                        pass
-            
-            # 2. Copy/Extract files
-            # Copy OURS
+
+            # 2. Copy OURS (current version)
             src_ours = os.path.normpath(os.path.join(self.parent.workspace_path, self.file_rel_path))
             shutil.copy2(src_ours, ours_temp_path)
-            
-            # Fetch and smudge THEIRS
-            repo = self.parent.git_service.repo
+
+            # 3. Extract THEIRS (selected commit version)
             git_path = "git"
             if hasattr(self.parent.git_service, 'git_path') and self.parent.git_service.git_path:
                 if os.path.exists(self.parent.git_service.git_path):
                     git_path = self.parent.git_service.git_path
-                    
+
             cmd = [git_path, "show", f"{hexsha}:{git_file_path}"]
             res = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, cwd=self.parent.workspace_path)
             if res.returncode != 0:
                 raise RuntimeError(f"Git show failed: {res.stderr.decode('utf-8', errors='replace')}")
-                
+
             data = res.stdout
             if data.startswith(b"version https://git-lfs"):
                 # Smudge LFS
@@ -523,19 +501,18 @@ class FileCommitHistoryDialog(tk.Toplevel):
                     data = res_smudge.stdout
                 else:
                     print(f"Warning: git lfs smudge failed: {res_smudge.stderr.decode('utf-8')}")
-                    
+
             with open(theirs_temp_path, "wb") as f:
                 f.write(data)
-                
-            # Check if cancel event is set
+
             if self.cancel_event.is_set():
                 return
-                
-            # 3. Connect to SolidWorks (auto-launch if not running)
+
+            # 4. Connect to SolidWorks (auto-launch if not running)
             print("Connecting to SolidWorks...", flush=True)
             sw_app = None
 
-            # 3-A. Try to bind to an already-running instance
+            # 4-A. Try to bind to an already-running instance
             try:
                 raw_sw = win32com.client.GetActiveObject("SldWorks.Application")
                 try:
@@ -547,11 +524,11 @@ class FileCommitHistoryDialog(tk.Toplevel):
             except Exception:
                 pass
 
-            # 3-B. If not found, launch sldworks.exe and poll ROT up to 60 s
+            # 4-B. If not found, launch sldworks.exe and poll ROT up to 60 s
             if sw_app is None:
                 sldworks_exe = r"C:\Program Files\SOLIDWORKS Corp\SOLIDWORKS\sldworks.exe"
                 if os.path.exists(sldworks_exe):
-                    print(f"SolidWorks not running – launching: {sldworks_exe}", flush=True)
+                    print(f"SolidWorks not running - launching: {sldworks_exe}", flush=True)
                     self.after(0, lambda: self.lbl_status.config(
                         text="SolidWorks 실행 중... 잠시만 기다려 주세요.", foreground="#f59e0b"))
                     try:
@@ -578,7 +555,7 @@ class FileCommitHistoryDialog(tk.Toplevel):
                 else:
                     print(f"sldworks.exe not found at default path: {sldworks_exe}", flush=True)
 
-            # 3-C. Fallback: GetObject
+            # 4-C. Fallback: GetObject
             if sw_app is None:
                 try:
                     raw_sw = win32com.client.GetObject(Class="SldWorks.Application")
@@ -597,57 +574,29 @@ class FileCommitHistoryDialog(tk.Toplevel):
                     "수동으로 SOLIDWORKS를 실행한 후 다시 시도해 주세요.\n"
                     "(Could not start or bind to SOLIDWORKS. Please launch it manually and retry.)"
                 )
-                
-            sw_app.Visible = True  # Ensure visible
 
-            # Document Type mapping
+            sw_app.Visible = True
+
+            # 5. Determine document type
             if ext_lower == ".sldprt":
                 doc_type = 1  # swDocPART
-            elif ext_lower == ".sldasm":
-                doc_type = 2  # swDocASSEMBLY
             elif ext_lower == ".slddrw":
                 doc_type = 3  # swDocDRAWING
             else:
                 raise ValueError(f"Unsupported file extension for diff: {ext}")
 
-            # Helper to get the document title safely
-            def get_doc_title(model_doc):
-                if not model_doc:
-                    return ""
-                try:
-                    title_val = model_doc.GetTitle
-                    return title_val() if callable(title_val) else title_val
-                except Exception:
-                    try:
-                        return getattr(model_doc, 'GetTitle')
-                    except Exception:
-                        return ""
-
-            # Helper to open a file in SOLIDWORKS
-            # read_only=True  → swOpenDocOptions_ReadOnly (2) for drawings (PDF export)
-            # read_only=False → no ReadOnly flag; required for CompareGeometry3 to
-            #                   annotate the model with colour-coded diff regions and
-            #                   to save comparison reports.
-            def open_document(file_path, read_only=True):
-                print(f"Opening in SolidWorks (read_only={read_only}): {file_path}", flush=True)
+            # 6. Open both files in SolidWorks
+            def open_document(file_path):
+                print(f"Opening in SolidWorks: {file_path}", flush=True)
                 error   = win32com.client.VARIANT(pythoncom.VT_BYREF | pythoncom.VT_I4, 0)
                 warning = win32com.client.VARIANT(pythoncom.VT_BYREF | pythoncom.VT_I4, 0)
 
-                # swOpenDocOptions flags:
-                #   1   = Silent
-                #   2   = ReadOnly
-                #   32  = LoadModel  (drawings/assemblies: resolve geometry)
-                #   64  = IgnoreActivation  (parts: no parent assembly auto-load)
-                #   128 = AutoMissingComponentResolve
-                _ro = 2 if read_only else 0
                 if doc_type == 3:    # swDocDRAWING
-                    open_options = 1 | 32 | _ro | 128
+                    open_options = 1 | 32 | 128
                 elif doc_type == 1:  # swDocPART
-                    open_options = 1 | 64 | _ro | 128
-                elif doc_type == 2:  # swDocASSEMBLY
-                    open_options = 1 | 32 | _ro | 128
+                    open_options = 1 | 64 | 128
                 else:
-                    open_options = _ro | 128
+                    open_options = 128
 
                 model = sw_app.OpenDoc6(file_path, doc_type, open_options, "", error, warning)
                 if not model:
@@ -655,396 +604,39 @@ class FileCommitHistoryDialog(tk.Toplevel):
                         f"SolidWorks에서 문서를 열 수 없습니다: "
                         f"{os.path.basename(file_path)} (Error={error.value})"
                     )
-
-                opened_docs.append(model)
                 return model
-                
-            # 4. Process based on document type
-            if doc_type in (1, 2):  # PART / ASSEMBLY
-                # ── 4-A. Load SOLIDWORKS Utilities add-in ──────────────────
-                # The Utilities add-in is registered as CLSID {F80FA0F1-B13D-11d4-944A-000629992CFE}
-                # and its loader DLL lives at <SW_install>\sldUtils\SwLoaderSw.dll
-                print("Getting SOLIDWORKS Utilities add-in...", flush=True)
-                sw_util = None
 
-                # Strategy 1: GetAddInObject by ProgID (works if already loaded in SW)
-                for _prog_id in ("Utilities.UtilitiesApp",
-                                 "{F80FA0F1-B13D-11d4-944A-000629992CFE}"):
-                    try:
-                        sw_util = sw_app.GetAddInObject(_prog_id)
-                        if sw_util:
-                            print(f"GetAddInObject succeeded with '{_prog_id}'.", flush=True)
-                            break
-                    except Exception as _e1:
-                        print(f"GetAddInObject('{_prog_id}') failed: {_e1}", flush=True)
+            ours_path = os.path.normpath(ours_temp_path)
+            theirs_path = os.path.normpath(theirs_temp_path)
 
-                if not sw_util:
-                    # Strategy 2: LoadAddIn using SwLoaderSw.dll (the real in-process loader)
-                    print("Trying to load Utilities via SwLoaderSw.dll...", flush=True)
-                    _sw_inst_dirs = [
-                        r"C:\Program Files\SOLIDWORKS Corp\SOLIDWORKS",
-                        r"C:\Program Files (x86)\SOLIDWORKS Corp\SOLIDWORKS",
-                    ]
-                    # Also try to get the installation dir from SW itself
-                    try:
-                        _exe_path = sw_app.ExecutablePath  # e.g. C:\...\SLDWORKS.exe
-                        _sw_inst_dirs.insert(0, os.path.dirname(_exe_path))
-                    except Exception:
-                        pass
+            open_document(ours_path)
+            open_document(theirs_path)
 
-                    for _inst_dir in _sw_inst_dirs:
-                        _dll_path = os.path.join(_inst_dir, "sldUtils", "SwLoaderSw.dll")
-                        if not os.path.exists(_dll_path):
-                            print(f"DLL not found: {_dll_path}", flush=True)
-                            continue
-                        print(f"LoadAddIn: {_dll_path}", flush=True)
-                        try:
-                            sw_app.LoadAddIn(_dll_path)
-                            time.sleep(2)  # give SW time to register
-                            sw_util = sw_app.GetAddInObject("Utilities.UtilitiesApp")
-                            if sw_util:
-                                print("Utilities add-in loaded via SwLoaderSw.dll.", flush=True)
-                                break
-                            # Also retry with CLSID
-                            sw_util = sw_app.GetAddInObject("{F80FA0F1-B13D-11d4-944A-000629992CFE}")
-                            if sw_util:
-                                print("Utilities add-in loaded (CLSID after LoadAddIn).", flush=True)
-                                break
-                        except Exception as _e2:
-                            print(f"LoadAddIn attempt failed for {_dll_path}: {_e2}", flush=True)
+            # 7. Show info popup
+            if not self.cancel_event.is_set():
+                if ext_lower == ".sldprt":
+                    msg = "Use Tools > Compare > Geometry menu to compare."
+                else:  # .slddrw
+                    msg = "Use Tools > Compare > Draw Compare menu to compare."
+                self.after(0, lambda m=msg: self._on_diff_success_with_msg(m))
 
-                if not sw_util:
-                    raise RuntimeError(
-                        "SOLIDWORKS Utilities 애드인을 로드할 수 없습니다.\n"
-                        "SolidWorks → 도구 → 애드인(Add-Ins) → 'SOLIDWORKS Utilities'를 체크한 후\n"
-                        "다시 시도해 주세요."
-                    )
-                print("SOLIDWORKS Utilities add-in loaded.", flush=True)
-
-                # ── 4-B. Get CompareGeometry tool interface ─────────────────
-                print("Getting CompareGeometry tool interface...", flush=True)
-                try:
-                    # GetToolInterface(toolID, status) – toolID 2 = gtSwToolCompareGeometry
-                    # long_status is an output parameter; use a simple list to capture it
-                    _status_holder = win32com.client.VARIANT(pythoncom.VT_BYREF | pythoncom.VT_I4, 0)
-                    sw_util_comp_geom = sw_util.GetToolInterface(2, _status_holder)
-                    _status_val = _status_holder.value if hasattr(_status_holder, 'value') else 0
-                except Exception as _e3:
-                    print(f"GetToolInterface raised: {_e3}", flush=True)
-                    sw_util_comp_geom = None
-                    _status_val = -1
-
-                if not sw_util_comp_geom:
-                    raise RuntimeError(
-                        f"CompareGeometry 인터페이스를 가져올 수 없습니다 (status={_status_val}).\n"
-                        "SOLIDWORKS Utilities가 올바르게 설치되어 있는지 확인해 주세요."
-                    )
-                print(f"CompareGeometry interface obtained (status={_status_val}).", flush=True)
-
-                if self.cancel_event.is_set():
-                    return
-
-                # ── 4-C. Pre-open both files so SW tracks them ──────────────
-                # Opening first ensures they appear in the SW document list,
-                # gives us model refs for cleanup, and allows CompareGeometry3
-                # to use the already-open docs (avoids re-open conflicts).
-                ref_path = os.path.normpath(theirs_temp_path)  # _THEIRS = Reference
-                mod_path = os.path.normpath(ours_temp_path)    # _OURS   = Modified
-
-                # Open WITHOUT ReadOnly so CompareGeometry3 can annotate models
-                # with colour-coded diff regions and write the report file.
-                print(f"Opening reference doc (writable): {ref_path}", flush=True)
-                doc_ref = open_document(ref_path, read_only=False)
-                print(f"Opening modified doc  (writable): {mod_path}", flush=True)
-                doc_mod = open_document(mod_path, read_only=False)
-
-                if self.cancel_event.is_set():
-                    return
-
-                # Activate the reference (THEIRS) document as the active one
-                error_act = win32com.client.VARIANT(pythoncom.VT_BYREF | pythoncom.VT_I4, 0)
-                sw_app.ActivateDoc3(os.path.basename(ref_path), False, 2, error_act)
-                time.sleep(0.5)
-
-                # ── 4-D. Run CompareGeometry3 ────────────────────────────────
-                # gtGdfError enum:  0=OK, 15=OpeningResultsFailed (comparison OK, UI failed)
-                # gtGdfDifferenceStatus: 0=NoDifference, 1=Difference
-                #
-                # CompareGeometry3(File1, Config1, File2, Config2,
-                #   Options, ReportOption, ReportPath,
-                #   AddToBinder, Overwrite, VolDiffStatus, FaceDiffStatus)
-                #
-                # Options:      1 = gtGdfFaceAndVolumeCompare
-                # ReportOption: 0 = gtResultNoReport
-                #               1 = gtResultSaveReport
-                #               2 = gtResultShowUI
-                vol_status  = win32com.client.VARIANT(pythoncom.VT_BYREF | pythoncom.VT_I4, 0)
-                face_status = win32com.client.VARIANT(pythoncom.VT_BYREF | pythoncom.VT_I4, 0)
-
-                print(f"CompareGeometry3: ref={ref_path}", flush=True)
-                print(f"CompareGeometry3: mod={mod_path}", flush=True)
-                print("Running CompareGeometry3 (ReportOption=ShowUI)...", flush=True)
-
-                try:
-                    res_comp = sw_util_comp_geom.CompareGeometry3(
-                        ref_path, "",   # Reference (_THEIRS)
-                        mod_path, "",   # Modified  (_OURS)
-                        1,              # Options: gtGdfFaceAndVolumeCompare
-                        2,              # ReportOption: gtResultShowUI
-                        "",             # ReportPath
-                        False,          # AddToBinder
-                        True,           # Overwrite
-                        vol_status,
-                        face_status,
-                    )
-                    print(f"CompareGeometry3 returned: {res_comp} "
-                          f"(vol={vol_status.value}, face={face_status.value})", flush=True)
-                except Exception as _cg_err:
-                    raise RuntimeError(f"CompareGeometry3 호출 중 오류: {_cg_err}")
-
-                _vol  = vol_status.value
-                _face = face_status.value
-                _comparison_ran = (_vol in (0, 1)) and (_face in (0, 1))
-
-                _err_names = {
-                    0: "NoError",
-                    1: "FileNotFound", 2: "FileNotSolidBody", 3: "DocOpenFailed",
-                    4: "InvalidDocType", 5: "InvalidOptions", 6: "SaveReportFailed",
-                    7: "AddToBinderFailed", 8: "FaceCompareNotDone",
-                    9: "VolumeCompareNotDone", 10: "GeomCompNotDone",
-                    11: "NoActiveDoc", 12: "NoSolidBodies",
-                    13: "CreatingTempFileFailed", 14: "InvalidConfig",
-                    15: "OpeningResultsFailed",
-                }
-                _err_name = _err_names.get(res_comp, f"Unknown({res_comp})")
-
-                if res_comp == 0:
-                    # Full success — SW opened the comparison result UI.
-                    # Leave both files open so the user can interact in SolidWorks.
-                    _keep_docs_open = True
-                    if not self.cancel_event.is_set():
-                        self.after(0, self._on_diff_success)
-
-                elif res_comp == 15 and _comparison_ran:
-                    # Comparison data computed OK but SW couldn't render the results UI
-                    # from this thread.  The two files are still open in SolidWorks and
-                    # the Utilities add-in is loaded; the user can manually open the
-                    # comparison view via:
-                    #   도구(Tools) → SOLIDWORKS Utilities → 문서 비교(Compare Documents)
-                    _vol_txt  = "수정없음" if _vol  == 0 else "차이 있음"
-                    _face_txt = "수정없음" if _face == 0 else "차이 있음"
-                    _msg = (
-                        f"형상 비교 완료:\n"
-                        f"• 부피(Volume): {_vol_txt}\n"
-                        f"• 면(Face): {_face_txt}\n\n"
-                        "SOLIDWORKS에서 두 파일이 열려 있습니다.\n"
-                        "도구 → SOLIDWORKS Utilities → 문서 비교\n"
-                        "메뉴를 통해 비교 결과를 확인하세요."
-                    )
-                    _keep_docs_open = True
-                    if not self.cancel_event.is_set():
-                        self.after(0, lambda m=_msg: self._on_diff_success_with_msg(m))
-
-                else:
-                    # Genuine error
-                    raise RuntimeError(
-                        f"CompareGeometry3 실패: {_err_name} (코드={res_comp})\n"
-                        f"VolStatus={_vol}, FaceStatus={_face}"
-                    )
-
-            elif doc_type == 3:  # DRAWING (.slddrw)
-                model_theirs = open_document(theirs_temp_path)
-                model_ours = open_document(ours_temp_path)
-                
-                if self.cancel_event.is_set():
-                    return
-                    
-                # Get sheet counts
-                try:
-                    sheets_theirs_val = model_theirs.GetSheetNames
-                    sheets_theirs = sheets_theirs_val() if callable(sheets_theirs_val) else sheets_theirs_val
-                    num_sheets_theirs = len(sheets_theirs) if sheets_theirs else 1
-                except Exception:
-                    num_sheets_theirs = 1
-                    
-                try:
-                    sheets_ours_val = model_ours.GetSheetNames
-                    sheets_ours = sheets_ours_val() if callable(sheets_ours_val) else sheets_ours_val
-                    num_sheets_ours = len(sheets_ours) if sheets_ours else 1
-                except Exception:
-                    num_sheets_ours = 1
-                    
-                num_sheets = min(num_sheets_theirs, num_sheets_ours)
-                warning_msg = None
-                if num_sheets_theirs != num_sheets_ours:
-                    warning_msg = f"Sheet count mismatch! Ours: {num_sheets_ours}, Theirs: {num_sheets_theirs}. Only comparing first {num_sheets} sheet(s)."
-                    print(warning_msg, flush=True)
-                    
-                # Save both as PDF
-                print("Saving drawing versions as PDF...", flush=True)
-                
-                # Activate theirs first and save
-                print("Activating reference drawing...", flush=True)
-                error_act = win32com.client.VARIANT(pythoncom.VT_BYREF | pythoncom.VT_I4, 0)
-                sw_app.ActivateDoc3(os.path.basename(theirs_temp_path), False, 2, error_act)
-                time.sleep(1)
-                print("Saving reference drawing to PDF...", flush=True)
-                res_theirs = model_theirs.SaveAs3(theirs_pdf_path, 0, 9)
-                time.sleep(2)
-                
-                # Activate ours and save
-                print("Activating modified drawing...", flush=True)
-                sw_app.ActivateDoc3(os.path.basename(ours_temp_path), False, 2, error_act)
-                time.sleep(1)
-                print("Saving modified drawing to PDF...", flush=True)
-                res_ours = model_ours.SaveAs3(ours_pdf_path, 0, 9)
-                time.sleep(2)
-                
-                # Release COM references before closing to prevent locks
-                model_theirs = None
-                model_ours = None
-                
-                # Close documents immediately to release files
-                for model in opened_docs:
-                    try:
-                        title = get_doc_title(model)
-                        print(f"Closing drawing: {title}", flush=True)
-                        model = None
-                        import gc
-                        gc.collect()
-                        pythoncom.CoCollectFreeUnusedLibraries()
-                        sw_app.CloseDoc(title)
-                    except Exception as close_err:
-                        print(f"Failed to close doc: {close_err}", flush=True)
-                opened_docs.clear()
-                
-                # Verify PDF creation
-                if not os.path.exists(theirs_pdf_path) or not os.path.exists(ours_pdf_path):
-                    raise RuntimeError("Failed to export drawing versions to PDF in SOLIDWORKS.")
-                    
-                # Clean up temporary slddrw files right away
-                for path in [ours_temp_path, theirs_temp_path]:
-                    if path and os.path.exists(path):
-                        try:
-                            os.remove(path)
-                        except Exception:
-                            pass
-                ours_temp_path = None
-                theirs_temp_path = None
-                
-                # Resolve ImageMagick path
-                im_path = self.parent.load_imagemagick_path()
-                if not os.path.exists(im_path):
-                    im_path = "compare"  # Fallback to system path command
-                    
-                diff_images = []
-                for i in range(num_sheets):
-                    if self.cancel_event.is_set():
-                        return
-                        
-                    if num_sheets == 1:
-                        diff_img_path = os.path.join(backup_dir, f"{base}_DIFF.png")
-                    else:
-                        diff_img_path = os.path.join(backup_dir, f"{base}_DIFF_Page{i+1}.png")
-                        
-                    cmd_compare = [
-                        im_path,
-                        "-density", "300",
-                        f"{ours_pdf_path}[{i}]",
-                        f"{theirs_pdf_path}[{i}]",
-                        "-fuzz", "5%",
-                        "-metric", "AE",
-                        "-highlight-color", "Red",
-                        diff_img_path
-                    ]
-                    print(f"Running ImageMagick compare: {' '.join(cmd_compare)}", flush=True)
-                    res_comp = subprocess.run(cmd_compare, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-                    
-                    # ImageMagick compare returns:
-                    # 0: identical, 1: different (expected success case), >= 2: error.
-                    if res_comp.returncode >= 2:
-                        err_out = res_comp.stderr.decode('utf-8', errors='replace')
-                        raise RuntimeError(f"ImageMagick compare failed on page {i+1} (Code {res_comp.returncode}): {err_out}\nEnsure ImageMagick is correctly installed.")
-                        
-                    if not os.path.exists(diff_img_path):
-                        raise RuntimeError(f"Compare did not generate the diff image for page {i+1}.")
-                        
-                    diff_images.append(diff_img_path)
-                    
-                # Success callback
-                if not self.cancel_event.is_set():
-                    self.after(0, lambda: self._on_drawing_diff_success(diff_images, warning_msg))
-                    
         except Exception as e:
             import traceback
             tb = traceback.format_exc()
             print(f"Error in visual diff:\n{tb}", flush=True)
             if not self.cancel_event.is_set():
-                # Capture e and tb as default args to avoid NameError when the
-                # except-clause variable is cleared before the lambda executes.
                 self.after(0, lambda _e=str(e), _tb=tb: self._on_diff_error(f"{_e}\n\n{_tb}"))
-                
+
         finally:
-            # ── Document cleanup ────────────────────────────────────────
-            # For PART/ASSEMBLY diff: docs are intentionally left open in
-            # SolidWorks so the user can inspect/interact with the comparison.
-            # For DRAWING diff or error paths: close what we opened.
-            if sw_app and (not _keep_docs_open):
-                for _model in list(opened_docs):
-                    try:
-                        _title = get_doc_title(_model)
-                        if _title:
-                            print(f"Closing tracked doc: {_title}", flush=True)
-                            sw_app.CloseDoc(_title)
-                    except Exception as _ce:
-                        print(f"CloseDoc (tracked) failed: {_ce}", flush=True)
-                opened_docs.clear()
-
-
-            # Clean up temporary PDFs
-            for path in [ours_pdf_path, theirs_pdf_path]:
-                if path and os.path.exists(path):
-                    try:
-                        os.remove(path)
-                    except Exception:
-                        pass
-
-            # Clean up drawing temporary CAD files if they exist and weren't cleaned
-            if ext_lower == ".slddrw":
-                for path in [ours_temp_path, theirs_temp_path]:
-                    if path and os.path.exists(path):
-                        try:
-                            os.remove(path)
-                        except Exception:
-                            pass
-
             pythoncom.CoUninitialize()
 
-            
-    def _on_diff_success(self):
-        self.lbl_status.config(text="Visual Diff successfully completed!", foreground="#10b981")
-        self.btn_diff.state(["!disabled"])
-        self.btn_exit.state(["!disabled"])
-
     def _on_diff_success_with_msg(self, msg):
-        """Called when comparison ran OK but SW UI couldn't display results (e.g. code 15)."""
-        self.lbl_status.config(text="Visual Diff 완료 (리포트 폴더 열림)", foreground="#10b981")
+        """Called when both files are opened in SolidWorks for manual comparison."""
+        self.lbl_status.config(text="Visual Diff ready.", foreground="#10b981")
         self.btn_diff.state(["!disabled"])
         self.btn_exit.state(["!disabled"])
-        messagebox.showinfo("Visual Diff 완료", msg, parent=self)
+        messagebox.showinfo("Visual Diff", msg, parent=self)
 
-
-    def _on_drawing_diff_success(self, diff_images, warning_msg=None):
-        status_text = "Visual Diff successfully completed!"
-        if warning_msg:
-            status_text += f" ({warning_msg})"
-        self.lbl_status.config(text=status_text, foreground="#10b981")
-        self.btn_diff.state(["!disabled"])
-        self.btn_exit.state(["!disabled"])
-        
-        # Open the results popup window
-        DrawingDiffResultsDialog(self, diff_images)
-        
     def _on_diff_error(self, err_msg):
         self.lbl_status.config(text="Visual Diff failed.", foreground="#ef4444")
         self.btn_diff.state(["!disabled"])
@@ -1577,16 +1169,16 @@ class GIT4SWApp(tk.Tk):
                   foreground=[("active", "#ffffff"), ("disabled", "#f87171")])
 
         # BOM Button Style
-        style.configure("BOM.TButton", padding=6, background="#2563eb", foreground="#ffffff", borderwidth=0)
+        style.configure("BOM.TButton", padding=6, background="#e5e7eb", foreground="#1f2937", borderwidth=0)
         style.map("BOM.TButton",
-                  background=[("active", "#1d4ed8"), ("disabled", "#e5e7eb")],
-                  foreground=[("active", "#ffffff"), ("disabled", "#9ca3af")])
+                  background=[("active", "#d1d5db"), ("disabled", "#e5e7eb")],
+                  foreground=[("active", "#111827"), ("disabled", "#9ca3af")])
 
         # Diff Button Style
-        style.configure("Diff.TButton", padding=6, background="#2563eb", foreground="#ffffff", borderwidth=0)
+        style.configure("Diff.TButton", padding=6, background="#e5e7eb", foreground="#1f2937", borderwidth=0)
         style.map("Diff.TButton",
-                  background=[("active", "#1d4ed8"), ("disabled", "#e5e7eb")],
-                  foreground=[("active", "#ffffff"), ("disabled", "#9ca3af")])
+                  background=[("active", "#d1d5db"), ("disabled", "#e5e7eb")],
+                  foreground=[("active", "#111827"), ("disabled", "#9ca3af")])
 
         # Progressbar (Emerald green theme)
         style.configure("Custom.Horizontal.TProgressbar",
@@ -2843,14 +2435,14 @@ class GIT4SWApp(tk.Tk):
         self.btn_solidworks = ttk.Button(actions_frm, text="Solidworks", style="Primary.TButton", width=10, command=self.open_solidworks)
         self.btn_solidworks.pack(side="left", padx=4)
         
-        self.btn_export = ttk.Button(actions_frm, text="EXPORT", style="Primary.TButton", width=8, command=self.open_export_dialog)
+        self.btn_export = ttk.Button(actions_frm, text="EXPORT", style="BOM.TButton", width=8, command=self.open_export_dialog)
         self.btn_export.pack(side="left", padx=4)
         
         self.btn_bom = ttk.Button(actions_frm, text="BOM", style="BOM.TButton", width=5, command=self.generate_bom_action)
         self.btn_bom.state(["disabled"])
         self.btn_bom.pack(side="left", padx=4)
         
-        self.btn_diff = ttk.Button(actions_frm, text="Diff", width=8, command=self.show_diff_popup)
+        self.btn_diff = ttk.Button(actions_frm, text="Diff", style="Diff.TButton", width=5, command=self.show_diff_popup)
         self.btn_diff.state(["disabled"])
         self.btn_diff.pack(side="left", padx=4)
         
@@ -4636,13 +4228,14 @@ class GIT4SWApp(tk.Tk):
         is_diff_enabled = False
         
         if getattr(self, 'bg_tasks_count', 0) == 0 and len(selected_items) == 1:
-            is_diff_enabled = True
             values = self.tree.item(selected_items[0], 'values')
             if values:
                 filepath = values[0]
                 ext = os.path.splitext(filepath)[1].lower()
                 if ext == '.sldasm':
                     is_bom_enabled = True
+                if ext in ('.sldprt', '.slddrw'):
+                    is_diff_enabled = True
         
         if is_bom_enabled:
             self.btn_bom.state(["!disabled"])

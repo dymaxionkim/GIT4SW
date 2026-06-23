@@ -195,13 +195,14 @@ gantt
   - 버전 이력 화면("History log")에 **[Browse Graph]** 버튼을 신설하고, 원격 저장소 URL을 자동으로 분석하여 GitHub이 공식 제공하는 대화형 커밋 Network 그래프 페이지(`https://github.com/{owner}/{repo}/network`)를 기본 웹 브라우저로 직접 띄워 주도록 연동했습니다.
   - 이를 통해 외부 라이브러리 의존성과 로컬 렌더링 부하를 완전히 없애고, 브라우저 상에서 완벽한 스크롤, 줌, 브랜치 병합 추적 기능을 보장합니다.
 * **개별 파일 커밋 이력 조회 및 Diff 팝업 추가**:
-  - File Manager 모드의 액션 패널 내 BOM 버튼 우측에 **[Diff]** 버튼을 추가했습니다. 해당 버튼은 하나의 파일만 선택했을 때 활성화되며, 비활성화 상태에서는 텍스트가 흐리게 표시되어 시인성을 극대화합니다.
+  - File Manager 모드의 액션 패널 내 BOM 버튼 우측에 **[Diff]** 버튼을 추가했습니다. 해당 버튼은 파트(`.sldprt`) 또는 도면(`.slddrw`) 파일 하나만 선택했을 때 활성화되며, 비활성화 상태에서는 텍스트가 흐리게 표시되어 시인성을 극대화합니다.
   - Diff 버튼 클릭 시 메인 GUI 스레드가 얼어붙지 않도록 별도의 백그라운드 스레드에서 파일의 Git 커밋 이력(`git log`)을 조회하여 대화상자의 테이블(Treeview)에 표시합니다.
   - 대화상자에는 스크롤바와 함께 선택한 특정 커밋과 현재 버전을 대조할 수 있는 Diff 실행 및 종료(Exit) 버튼이 포함되어 있으며, 종료 시 작업 중인 스레드를 안전하게 종료(Cancel Event)하도록 보장합니다.
-  - **SOLIDWORKS COM 기반의 실시간 Visual Diff 구현**:
-    - 선택된 커밋 버전의 파일과 현재 작업본(Local)을 각각 `.backup/` 폴더 내에 `{파일명}__THEIRS` 및 `{파일명}__OURS` 이름으로 자동 추출합니다. (이때 Git LFS로 추적 중인 대용량 CAD 파일의 경우 포인터 텍스트가 아닌 실제 원본 바이너리를 획득할 수 있도록 `git lfs smudge` 파이프 연산을 자동 지원합니다.)
-    - 백그라운드 스레드 상에서 SOLIDWORKS COM API(`OpenDoc6` 및 `SaveAs3`)를 호출해 두 CAD 모델의 등각투영(Isometric) 뷰를 이미지(`.png`)로 각각 자동 내보내기 처리합니다.
-    - OpenCV(`cv2.absdiff`) 이미지 픽셀 차분 기술 및 이진 임계값 처리를 적용하여 두 버전 간의 변경점을 정밀하게 추적하고, 수정된 부분만 적색(Red) 마스크 오버레이로 강조하여 3분할(OURS | THEIRS | DIFF Highlight) 형태의 가로 병합 이미지(`.png`)를 생성한 뒤 시스템 기본 이미지 뷰어로 즉시 실행하여 실시간 시각 대조를 지원합니다.
+  - **SOLIDWORKS 연동 Visual Diff 구현**:
+    - 선택된 커밋 버전의 파일과 현재 작업본(Local)을 각각 `.backup/` 폴더 내에 `{파일명}_THEIRS` 및 `{파일명}_OURS` 이름으로 자동 추출합니다. (이때 Git LFS로 추적 중인 대용량 CAD 파일의 경우 포인터 텍스트가 아닌 실제 원본 바이너리를 획득할 수 있도록 `git lfs smudge` 파이프 연산을 자동 지원합니다.)
+    - 두 파일을 SolidWorks에서 `OpenDoc6`로 불러들입니다. 실행 중인 SolidWorks가 없다면 `sldworks.exe`를 자동 실행하고 최대 60초간 ROT 폴링으로 연결을 시도합니다.
+    - 로드 완료 후 사용자에게 SolidWorks 메뉴를 통한 수동 비교를 안내하는 알림 팝업을 표시합니다. 파트(`.sldprt`)의 경우 "Use Tools > Compare > Geometry menu to compare.", 도면(`.slddrw`)의 경우 "Use Tools > Compare > Draw Compare menu to compare." 메시지를 노출합니다.
+    - 두 파일은 SolidWorks에 열린 상태로 유지되어 사용자가 직접 비교 도구를 실행하고 검사할 수 있으며, 이후 문서를 닫거나 SolidWorks를 강제 종료하는 등의 추가 동작은 수행하지 않습니다.
 
 
 ---
