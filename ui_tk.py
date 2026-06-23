@@ -3730,159 +3730,55 @@ class GIT4SWApp(tk.Tk):
             messagebox.showwarning("No Repository", "Current workspace is not a valid Git repository.")
             return
 
-        self.increment_tasks()
-        self.btn_browse_graph.state(["disabled"])
+        repo = self.git_service.repo
+        if not repo:
+            messagebox.showwarning("No Repository", "Failed to load Git repository.")
+            return
+
+        # Try to get remote URL
+        url = ""
+        try:
+            if hasattr(repo, 'remotes') and hasattr(repo.remotes, 'origin'):
+                url = repo.remotes.origin.url
+            elif hasattr(repo, 'remotes') and len(repo.remotes) > 0:
+                url = repo.remotes[0].url
+        except Exception:
+            pass
+
+        # If not found from repo, try from entry
+        if not url and hasattr(self, 'ent_remote_url'):
+            url = self.ent_remote_url.get().strip()
+
+        owner = None
+        repo_name = None
+
+        if url:
+            clean_url = url.strip()
+            if clean_url.endswith(".git"):
+                clean_url = clean_url[:-4]
+            
+            # Convert SSH git@github.com:owner/repo format to standard / paths
+            if ":" in clean_url and not clean_url.startswith("http"):
+                parts = clean_url.split(":")
+                clean_url = "/".join(parts)
+                
+            path_parts = [p for p in clean_url.split("/") if p]
+            if len(path_parts) >= 2:
+                owner = path_parts[-2]
+                repo_name = path_parts[-1]
+
+        if not owner or not repo_name:
+            messagebox.showwarning("Invalid Remote", "Could not parse owner and repository name from the remote URL.")
+            return
+
+        github_network_url = f"https://github.com/{owner}/{repo_name}/network"
         
-        def run():
-            try:
-                import git
-                from graphviz import Digraph
-                import webbrowser
-                import os
-                
-                # Prepend the physical Graphviz bin path if Scoop is installed on Windows
-                # This bypasses the slow Scoop shims, speeding up dot.pipe() by ~10-15x
-                if os.name == 'nt':
-                    home = os.environ.get("USERPROFILE") or os.path.expanduser("~")
-                    scoop_graphviz_bin = os.path.join(home, "scoop", "apps", "graphviz", "current", "bin")
-                    if os.path.isdir(scoop_graphviz_bin):
-                        os.environ["PATH"] = scoop_graphviz_bin + os.pathsep + os.environ.get("PATH", "")
-                
-                repo_path = self.workspace_path
-                backup_dir = os.path.join(repo_path, ".backup")
-                os.makedirs(backup_dir, exist_ok=True)
-                output_html = os.path.join(backup_dir, "git_graph_interactive.html")
-                
-                repo = self.git_service.repo
-                if not repo:
-                    raise RuntimeError("Failed to load Git repository.")
-                
-                # 1. Initialize Graphviz
-                dot = Digraph(comment="Git Commit Graph", format="svg")
-                dot.attr(rankdir="TB", size="20,20")
-                dot.attr("node", shape="box", style="rounded,filled", fontname="Arial")
-                dot.attr("edge", arrowhead="vee", arrowsize="0.8")
-                
-                commit_branches = {}
-                for b in repo.branches:
-                    try:
-                        if b.commit:
-                            commit_branches[b.commit.hexsha] = b.name
-                    except Exception:
-                        pass
-                
-                commit_tags = {}
-                for t in repo.tags:
-                    try:
-                        if t.commit:
-                            commit_tags[t.commit.hexsha] = t.name
-                    except Exception:
-                        pass
-                
-                visited = set()
-                all_commits = []
-                
-                # Limit rendering to the most recent 300 commits to guarantee fast layout and browser rendering
-                for commit in repo.iter_commits("--all", max_count=300):
-                    if commit.hexsha in visited:
-                        continue
-                    visited.add(commit.hexsha)
-                    all_commits.append(commit)
-                    
-                    short_sha = commit.hexsha[:7]
-                    summary = commit.summary
-                    node_label = f"{short_sha}\n{summary[:30]}"
-                    
-                    fillcolor = "#EBF3F9"
-                    color = "#1C6497"
-                    penwidth = "1"
-                    
-                    decorations = []
-                    if commit.hexsha in commit_branches:
-                        decorations.append(f"[{commit_branches[commit.hexsha]}]")
-                        fillcolor = "#D4EDDA"
-                        color = "#28A745"
-                        penwidth = "2"
-                    if commit.hexsha in commit_tags:
-                        decorations.append(f"tag: {commit_tags[commit.hexsha]}")
-                        fillcolor = "#FFF3CD"
-                        color = "#FFC107"
-                        
-                    if decorations:
-                        node_label = f"{' '.join(decorations)}\n{node_label}"
-                        
-                    dot.node(
-                        commit.hexsha,
-                        label=node_label,
-                        fillcolor=fillcolor,
-                        color=color,
-                        penwidth=penwidth
-                    )
-                    
-                for commit in all_commits:
-                    for parent in commit.parents:
-                        if parent.hexsha in visited:
-                            dot.edge(parent.hexsha, commit.hexsha)
-                            
-                # 2. Render Graphviz graph to SVG text data (in-memory pipe)
-                svg_data = dot.pipe().decode("utf-8")
-                
-                # 3. HTML template with svg-pan-zoom script
-                title_str = f"Git Commit Graph ({len(all_commits)} commits)"
-                html_template = f"""<!DOCTYPE html>
-<html>
-<head>
-    <meta charset="UTF-8">
-    <title>{title_str}</title>
-    <script src="https://cdn.jsdelivr.net/npm/svg-pan-zoom@3.6.1/dist/svg-pan-zoom.min.js"></script>
-    <style>
-        html, body {{ margin: 0; padding: 0; width: 100%; height: 100%; overflow: hidden; }}
-        #container {{ width: 100%; height: 100%; background-color: #fafafa; }}
-        svg {{ width: 100%; height: 100%; }}
-    </style>
-</head>
-<body>
-    <div id="container">
-        {svg_data}
-    </div>
-    <script>
-        window.onload = function() {{
-            var svgElement = document.querySelector('#container svg');
-            if (svgElement) {{
-                svgPanZoom(svgElement, {{
-                    zoomEnabled: true,
-                    controlIconsEnabled: true,
-                    fit: true,
-                    center: true,
-                    minZoom: 0.1,
-                    maxZoom: 10
-                }});
-            }}
-        }};
-    </script>
-</body>
-</html>"""
-                
-                # 4. Save and open HTML
-                with open(output_html, "w", encoding="utf-8") as f:
-                    f.write(html_template)
-                    
-                webbrowser.open("file://" + os.path.realpath(output_html))
-                
-                def on_done():
-                    self.write_log(f"Interactive Graphviz graph ({len(all_commits)} commits) successfully generated in .backup and opened.", "success")
-                    
-                self.task_queue.put(('success', f"Interactive Graphviz graph ({len(all_commits)} commits) generated successfully!", on_done))
-                
-            except Exception as e:
-                self.task_queue.put(('error', f"Failed to generate browse graph:\n{e}", None))
-            finally:
-                def enable_btn():
-                    self.btn_browse_graph.state(["!disabled"])
-                self.task_queue.put(('sw_status', None, enable_btn))
-                self.decrement_tasks()
-                
-        threading.Thread(target=run, daemon=True).start()
+        import webbrowser
+        try:
+            webbrowser.open(github_network_url)
+            self.write_log(f"Successfully opened GitHub Network graph: {github_network_url}", "success")
+        except Exception as e:
+            self.write_log(f"Failed to open browser: {e}", "error")
 
     def on_file_selected_change(self):
         # 1. Update BOM button activation state based on selection & background task status
