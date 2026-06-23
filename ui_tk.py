@@ -1703,7 +1703,6 @@ class GIT4SWApp(tk.Tk):
         self.config_fields_frame.columnconfigure(0, weight=0)
         self.config_fields_frame.columnconfigure(1, weight=1)
         self.config_fields_frame.columnconfigure(2, weight=0)
-        self.config_fields_frame.columnconfigure(3, weight=0)
         
         # Predefined display names
         display_names = {
@@ -1731,7 +1730,7 @@ class GIT4SWApp(tk.Tk):
             if k not in ("workspace_path", "auto_sync", "imagemagick_path") and k not in keys_order:
                 keys_order.append(k)
         
-        # Keys eligible for Find button + combobox
+        # Keys eligible for Find button + combobox (no entry widget)
         find_targets = {
             "git_path": "git.exe",
             "git-lfs_path": "git-lfs.exe",
@@ -1752,44 +1751,38 @@ class GIT4SWApp(tk.Tk):
             lbl = ttk.Label(self.config_fields_frame, text=f"{display_name}:", font=("TkDefaultFont", 9, "bold"), anchor="w", background="#ffffff")
             lbl.grid(row=row_idx, column=0, padx=(0, 10), pady=3, sticky="w")
             
-            # Entry widget
-            ent = ttk.Entry(self.config_fields_frame)
-            ent.insert(0, str(val))
-            ent.grid(row=row_idx, column=1, padx=0, pady=3, sticky="ew")
-            self.config_entries[key] = ent
-            
-            # Find button + Combobox for path keys
             if key in find_targets:
-                cb = ttk.Combobox(self.config_fields_frame, state="readonly", width=30)
-                cb.grid(row=row_idx, column=2, padx=(8, 4), pady=3, sticky="w")
-                self._configure_combobox_dropdown_width(cb)
-                cb.bind("<<ComboboxSelected>>",
-                        lambda e, c=cb, en=ent: self._on_config_path_selected(c, en))
+                # Path key: use combobox (expanded) instead of entry
+                cb = ttk.Combobox(self.config_fields_frame, state="readonly", width=60)
+                cb.set(str(val))
+                cb.grid(row=row_idx, column=1, padx=0, pady=3, sticky="ew")
+                self.config_entries[key] = cb
                 self.config_combos[key] = cb
+
+                # Validate file existence: red text if missing
+                if val and not os.path.exists(str(val)):
+                    cb.configure(foreground="#ef4444")
+                else:
+                    cb.configure(foreground="#1f2937")
+                # Re-validate on selection change
+                def _on_select(_e, c=cb):
+                    if c.get() and os.path.exists(c.get()):
+                        c.configure(foreground="#1f2937")
+                    else:
+                        c.configure(foreground="#ef4444")
+                cb.bind("<<ComboboxSelected>>", _on_select)
                 
+                # Find button
                 btn = ttk.Button(self.config_fields_frame, text="Find", width=6,
                                  command=lambda k=key, t=find_targets[key]: self.find_executable(k, t))
-                btn.grid(row=row_idx, column=3, padx=(0, 0), pady=3, sticky="w")
+                btn.grid(row=row_idx, column=2, padx=(8, 0), pady=3, sticky="w")
                 self.config_find_btns[key] = btn
-
-    def _on_config_path_selected(self, combo, entry):
-        entry.delete(0, "end")
-        entry.insert(0, combo.get())
-        combo.set('')
-
-    def _configure_combobox_dropdown_width(self, combo):
-        def on_postcommand():
-            values = list(combo.cget('values') or [])
-            if not values:
-                return
-            longest = max((len(str(v)) for v in values), default=0)
-            try:
-                popup = combo.tk.call('ttk::combobox::PopdownWindow', combo)
-                lb_path = str(popup) + '.l'
-                combo.tk.call(lb_path, 'configure', '-width', longest + 2)
-            except Exception:
-                pass
-        combo.config(postcommand=on_postcommand)
+            else:
+                # Non-path key: use entry widget
+                ent = ttk.Entry(self.config_fields_frame)
+                ent.insert(0, str(val))
+                ent.grid(row=row_idx, column=1, padx=0, pady=3, sticky="ew")
+                self.config_entries[key] = ent
 
     def find_executable(self, key, target_filename):
         btn = self.config_find_btns.get(key)
@@ -1802,24 +1795,41 @@ class GIT4SWApp(tk.Tk):
         
         def worker():
             results = []
+            search_roots = [
+                os.path.expandvars(r"%UserProfile%\scoop"),
+                os.path.expandvars(r"%UserProfile%\AppData"),
+                r"C:\Program Files\SOLIDWORKS Corp",
+            ]
             try:
-                for root, dirs, files in os.walk("C:\\"):
-                    for f in files:
-                        if f.lower() == target_filename.lower():
-                            results.append(os.path.join(root, f))
+                for search_root in search_roots:
+                    if not os.path.isdir(search_root):
+                        continue
+                    for root, dirs, files in os.walk(search_root):
+                        for f in files:
+                            if f.lower() == target_filename.lower():
+                                results.append(os.path.join(root, f))
             except Exception:
                 pass
             
             def update():
                 if cb:
+                    current = cb.get()
                     cb['values'] = results
+                    if current:
+                        cb.set(current)
+                    # Re-validate color after find
+                    if cb.get() and os.path.exists(cb.get()):
+                        cb.configure(foreground="#1f2937")
+                    else:
+                        cb.configure(foreground="#ef4444")
                 if btn:
                     btn.config(text="Find")
                     btn.state(["!disabled"])
                 if not results:
-                    self.write_log(f"No {target_filename} found on C: drive.", "warning")
+                    self.write_log(f"No {target_filename} found in configured search paths.", "warning")
                 else:
                     self.write_log(f"Found {len(results)} {target_filename} location(s).", "success")
+                self.write_log(f"Find complete for {target_filename}.", "info")
             self.after(0, update)
         
         threading.Thread(target=worker, daemon=True).start()
