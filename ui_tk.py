@@ -434,7 +434,7 @@ class FileCommitHistoryDialog(tk.Toplevel):
         hexsha = tags[0]
         
         self.btn_diff.state(["disabled"])
-        self.btn_exit.state(["disabled"])
+        # Keep Exit button enabled so the user can cancel/close the dialog while running
         self.lbl_status.config(text="Running Visual Diff in SolidWorks... Please wait.", foreground="#2563eb")
         
         # Spawn thread for diff
