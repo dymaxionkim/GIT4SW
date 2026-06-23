@@ -771,10 +771,88 @@ class FileCommitHistoryDialog(tk.Toplevel):
                 except Exception as _cg_err:
                     raise RuntimeError(f"CompareGeometry3 호출 중 오류: {_cg_err}")
 
-                if res_comp != 0:
+                # ── Result interpretation ────────────────────────────────────
+                # gtGdfError enum (selected values):
+                #   0  = gtGdfNoError          — full success
+                #   15 = gtGdfOpeningResultsFailed — comparison OK, but UI display failed
+                # gtGdfDifferenceStatus for vol/face:
+                #   0  = gtGdfNoDifference
+                #   1  = gtGdfDifference
+                _vol  = vol_status.value
+                _face = face_status.value
+                _comparison_ran = (_vol in (0, 1)) and (_face in (0, 1))
+
+                if res_comp == 0:
+                    # Full success — comparison ran and SW UI opened
+                    pass
+                elif res_comp == 15 and _comparison_ran:
+                    # Comparison completed but SW couldn't display the results UI.
+                    # Fall back: save a report file and inform the user.
+                    print("res_comp=15 (gtGdfOpeningResultsFailed): comparison OK, "
+                          "retrying with SaveReport fallback...", flush=True)
+                    _report_dir = os.path.join(
+                        os.path.normpath(os.path.join(self.parent.workspace_path, ".backup")),
+                        f"{base}_GeomCompare"
+                    )
+                    os.makedirs(_report_dir, exist_ok=True)
+                    vol_status2  = win32com.client.VARIANT(pythoncom.VT_BYREF | pythoncom.VT_I4, 0)
+                    face_status2 = win32com.client.VARIANT(pythoncom.VT_BYREF | pythoncom.VT_I4, 0)
+                    try:
+                        res_comp2 = sw_util_comp_geom.CompareGeometry3(
+                            ref_path, "",
+                            mod_path, "",
+                            1,              # Options: gtGdfFaceAndVolumeCompare
+                            1,              # ReportOption: gtResultSaveReport = 1
+                            _report_dir,    # Save report here
+                            False,
+                            True,
+                            vol_status2,
+                            face_status2,
+                        )
+                        print(f"SaveReport fallback returned: {res_comp2} "
+                              f"(vol={vol_status2.value}, face={face_status2.value})", flush=True)
+                        # Open the report folder so the user can inspect it
+                        try:
+                            import subprocess as _sub
+                            _sub.Popen(["explorer", _report_dir])
+                        except Exception:
+                            pass
+                    except Exception as _fb_err:
+                        print(f"SaveReport fallback failed: {_fb_err}", flush=True)
+
+                    # Treat as success — display result summary to user
+                    _diff_desc = []
+                    if _vol == 1:
+                        _diff_desc.append("부피(Volume) 차이 있음")
+                    elif _vol == 0:
+                        _diff_desc.append("부피(Volume) 동일")
+                    if _face == 1:
+                        _diff_desc.append("면(Face) 차이 있음")
+                    elif _face == 0:
+                        _diff_desc.append("면(Face) 동일")
+                    _summary = "\n".join(_diff_desc) if _diff_desc else "비교 완료"
+                    if not self.cancel_event.is_set():
+                        self.after(0, lambda s=_summary: self._on_diff_success_with_msg(
+                            f"비교 완료 (결과 UI를 열지 못해 리포트 폴더를 탐색기로 열었습니다):\n{s}"
+                        ))
+                    # Keep temp files and exit early
+                    self.temp_files_to_clean = [ours_temp_path, theirs_temp_path]
+                    return  # skip the normal success callback below
+                else:
+                    # Genuine error
+                    _err_names = {
+                        1: "FileNotFound", 2: "FileNotSolidBody", 3: "DocOpenFailed",
+                        4: "InvalidDocType", 5: "InvalidOptions", 6: "SaveReportFailed",
+                        7: "AddToBinderFailed", 8: "FaceCompareNotDone",
+                        9: "VolumeCompareNotDone", 10: "GeomCompNotDone",
+                        11: "NoActiveDoc", 12: "NoSolidBodies",
+                        13: "CreatingTempFileFailed", 14: "InvalidConfig",
+                        15: "OpeningResultsFailed",
+                    }
+                    _err_name = _err_names.get(res_comp, f"Unknown({res_comp})")
                     raise RuntimeError(
-                        f"CompareGeometry3 오류 코드: {res_comp}\n"
-                        f"VolStatus={vol_status.value}, FaceStatus={face_status.value}"
+                        f"CompareGeometry3 실패: {_err_name} (코드={res_comp})\n"
+                        f"VolStatus={_vol}, FaceStatus={_face}"
                     )
 
                 # Keep temporary CAD files so the user can interact in SolidWorks
@@ -783,6 +861,7 @@ class FileCommitHistoryDialog(tk.Toplevel):
                 # Success callback
                 if not self.cancel_event.is_set():
                     self.after(0, self._on_diff_success)
+
 
                     
             elif doc_type == 3:  # DRAWING (.slddrw)
@@ -950,7 +1029,15 @@ class FileCommitHistoryDialog(tk.Toplevel):
         self.lbl_status.config(text="Visual Diff successfully completed!", foreground="#10b981")
         self.btn_diff.state(["!disabled"])
         self.btn_exit.state(["!disabled"])
-        
+
+    def _on_diff_success_with_msg(self, msg):
+        """Called when comparison ran OK but SW UI couldn't display results (e.g. code 15)."""
+        self.lbl_status.config(text="Visual Diff 완료 (리포트 폴더 열림)", foreground="#10b981")
+        self.btn_diff.state(["!disabled"])
+        self.btn_exit.state(["!disabled"])
+        messagebox.showinfo("Visual Diff 완료", msg, parent=self)
+
+
     def _on_drawing_diff_success(self, diff_images, warning_msg=None):
         status_text = "Visual Diff successfully completed!"
         if warning_msg:
