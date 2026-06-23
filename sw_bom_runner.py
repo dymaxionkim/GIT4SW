@@ -3,6 +3,7 @@ import sys
 import gc
 import time
 import argparse
+import json
 import pandas as pd
 
 # Configure stdout and stderr to use UTF-8 and replace encoding errors to avoid crashes with localized chars
@@ -364,8 +365,8 @@ def main():
         traverse(root_comp, 1, 1)
         print(f"Traversal complete. Found {len(all_bom_rows)} nodes.", flush=True)
 
-        # Define the exact columns order requested by the user
-        column_order = [
+        # Load column_order from config.json; fall back to hardcoded default
+        default_column_order = [
             "Depth",
             "Type",
             "PartNumber",
@@ -379,8 +380,18 @@ def main():
             "Configuration",
             "File Path"
         ]
+        try:
+            config_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "config.json")
+            if os.path.exists(config_path):
+                with open(config_path, "r", encoding="utf-8") as f:
+                    config_data = json.load(f)
+                column_order = config_data.get("column_order", default_column_order)
+            else:
+                column_order = default_column_order
+        except Exception:
+            column_order = default_column_order
 
-        def get_mapped_row(depth, qty, file_path, configuration, props):
+        def get_mapped_row(depth, qty, file_path, configuration, props, order):
             file_name = os.path.basename(file_path) if file_path else ""
             
             # Fallback for Partname: use base file name if null/empty
@@ -407,7 +418,7 @@ def main():
             weight = lookup_property(props, "Weight", ["Weight(g)", "Mass", "Weight(kg)"])
             description = lookup_property(props, "Description", ["Desc"])
 
-            return {
+            known = {
                 "Depth": depth,
                 "Type": file_type,
                 "PartNumber": part_number,
@@ -419,8 +430,16 @@ def main():
                 "Description": description,
                 "File Name": file_name,
                 "Configuration": configuration,
-                "File Path": file_path
+                "File Path": file_path,
             }
+
+            row = {}
+            for col in order:
+                if col in known:
+                    row[col] = known[col]
+                else:
+                    row[col] = lookup_property(props, col)
+            return row
 
         # 1. Compile Hierarchical BOM Tree DataFrame
         bom_data = []
@@ -430,7 +449,8 @@ def main():
                 qty=row['Quantity'],
                 file_path=row['File Path'],
                 configuration=row['Configuration'],
-                props=row['Properties']
+                props=row['Properties'],
+                order=column_order
             )
             bom_data.append(mapped)
 
@@ -459,7 +479,8 @@ def main():
                 qty=item['Quantity'],
                 file_path=item['File Path'],
                 configuration=item['Configuration'],
-                props=item['Properties']
+                props=item['Properties'],
+                order=column_order
             )
             pl_data.append(mapped)
 

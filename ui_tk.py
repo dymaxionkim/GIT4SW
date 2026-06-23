@@ -2634,7 +2634,7 @@ class GIT4SWApp(tk.Tk):
         self.cb_commit_msg.pack(side="left", fill="x", expand=True, padx=(0, 8))
         self.cb_commit_msg.bind("<<ComboboxSelected>>", self.on_commit_msg_selected)
         
-        # Load predefined commit messages from commit.json
+        # Load predefined commit messages from config.json
         self.load_commit_messages()
         
         return view
@@ -2773,31 +2773,11 @@ class GIT4SWApp(tk.Tk):
 
     def load_commit_messages(self):
         commit_messages = [""]
-        commit_json_path = os.path.join(self.workspace_path, "commit.json")
-        if not os.path.exists(commit_json_path):
-            script_dir = os.path.dirname(os.path.abspath(__file__))
-            commit_json_path = os.path.join(script_dir, "commit.json")
-            
-        loaded = False
-        if os.path.exists(commit_json_path):
-            for enc in ["utf-8-sig", "utf-8", "cp949", "euc-kr"]:
-                try:
-                    with open(commit_json_path, "r", encoding=enc) as f:
-                        data = json.load(f)
-                        if isinstance(data, list):
-                            data = [str(item) for item in data]
-                            commit_messages.extend(data)
-                            loaded = True
-                            break
-                except (UnicodeDecodeError, json.JSONDecodeError):
-                    continue
-                except Exception as e:
-                    self.write_log(f"Error loading commit.json: {e}", "warning")
-                    break
-
-        if not loaded:
-            if os.path.exists(commit_json_path):
-                self.write_log("Could not parse commit.json. Using default templates.", "warning")
+        config_data = self.load_config_data()
+        cm = config_data.get("commit_messages", [])
+        if isinstance(cm, list) and cm:
+            commit_messages.extend(str(item) for item in cm)
+        else:
             commit_messages.extend([
                 "대략설계 : ",
                 "상세설계 : ",

@@ -7,5 +7,32 @@
     "github_token": "",
     "default_local_path": "D:\\github",
     "organization_name": "mech-higenmotor",
-    "auto_sync": false
+    "auto_sync": false,
+
+    "commit_messages": [
+        "사양설정 : ",
+        "공학해석 : ",
+        "대략설계 : ",
+        "상세설계 : ",
+        "설계리뷰 : ",
+        "도면작성 : ",
+        "프로토타입 : ",
+        "시험평가 : ",
+        "생산이관 : "
+    ],
+
+    "column_order": [
+        "Depth",
+        "Type",
+        "PartNumber",
+        "Partname",
+        "Qty",
+        "Material",
+        "Treatment",
+        "Weight",
+        "Description",
+        "File Name",
+        "Configuration",
+        "File Path"
+    ]
 }
