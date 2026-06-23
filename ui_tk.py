@@ -625,7 +625,8 @@ def queue_during_bg_tasks(method):
             method(self, *args, **kwargs)
         if self.bg_tasks_count > 0:
             action_name = method.__name__.replace("_", " ").title()
-            self.write_log(f"Working state: '{action_name}' queued and will start after the active process finishes.", "info")
+            if "Refresh" not in action_name:
+                self.write_log(f"Working state: '{action_name}' queued and will start after the active process finishes.", "info")
             self.pending_button_tasks.append(task)
         else:
             task()
