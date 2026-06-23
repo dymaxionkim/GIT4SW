@@ -456,10 +456,11 @@ class FileCommitHistoryDialog(tk.Toplevel):
         theirs_temp_path = None
         ours_pdf_path = None
         theirs_pdf_path = None
-        
+
         sw_app = None
         opened_docs = []
-        
+        _keep_docs_open = False  # True = leave SW docs open for user to inspect
+
         try:
             # 1. Setup paths
             backup_dir = os.path.normpath(os.path.join(self.parent.workspace_path, ".backup"))
@@ -608,26 +609,6 @@ class FileCommitHistoryDialog(tk.Toplevel):
                 doc_type = 3  # swDocDRAWING
             else:
                 raise ValueError(f"Unsupported file extension for diff: {ext}")
-
-            # ── Snapshot of currently open docs BEFORE we open anything ──────
-            # Used in finally to close dependency files SW auto-loads.
-            _pre_open_paths = set()
-            try:
-                _scan_doc = sw_app.GetFirstDocument()
-                while _scan_doc:
-                    try:
-                        _p = _scan_doc.GetPathName()
-                        if _p:
-                            _pre_open_paths.add(os.path.normpath(_p).lower())
-                    except Exception:
-                        pass
-                    try:
-                        _scan_doc = _scan_doc.GetNext()
-                    except Exception:
-                        break
-            except Exception:
-                pass
-            print(f"Pre-open snapshot: {len(_pre_open_paths)} docs already open.", flush=True)
 
             # Helper to get the document title safely
             def get_doc_title(model_doc):
@@ -838,68 +819,29 @@ class FileCommitHistoryDialog(tk.Toplevel):
                 _err_name = _err_names.get(res_comp, f"Unknown({res_comp})")
 
                 if res_comp == 0:
-                    # Full success — SW opened the comparison result UI
-                    # Keep temp files so the user can interact in SW
-                    self.temp_files_to_clean = [ours_temp_path, theirs_temp_path]
+                    # Full success — SW opened the comparison result UI.
+                    # Leave both files open so the user can interact in SolidWorks.
+                    _keep_docs_open = True
                     if not self.cancel_event.is_set():
                         self.after(0, self._on_diff_success)
 
                 elif res_comp == 15 and _comparison_ran:
-                    # Comparison data computed OK but SW couldn't show results UI.
-                    # Fallback: save an HTML report and open it in the browser.
-                    print(f"res_comp=15 ({_err_name}): comparison data OK — saving HTML report...", flush=True)
-
-                    _report_dir = os.path.normpath(
-                        os.path.join(self.parent.workspace_path, ".backup",
-                                     f"{base}_GeomCompare")
+                    # Comparison data computed OK but SW couldn't render the results UI
+                    # from this thread.  The two files are still open in SolidWorks and
+                    # the Utilities add-in is loaded; the user can manually open the
+                    # comparison view via:
+                    #   도구(Tools) → SOLIDWORKS Utilities → 문서 비교(Compare Documents)
+                    _vol_txt  = "수정없음" if _vol  == 0 else "차이 있음"
+                    _face_txt = "수정없음" if _face == 0 else "차이 있음"
+                    _msg = (
+                        f"형상 비교 완료:\n"
+                        f"• 부피(Volume): {_vol_txt}\n"
+                        f"• 면(Face): {_face_txt}\n\n"
+                        "SOLIDWORKS에서 두 파일이 열려 있습니다.\n"
+                        "도구 → SOLIDWORKS Utilities → 문서 비교\n"
+                        "메뉴를 통해 비교 결과를 확인하세요."
                     )
-                    os.makedirs(_report_dir, exist_ok=True)
-
-                    vol_status2  = win32com.client.VARIANT(pythoncom.VT_BYREF | pythoncom.VT_I4, 0)
-                    face_status2 = win32com.client.VARIANT(pythoncom.VT_BYREF | pythoncom.VT_I4, 0)
-                    _report_saved = False
-                    try:
-                        res2 = sw_util_comp_geom.CompareGeometry3(
-                            ref_path, "",
-                            mod_path, "",
-                            1,              # gtGdfFaceAndVolumeCompare
-                            1,              # gtResultSaveReport
-                            _report_dir,    # folder to save report in
-                            False,
-                            True,
-                            vol_status2,
-                            face_status2,
-                        )
-                        print(f"SaveReport fallback returned: {res2} "
-                              f"(vol={vol_status2.value}, face={face_status2.value})", flush=True)
-                        # Check for any files in the report dir
-                        _report_files = os.listdir(_report_dir) if os.path.isdir(_report_dir) else []
-                        print(f"Report dir contents: {_report_files}", flush=True)
-                        if _report_files:
-                            _report_saved = True
-                            # Open Explorer to show report
-                            import subprocess as _sub
-                            _sub.Popen(["explorer", _report_dir])
-                    except Exception as _fb_err:
-                        print(f"SaveReport fallback raised: {_fb_err}", flush=True)
-
-                    # Build result summary
-                    _diff_parts = []
-                    if _vol == 1:
-                        _diff_parts.append("• 부피(Volume): 차이 있음")
-                    else:
-                        _diff_parts.append("• 부피(Volume): 동일")
-                    if _face == 1:
-                        _diff_parts.append("• 면(Face): 차이 있음")
-                    else:
-                        _diff_parts.append("• 면(Face): 동일")
-                    _summary_lines = "\n".join(_diff_parts)
-                    _report_note = (f"\n\n리포트 저장 위치:\n{_report_dir}"
-                                    if _report_saved
-                                    else "\n\n(리포트 저장에 실패했습니다. SOLIDWORKS에서 두 파일이 열려 있습니다.)")
-                    _msg = f"형상 비교 완료:\n{_summary_lines}{_report_note}"
-
-                    self.temp_files_to_clean = [ours_temp_path, theirs_temp_path]
+                    _keep_docs_open = True
                     if not self.cancel_event.is_set():
                         self.after(0, lambda m=_msg: self._on_diff_success_with_msg(m))
 
@@ -1043,9 +985,11 @@ class FileCommitHistoryDialog(tk.Toplevel):
                 self.after(0, lambda _e=str(e), _tb=tb: self._on_diff_error(f"{_e}\n\n{_tb}"))
                 
         finally:
-            # ── Close all documents opened during the diff ───────────────────
-            if sw_app:
-                # 1. Close docs we opened explicitly (tracked in opened_docs)
+            # ── Document cleanup ────────────────────────────────────────
+            # For PART/ASSEMBLY diff: docs are intentionally left open in
+            # SolidWorks so the user can inspect/interact with the comparison.
+            # For DRAWING diff or error paths: close what we opened.
+            if sw_app and (not _keep_docs_open):
                 for _model in list(opened_docs):
                     try:
                         _title = get_doc_title(_model)
@@ -1056,37 +1000,6 @@ class FileCommitHistoryDialog(tk.Toplevel):
                         print(f"CloseDoc (tracked) failed: {_ce}", flush=True)
                 opened_docs.clear()
 
-                # 2. Close ANY doc that was NOT open before the diff started.
-                #    This catches:
-                #    a) Docs CompareGeometry3 opened internally (temp files)
-                #    b) Dependency files SW auto-loaded when resolving the model
-                #       (sub-parts, sub-assemblies, textures, etc.)
-                time.sleep(0.5)  # give SW a moment to settle
-                try:
-                    _cur_doc = sw_app.GetFirstDocument()
-                    _to_close = []
-                    while _cur_doc:
-                        try:
-                            _path = _cur_doc.GetPathName()
-                            if _path:
-                                _norm = os.path.normpath(_path).lower()
-                                if _norm not in _pre_open_paths:
-                                    _to_close.append(get_doc_title(_cur_doc))
-                        except Exception:
-                            pass
-                        try:
-                            _cur_doc = _cur_doc.GetNext()
-                        except Exception:
-                            break
-                    for _t in _to_close:
-                        if _t:
-                            print(f"Closing auto-loaded dep: {_t}", flush=True)
-                            try:
-                                sw_app.CloseDoc(_t)
-                            except Exception as _de:
-                                print(f"  → failed: {_de}", flush=True)
-                except Exception as _scan_err:
-                    print(f"Dependency scan for cleanup failed: {_scan_err}", flush=True)
 
             # Clean up temporary PDFs
             for path in [ours_pdf_path, theirs_pdf_path]:
