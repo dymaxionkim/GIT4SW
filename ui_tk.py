@@ -300,6 +300,147 @@ class MultiConflictResolutionDialog(tk.Toplevel):
         self.destroy()
 
 
+class FileCommitHistoryDialog(tk.Toplevel):
+    def __init__(self, parent, file_rel_path):
+        super().__init__(parent)
+        self.parent = parent
+        self.file_rel_path = file_rel_path
+        self.title(f"Commit History - {os.path.basename(file_rel_path)}")
+        self.geometry("700x450")
+        self.configure(bg="#f3f4f6")
+        self.transient(parent)
+        self.grab_set()
+        
+        self.selected_commit = None
+        self.cancel_event = threading.Event()
+        
+        # UI Layout
+        # Top Label
+        lbl = ttk.Label(self, text=f"File: {file_rel_path}\nSelect a commit to compare with the current version:", 
+                        justify="left", style="TLabel", font="TkDefaultFont")
+        lbl.pack(padx=16, fill="x", pady=(16, 8))
+        
+        # Table Container (Frame)
+        tbl_frame = ttk.Frame(self, style="TFrame")
+        tbl_frame.pack(padx=16, pady=8, fill="both", expand=True)
+        
+        # Treeview Scrollbar
+        self.scrollbar = ttk.Scrollbar(tbl_frame, orient="vertical")
+        self.scrollbar.pack(side="right", fill="y")
+        
+        # Treeview Table
+        self.tree = ttk.Treeview(
+            tbl_frame,
+            columns=("commit", "date", "author", "message"),
+            show="headings",
+            selectmode="browse",
+            yscrollcommand=self.scrollbar.set
+        )
+        self.scrollbar.config(command=self.tree.yview)
+        
+        self.tree.heading("commit", text="Commit")
+        self.tree.heading("date", text="Date")
+        self.tree.heading("author", text="Author")
+        self.tree.heading("message", text="Message")
+        
+        self.tree.column("commit", width=90, minwidth=70, stretch=False, anchor="center")
+        self.tree.column("date", width=150, minwidth=120, stretch=False, anchor="center")
+        self.tree.column("author", width=100, minwidth=80, stretch=False, anchor="center")
+        self.tree.column("message", width=300, minwidth=150, stretch=True)
+        
+        self.tree.pack(side="left", fill="both", expand=True)
+        
+        # Tree selection binding
+        self.tree.bind("<<TreeviewSelect>>", self.on_selection_change)
+        
+        # Status / Progress Label
+        self.lbl_status = ttk.Label(self, text="Loading commit history...", style="TLabel", font="TkDefaultFont")
+        self.lbl_status.pack(padx=16, pady=4, fill="x")
+        
+        # Bottom Buttons Frame
+        btn_frm = ttk.Frame(self, style="TFrame")
+        btn_frm.pack(padx=16, pady=16, fill="x", side="bottom")
+        
+        self.btn_diff = ttk.Button(btn_frm, text="Diff", style="Primary.TButton", command=self.on_diff)
+        self.btn_diff.state(["disabled"])
+        self.btn_diff.pack(side="right", padx=(8, 0))
+        
+        self.btn_exit = ttk.Button(btn_frm, text="Exit", command=self.on_exit)
+        self.btn_exit.pack(side="right")
+        
+        # Center the window
+        self.update_idletasks()
+        x = parent.winfo_rootx() + (parent.winfo_width() - self.winfo_width()) // 2
+        y = parent.winfo_rooty() + (parent.winfo_height() - self.winfo_height()) // 2
+        self.geometry(f"+{x}+{y}")
+        
+        self.protocol("WM_DELETE_WINDOW", self.on_exit)
+        
+        # Fetch history in background thread
+        self.history_thread = threading.Thread(target=self._fetch_history, daemon=True)
+        self.history_thread.start()
+        
+    def _fetch_history(self):
+        try:
+            repo = self.parent.git_service.repo
+            if not repo:
+                raise RuntimeError("Git repository not loaded.")
+                
+            commit_list = []
+            for commit in repo.iter_commits(paths=self.file_rel_path):
+                if self.cancel_event.is_set():
+                    return
+                commit_list.append({
+                    "hexsha": commit.hexsha,
+                    "short_sha": commit.hexsha[:7],
+                    "author": commit.author.name,
+                    "date": commit.authored_datetime.strftime("%Y-%m-%d %H:%M:%S") if commit.authored_datetime else "",
+                    "message": commit.summary
+                })
+                
+            if not self.cancel_event.is_set():
+                self.after(0, lambda: self._populate_table(commit_list))
+        except Exception as e:
+            if not self.cancel_event.is_set():
+                self.after(0, lambda: self._show_error(str(e)))
+                
+    def _populate_table(self, commit_list):
+        self.lbl_status.pack_forget()
+        if not commit_list:
+            self.lbl_status.config(text="No commits found for this file.")
+            self.lbl_status.pack(padx=16, pady=4, fill="x")
+            return
+            
+        for c in commit_list:
+            self.tree.insert("", "end", values=(c["short_sha"], c["date"], c["author"], c["message"]), tags=(c["hexsha"],))
+            
+    def _show_error(self, err_msg):
+        self.lbl_status.config(text=f"Error loading history: {err_msg}", foreground="#ef4444")
+        
+    def on_selection_change(self, event=None):
+        selected = self.tree.selection()
+        if selected:
+            self.btn_diff.state(["!disabled"])
+        else:
+            self.btn_diff.state(["disabled"])
+            
+    def on_diff(self):
+        selected = self.tree.selection()
+        if not selected:
+            return
+        tags = self.tree.item(selected[0], "tags")
+        if not tags:
+            return
+        hexsha = tags[0]
+        # Visual Diff action placeholder (to be implemented later)
+        pass
+        
+    def on_exit(self):
+        self.cancel_event.set()
+        self.grab_release()
+        self.destroy()
+
+
 class LfsCleanupWizardDialog(tk.Toplevel):
     def __init__(self, parent, git_service):
         super().__init__(parent)
@@ -714,12 +855,12 @@ class GIT4SWApp(tk.Tk):
         style.configure("TButton", padding=6, background="#e5e7eb", foreground="#1f2937", borderwidth=0)
         style.map("TButton",
                   background=[("active", "#d1d5db"), ("disabled", "#f3f4f6")],
-                  foreground=[("active", "#111827"), ("disabled", "#f3f4f6")])
+                  foreground=[("active", "#111827"), ("disabled", "#9ca3af")])
                   
         style.configure("Primary.TButton", padding=6, background="#059669", foreground="#ffffff", borderwidth=0)
         style.map("Primary.TButton",
                   background=[("active", "#047857"), ("disabled", "#f3f4f6")],
-                  foreground=[("active", "#ffffff"), ("disabled", "#f3f4f6")])
+                  foreground=[("active", "#ffffff"), ("disabled", "#9ca3af")])
                   
         # [수정] Make my branch 전용 스타일 추가 (비활성화 시 배경 및 텍스트 모두 흰색)
         style.configure("MakeBranch.TButton", padding=6, background="#059669", foreground="#ffffff", borderwidth=0)
@@ -2004,6 +2145,10 @@ class GIT4SWApp(tk.Tk):
         self.btn_bom = ttk.Button(actions_frm, text="BOM", style="BOM.TButton", width=5, command=self.generate_bom_action)
         self.btn_bom.state(["disabled"])
         self.btn_bom.pack(side="left", padx=4)
+        
+        self.btn_diff = ttk.Button(actions_frm, text="Diff", width=8, command=self.show_diff_popup)
+        self.btn_diff.state(["disabled"])
+        self.btn_diff.pack(side="left", padx=4)
         
         self.lbl_selected_count = ttk.Label(actions_frm, text="Selected files: 0", style="TLabel")
         self.lbl_selected_count.pack(side="right", padx=8)
@@ -3781,10 +3926,13 @@ class GIT4SWApp(tk.Tk):
             self.write_log(f"Failed to open browser: {e}", "error")
 
     def on_file_selected_change(self):
-        # 1. Update BOM button activation state based on selection & background task status
+        # 1. Update BOM and Diff button activation state based on selection & background task status
         selected_items = self.tree.selection()
         is_bom_enabled = False
+        is_diff_enabled = False
+        
         if getattr(self, 'bg_tasks_count', 0) == 0 and len(selected_items) == 1:
+            is_diff_enabled = True
             values = self.tree.item(selected_items[0], 'values')
             if values:
                 filepath = values[0]
@@ -3796,6 +3944,12 @@ class GIT4SWApp(tk.Tk):
             self.btn_bom.state(["!disabled"])
         else:
             self.btn_bom.state(["disabled"])
+            
+        if hasattr(self, 'btn_diff'):
+            if is_diff_enabled:
+                self.btn_diff.state(["!disabled"])
+            else:
+                self.btn_diff.state(["disabled"])
 
         # 2. Existing view 1 CAD thumbnail preview logic
         if getattr(self, 'current_view_index', 0) != 1:
@@ -4735,6 +4889,16 @@ class GIT4SWApp(tk.Tk):
                 self.write_log("\n".join(errors), "error")
         else:
             self.write_log(f"eDrawings executable not found at path: {path}. Please check config.json.", "error")
+
+    def show_diff_popup(self):
+        selected_items = self.tree.selection()
+        if len(selected_items) != 1:
+            return
+        values = self.tree.item(selected_items[0], 'values')
+        if not values:
+            return
+        file_rel_path = values[0]
+        FileCommitHistoryDialog(self, file_rel_path)
 
     def generate_bom_action(self):
         selected_items = self.tree.selection()

@@ -75,6 +75,12 @@
     2. Flat Partlist (`[assembly]__PL.xlsx`): Aggregates all parts and sub-assemblies with total accumulated quantities.
     - Standard columns are ordered strictly as: `Depth`, `Type`, `PartNumber`, `Partname`, `Qty`, `Material`, `Treatment`, `Weight`, `Description`, `File Name`, `Configuration`, `File Path`.
   - **COM Reference & Document Cleanup**: Automatically closes the main assembly and all opened referenced sub-assemblies/part files recursively in SolidWorks, releasing all file handles.
+* **File Commit History & Diff Explorer (Diff button)**:
+  - A new **[Diff]** button is provided in the File Manager toolbar, placed to the right of the BOM button.
+  - It is enabled **only** when a single file is selected and no background tasks are running. When disabled, the button text is dimmed for clear state recognition.
+  - Clicking this button opens a popup window. To prevent the main GUI thread from freezing, it queries the file's Git commit history (`git log`) in a background thread and lists the commits in a Treeview table with Date, Author, and Commit summary.
+  - The dialog contains a scrollbar, a "Diff" button, and an "Exit" button. Clicking on any commit row enables the popup's "Diff" button. Clicking "Exit" closes the popup and terminates any running background threads safely (the actual Visual Diff comparison functionality is reserved for future implementation).
+
 
 ---
 
