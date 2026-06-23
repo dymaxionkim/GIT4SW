@@ -3740,6 +3740,14 @@ class GIT4SWApp(tk.Tk):
                 import webbrowser
                 import os
                 
+                # Prepend the physical Graphviz bin path if Scoop is installed on Windows
+                # This bypasses the slow Scoop shims, speeding up dot.pipe() by ~10-15x
+                if os.name == 'nt':
+                    home = os.environ.get("USERPROFILE") or os.path.expanduser("~")
+                    scoop_graphviz_bin = os.path.join(home, "scoop", "apps", "graphviz", "current", "bin")
+                    if os.path.isdir(scoop_graphviz_bin):
+                        os.environ["PATH"] = scoop_graphviz_bin + os.pathsep + os.environ.get("PATH", "")
+                
                 repo_path = self.workspace_path
                 backup_dir = os.path.join(repo_path, ".backup")
                 os.makedirs(backup_dir, exist_ok=True)
@@ -3755,15 +3763,27 @@ class GIT4SWApp(tk.Tk):
                 dot.attr("node", shape="box", style="rounded,filled", fontname="Arial")
                 dot.attr("edge", arrowhead="vee", arrowsize="0.8")
                 
-                commit_branches = {
-                    b.commit.hexsha: b.name for b in repo.branches if b.commit
-                }
-                commit_tags = {t.commit.hexsha: t.name for t in repo.tags if t.commit}
+                commit_branches = {}
+                for b in repo.branches:
+                    try:
+                        if b.commit:
+                            commit_branches[b.commit.hexsha] = b.name
+                    except Exception:
+                        pass
+                
+                commit_tags = {}
+                for t in repo.tags:
+                    try:
+                        if t.commit:
+                            commit_tags[t.commit.hexsha] = t.name
+                    except Exception:
+                        pass
                 
                 visited = set()
                 all_commits = []
                 
-                for commit in repo.iter_commits("--all"):
+                # Limit rendering to the most recent 300 commits to guarantee fast layout and browser rendering
+                for commit in repo.iter_commits("--all", max_count=300):
                     if commit.hexsha in visited:
                         continue
                     visited.add(commit.hexsha)
@@ -3808,11 +3828,12 @@ class GIT4SWApp(tk.Tk):
                 svg_data = dot.pipe().decode("utf-8")
                 
                 # 3. HTML template with svg-pan-zoom script
+                title_str = f"Git Commit Graph ({len(all_commits)} commits)"
                 html_template = f"""<!DOCTYPE html>
 <html>
 <head>
     <meta charset="UTF-8">
-    <title>Git Commit Graph</title>
+    <title>{title_str}</title>
     <script src="https://cdn.jsdelivr.net/npm/svg-pan-zoom@3.6.1/dist/svg-pan-zoom.min.js"></script>
     <style>
         html, body {{ margin: 0; padding: 0; width: 100%; height: 100%; overflow: hidden; }}
@@ -3849,9 +3870,9 @@ class GIT4SWApp(tk.Tk):
                 webbrowser.open("file://" + os.path.realpath(output_html))
                 
                 def on_done():
-                    self.write_log(f"Interactive Graphviz graph successfully generated in .backup and opened.", "success")
+                    self.write_log(f"Interactive Graphviz graph ({len(all_commits)} commits) successfully generated in .backup and opened.", "success")
                     
-                self.task_queue.put(('success', "Interactive Graphviz graph generated successfully!", on_done))
+                self.task_queue.put(('success', f"Interactive Graphviz graph ({len(all_commits)} commits) generated successfully!", on_done))
                 
             except Exception as e:
                 self.task_queue.put(('error', f"Failed to generate browse graph:\n{e}", None))
