@@ -651,6 +651,7 @@ class GIT4SWApp(tk.Tk):
         # State tracking for branch switching
         self.is_switching_branch = False
         self.bg_tasks_count = 0
+        self.last_active_branch = ""
         
         self.title("GIT4SW")
         self.geometry("1100x600")
@@ -1709,6 +1710,7 @@ class GIT4SWApp(tk.Tk):
                     self.cb_branch.config(values=branches, state="readonly")
                     if current and current.upper() != "HEAD" and current in branches:
                         self.cb_branch.set(current)
+                        self.last_active_branch = current
                     else:
                         self.cb_branch.set("")
                         
@@ -3681,17 +3683,20 @@ class GIT4SWApp(tk.Tk):
             return
             
         self.btn_restore_latest.state(["disabled"])
+        prev_branch = getattr(self, 'last_active_branch', "")
         
         def run():
             self.increment_tasks()
             try:
                 try:
-                    self.git_service.restore_latest()
+                    self.git_service.restore_latest(prev_branch)
                     def on_done():
                         self.refresh_file_list()
                         self.refresh_history()
                         self.load_branches_in_combo()
-                    self.task_queue.put(('success', "Successfully returned to latest version trunk!", on_done))
+                    
+                    msg = f"Successfully returned to latest version trunk (Branch: {prev_branch})!" if prev_branch else "Successfully returned to latest version trunk!"
+                    self.task_queue.put(('success', msg, on_done))
                 except Exception as e:
                     self.task_queue.put(('error', f"Failed to restore latest:\n{e}", None))
             finally:

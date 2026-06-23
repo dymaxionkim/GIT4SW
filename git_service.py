@@ -986,18 +986,29 @@ class GitService:
         except Exception as e:
             raise RuntimeError(f"Failed to restore version {commit_hash}: {e}")
         
-    def restore_latest(self):
-        """Restores workspace to the latest commit on the current branch."""
+    def restore_latest(self, branch_name=None):
+        """Restores workspace to the latest commit on the current branch or specified branch."""
         if not self.is_git_repo():
             return
         try:
-            branch = self._run_lfs_cmd(["git", "branch", "--show-current"])
-            if not branch:
-                branch = "main"
-            self._run_lfs_cmd(["git", "checkout", branch])
+            target_branch = branch_name
+            if not target_branch:
+                target_branch = self._run_lfs_cmd(["git", "branch", "--show-current"])
+            if not target_branch:
+                target_branch = "main"
+            
+            local_branches = self.get_local_branches()
+            if target_branch not in local_branches:
+                target_branch = "main"
+                
+            self._run_lfs_cmd(["git", "checkout", target_branch])
             self._load_repo()
         except Exception as e:
-            raise RuntimeError(f"Failed to restore latest: {e}")
+            try:
+                self._run_lfs_cmd(["git", "checkout", "main"])
+                self._load_repo()
+            except Exception:
+                raise RuntimeError(f"Failed to restore latest: {e}")
 
     def get_remote_branches(self):
         """Gets list of branches on the remote repository."""
