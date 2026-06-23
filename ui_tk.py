@@ -530,8 +530,11 @@ class FileCommitHistoryDialog(tk.Toplevel):
             if self.cancel_event.is_set():
                 return
                 
-            # 3. Connect to SolidWorks
+            # 3. Connect to SolidWorks (auto-launch if not running)
             print("Connecting to SolidWorks...", flush=True)
+            sw_app = None
+
+            # 3-A. Try to bind to an already-running instance
             try:
                 raw_sw = win32com.client.GetActiveObject("SldWorks.Application")
                 try:
@@ -539,8 +542,60 @@ class FileCommitHistoryDialog(tk.Toplevel):
                     sw_app = win32com.client.dynamic.Dispatch(raw_sw)
                 except Exception:
                     sw_app = win32com.client.Dispatch(raw_sw)
+                print("Bound to existing SolidWorks instance.", flush=True)
             except Exception:
-                raise RuntimeError("SOLIDWORKS is not currently running. Please open SOLIDWORKS first.")
+                pass
+
+            # 3-B. If not found, launch sldworks.exe and poll ROT up to 60 s
+            if sw_app is None:
+                sldworks_exe = r"C:\Program Files\SOLIDWORKS Corp\SOLIDWORKS\sldworks.exe"
+                if os.path.exists(sldworks_exe):
+                    print(f"SolidWorks not running – launching: {sldworks_exe}", flush=True)
+                    self.after(0, lambda: self.lbl_status.config(
+                        text="SolidWorks 실행 중... 잠시만 기다려 주세요.", foreground="#f59e0b"))
+                    try:
+                        import subprocess as _subprocess
+                        _subprocess.Popen([sldworks_exe])
+                        _poll_timeout = 60.0
+                        _poll_start = time.time()
+                        while time.time() - _poll_start < _poll_timeout:
+                            if self.cancel_event.is_set():
+                                return
+                            try:
+                                raw_sw = win32com.client.GetActiveObject("SldWorks.Application")
+                                try:
+                                    import win32com.client.dynamic
+                                    sw_app = win32com.client.dynamic.Dispatch(raw_sw)
+                                except Exception:
+                                    sw_app = win32com.client.Dispatch(raw_sw)
+                                print("SolidWorks launched and bound successfully.", flush=True)
+                                break
+                            except Exception:
+                                time.sleep(1.0)
+                    except Exception as _launch_err:
+                        print(f"Failed to launch SolidWorks: {_launch_err}", flush=True)
+                else:
+                    print(f"sldworks.exe not found at default path: {sldworks_exe}", flush=True)
+
+            # 3-C. Fallback: GetObject
+            if sw_app is None:
+                try:
+                    raw_sw = win32com.client.GetObject(Class="SldWorks.Application")
+                    try:
+                        import win32com.client.dynamic
+                        sw_app = win32com.client.dynamic.Dispatch(raw_sw)
+                    except Exception:
+                        sw_app = win32com.client.Dispatch(raw_sw)
+                    print("Bound via GetObject fallback.", flush=True)
+                except Exception:
+                    pass
+
+            if sw_app is None:
+                raise RuntimeError(
+                    "SOLIDWORKS을 시작하거나 연결할 수 없습니다.\n"
+                    "수동으로 SOLIDWORKS를 실행한 후 다시 시도해 주세요.\n"
+                    "(Could not start or bind to SOLIDWORKS. Please launch it manually and retry.)"
+                )
                 
             sw_app.Visible = True  # Ensure visible
             
