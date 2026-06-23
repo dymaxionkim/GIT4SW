@@ -217,8 +217,41 @@ class SolidWorksMonitorService:
                 except:
                     pass
                 
-                print(f"check_and_close_file: closing main document '{title_to_close}' (path: '{abs_target_path}') via CloseDoc")
-                sw.CloseDoc(title_to_close)
+                print(f"check_and_close_file: closing main document '{title_to_close}' (path: '{abs_target_path}') via CloseDoc/QuitDoc")
+                main_ids = []
+                if abs_target_path:
+                    main_ids.append(abs_target_path)
+                    main_ids.append(os.path.normpath(abs_target_path))
+                    base = os.path.basename(abs_target_path)
+                    if base:
+                        main_ids.append(base)
+                        base_no_ext = os.path.splitext(base)[0]
+                        if base_no_ext:
+                            main_ids.append(base_no_ext)
+                if title_to_close:
+                    main_ids.append(title_to_close)
+                    title_no_ext = os.path.splitext(title_to_close)[0]
+                    if title_no_ext:
+                        main_ids.append(title_no_ext)
+                        
+                uniq_main_ids = []
+                for iid in main_ids:
+                    if iid and isinstance(iid, str):
+                        iid_s = iid.strip()
+                        if iid_s and iid_s not in uniq_main_ids:
+                            uniq_main_ids.append(iid_s)
+                            
+                for identifier in uniq_main_ids:
+                    try:
+                        print(f"  Attempting CloseDoc('{identifier}') for main doc", flush=True)
+                        sw.CloseDoc(identifier)
+                    except:
+                        pass
+                    try:
+                        print(f"  Attempting QuitDoc('{identifier}') for main doc", flush=True)
+                        sw.QuitDoc(identifier)
+                    except:
+                        pass
 
                 # Allow SolidWorks to settle and release COM reference locks
                 time.sleep(0.3)
@@ -244,8 +277,8 @@ class SolidWorksMonitorService:
                             stuck_count = 0
                         last_doc_count = current_count
                         
-                        parent_titles = []  # list of title
-                        child_titles = []   # list of title
+                        parent_files = []  # list of dict
+                        child_files = []   # list of dict
                         
                         for d in all_docs:
                             try:
@@ -284,10 +317,39 @@ class SolidWorksMonitorService:
                                              title_lower.endswith(".sldasm") or
                                              title_lower.endswith(".slddrw"))
                                              
+                                # Generate unique closing identifiers
+                                ids = []
+                                if path:
+                                    ids.append(path)
+                                    ids.append(os.path.normpath(path))
+                                    base = os.path.basename(path)
+                                    if base:
+                                        ids.append(base)
+                                        base_no_ext = os.path.splitext(base)[0]
+                                        if base_no_ext:
+                                            ids.append(base_no_ext)
+                                if title:
+                                    ids.append(title)
+                                    title_no_ext = os.path.splitext(title)[0]
+                                    if title_no_ext:
+                                        ids.append(title_no_ext)
+                                
+                                uniq_ids = []
+                                for iid in ids:
+                                    if iid and isinstance(iid, str):
+                                        iid_s = iid.strip()
+                                        if iid_s and iid_s not in uniq_ids:
+                                            uniq_ids.append(iid_s)
+                                            
+                                doc_entry = {
+                                    'title': title,
+                                    'path': path,
+                                    'uniq_ids': uniq_ids
+                                }
                                 if is_parent:
-                                    parent_titles.append(title)
+                                    parent_files.append(doc_entry)
                                 else:
-                                    child_titles.append(title)
+                                    child_files.append(doc_entry)
                             except Exception:
                                 pass
                         
@@ -302,11 +364,28 @@ class SolidWorksMonitorService:
                         
                         closed_any = False
                         # Close parents first to release references on children
-                        for title in parent_titles:
+                        for doc_entry in parent_files:
+                            title = doc_entry['title']
+                            path = doc_entry['path']
+                            uniq_ids = doc_entry['uniq_ids']
                             try:
-                                print(f"check_and_close_file (cleanup): closing parent '{title}' via CloseDoc")
-                                sw.CloseDoc(title)
-                                closed_any = True
+                                print(f"check_and_close_file (cleanup): closing parent '{title}' (path: '{path}')", flush=True)
+                                for identifier in uniq_ids:
+                                    try:
+                                        print(f"  Attempting CloseDoc('{identifier}')", flush=True)
+                                        res = sw.CloseDoc(identifier)
+                                        print(f"    CloseDoc Result: {res}", flush=True)
+                                        if res:
+                                            closed_any = True
+                                    except Exception as e_close:
+                                        print(f"    Warning: CloseDoc parent '{identifier}' error: {e_close}", flush=True)
+                                    try:
+                                        print(f"  Attempting QuitDoc('{identifier}')", flush=True)
+                                        res = sw.QuitDoc(identifier)
+                                        print(f"    QuitDoc Result: {res}", flush=True)
+                                        closed_any = True
+                                    except Exception as e_quit:
+                                        print(f"    Warning: QuitDoc parent '{identifier}' error: {e_quit}", flush=True)
                             except Exception:
                                 pass
                                 
@@ -314,16 +393,31 @@ class SolidWorksMonitorService:
                             time.sleep(0.2)
                             
                         # Close children
-                        for title in child_titles:
+                        for doc_entry in child_files:
+                            title = doc_entry['title']
+                            path = doc_entry['path']
+                            uniq_ids = doc_entry['uniq_ids']
                             try:
-                                print(f"check_and_close_file (cleanup): closing child '{title}' via CloseDoc")
-                                sw.CloseDoc(title)
-                                closed_any = True
+                                print(f"check_and_close_file (cleanup): closing child '{title}' (path: '{path}')", flush=True)
+                                for identifier in uniq_ids:
+                                    try:
+                                        print(f"  Attempting CloseDoc('{identifier}')", flush=True)
+                                        res = sw.CloseDoc(identifier)
+                                        print(f"    CloseDoc Result: {res}", flush=True)
+                                        if res:
+                                            closed_any = True
+                                    except Exception as e_close:
+                                        print(f"    Warning: CloseDoc child '{identifier}' error: {e_close}", flush=True)
+                                    try:
+                                        print(f"  Attempting QuitDoc('{identifier}')", flush=True)
+                                        res = sw.QuitDoc(identifier)
+                                        print(f"    QuitDoc Result: {res}", flush=True)
+                                        closed_any = True
+                                    except Exception as e_quit:
+                                        print(f"    Warning: QuitDoc child '{identifier}' error: {e_quit}", flush=True)
                             except Exception:
                                 pass
                                 
-                        if not closed_any:
-                            break
                         time.sleep(0.2)
                         iteration += 1
                 except Exception as e_post:

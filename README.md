@@ -193,3 +193,17 @@ If unexpected popup windows from **SOLIDWORKS CAM** appear while running the EXP
 
 > [!NOTE]
 > You only need to do this once. After disabling SOLIDWORKS CAM, your setting is remembered by SolidWorks and will remain disabled on subsequent EXPORT runs.
+
+#### 4.4.4 Sub-components/Sub-assemblies inside an Opened Assembly Loading as 'Read-Only' in SolidWorks
+
+When opening an assembly (`.sldasm`) file using the **[Solidworks]** button in GIT4SW, the sub-assemblies (`.sldasm`) and part (`.sldprt`) files contained within the assembly may automatically open in **'Read-Only'** mode depending on SolidWorks system configurations.
+Under this state, any modifications made by the designer cannot be successfully saved to disk, which prevents GIT4SW from detecting modifications and performing a Check-in (upload).
+
+**Resolution**: Change the reference documents configuration in SolidWorks System Options:
+1. Open SolidWorks.
+2. Go to **Tools → Options...** (or click the Options gear icon).
+3. In the **System Options** tab, select **External References** from the left panel.
+4. Uncheck the **"Open referenced documents with read-only access"** checkbox.
+5. Click **OK** to save options and close SolidWorks.
+6. Re-open the assembly file; the referenced sub-components will now load with write-access enabled.
+

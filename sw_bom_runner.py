@@ -47,11 +47,13 @@ except ImportError:
 
 def connect_to_solidworks():
     swApp = None
+    was_already_running = False
     print("Connecting to SolidWorks...", flush=True)
     try:
         raw_obj = win32com.client.GetActiveObject("SldWorks.Application")
         swApp = get_dynamic_sw_app(raw_obj)
         print("Connected to active SolidWorks instance.", flush=True)
+        was_already_running = True
     except Exception:
         pass
         
@@ -77,10 +79,11 @@ def connect_to_solidworks():
             raw_obj = win32com.client.GetObject(Class="SldWorks.Application")
             swApp = get_dynamic_sw_app(raw_obj)
             print("Connected to SolidWorks via GetObject.", flush=True)
+            was_already_running = True
         except Exception as e:
             print(f"Failed to connect to SolidWorks: {e}", file=sys.stderr, flush=True)
             
-    return swApp
+    return swApp, was_already_running
 
 def save_dataframe_to_excel_with_autowidth(df, filepath):
     print(f"Saving to Excel: {filepath}", flush=True)
@@ -123,6 +126,8 @@ def main():
     parser = argparse.ArgumentParser(description="SolidWorks Assembly BOM Extractor")
     parser.add_argument("assembly_path", help="Absolute path to the .sldasm file")
     parser.add_argument("--config", help="Specific configuration name to activate", default=None)
+    parser.add_argument("--was-running", choices=["true", "false"], default=None, help="Whether SolidWorks was already running before the task started")
+    parser.add_argument("--open-before", help="Comma-separated absolute paths of documents open before the BOM button was clicked", default=None)
     args = parser.parse_args()
 
     assembly_file_path = os.path.abspath(args.assembly_path)
@@ -132,14 +137,48 @@ def main():
 
     pythoncom.CoInitialize()
 
-    swApp = connect_to_solidworks()
+    swApp, detected_running = connect_to_solidworks()
     if not swApp:
         print("Error: Could not connect to or start SolidWorks.", file=sys.stderr, flush=True)
         sys.exit(1)
 
+    if args.was_running is not None:
+        was_already_running = (args.was_running == "true")
+    else:
+        was_already_running = detected_running
+
     model = None
     all_bom_rows = []
+    already_open_paths = set()
     try:
+        if args.open_before:
+            # Populate already_open_paths from the passed arguments
+            for path_str in args.open_before.split(','):
+                path_str_clean = path_str.strip()
+                if path_str_clean:
+                    already_open_paths.add(os.path.normpath(path_str_clean).lower())
+        else:
+            # Get list of already open documents before opening our target assembly
+            try:
+                val_docs = getattr(swApp, 'GetDocuments', None)
+                open_docs_before = val_docs() if callable(val_docs) else val_docs
+                if open_docs_before:
+                    for d in open_docs_before:
+                        try:
+                            p_val = getattr(d, 'GetPathName', None)
+                            p = p_val() if callable(p_val) else p_val
+                            if p:
+                                already_open_paths.add(os.path.normpath(p).lower())
+                            else:
+                                t_val = getattr(d, 'GetTitle', None)
+                                t = t_val() if callable(t_val) else t_val
+                                if t:
+                                    already_open_paths.add(t.lower())
+                        except:
+                            pass
+            except Exception as doc_err:
+                print(f"Warning: Failed to get initial open documents: {doc_err}", flush=True)
+
         # Load SolidWorks early-bound typelibs
         load_sw_typelib()
 
@@ -444,8 +483,12 @@ def main():
         os.makedirs(bom_dir, exist_ok=True)
 
         base_name = os.path.splitext(os.path.basename(assembly_file_path))[0]
-        bom_file_path = os.path.join(bom_dir, f"{base_name}__BOM.xlsx")
-        pl_file_path = os.path.join(bom_dir, f"{base_name}__PL.xlsx")
+        if args.config:
+            bom_file_path = os.path.join(bom_dir, f"{base_name}__{args.config}__BOM.xlsx")
+            pl_file_path = os.path.join(bom_dir, f"{base_name}__{args.config}__PL.xlsx")
+        else:
+            bom_file_path = os.path.join(bom_dir, f"{base_name}__BOM.xlsx")
+            pl_file_path = os.path.join(bom_dir, f"{base_name}__PL.xlsx")
 
         # Save files
         save_dataframe_to_excel_with_autowidth(df_bom, bom_file_path)
@@ -459,20 +502,25 @@ def main():
         sys.exit(1)
 
     finally:
-        # Close document and release COM references cleanly to prevent lock hangs
+        # Release COM references first to allow SolidWorks to release document locks
+        model = None
+        root_comp = None
+        config = None
+        gc.collect()
         try:
-            # Gather all referenced paths + main assembly path to close them all
-            paths_to_close = {os.path.normpath(assembly_file_path).lower()}
-            if all_bom_rows:
-                for row in all_bom_rows:
-                    if 'File Path' in row and row['File Path']:
-                        paths_to_close.add(os.path.normpath(row['File Path']).lower())
+            pythoncom.CoCollectFreeUnusedLibraries()
+        except:
+            pass
 
-            print(f"Closing {len(paths_to_close)} referenced documents in SolidWorks...", flush=True)
+        # Close documents cleanly
+        try:
+            print(f"Closing documents opened during BOM extraction in SolidWorks...", flush=True)
 
-            # Close referenced files in multiple iterations to resolve dependency locks
-            # Assemblies must be closed before the parts they reference can be successfully closed.
-            for iteration in range(5):
+            # Close referenced/newly opened files in multiple iterations to resolve dependency locks
+            # Assemblies/Drawings must be closed before the parts they reference can be successfully closed.
+            last_doc_count = -1
+            stuck_count = 0
+            for iteration in range(15):
                 docs_left = None
                 try:
                     val = getattr(swApp, 'GetDocuments')
@@ -484,7 +532,18 @@ def main():
                 if not docs_left:
                     break
 
-                closed_any = False
+                current_count = len(docs_left)
+                if current_count == last_doc_count:
+                    stuck_count += 1
+                    if stuck_count > 3:
+                        print(f"BOM cleanup: detected stuck document count ({current_count} docs), breaking to prevent infinite loop.", flush=True)
+                        break
+                else:
+                    stuck_count = 0
+                last_doc_count = current_count
+
+                parent_files = []  # list of dict
+                child_files = []   # list of dict
                 for d in docs_left:
                     try:
                         # Get path name
@@ -497,33 +556,171 @@ def main():
                             path = title
 
                         norm_path = os.path.normpath(path).lower()
-                        if norm_path in paths_to_close:
-                            title_val = d.GetTitle
-                            title = title_val() if callable(title_val) else title_val
-                            
-                            # Clean up reference to current doc to avoid COM lock
-                            d = None
-                            gc.collect()
+                        title_val = d.GetTitle
+                        title = title_val() if callable(title_val) else title_val
+                        
+                        # Check visibility
+                        is_visible = True
+                        try:
+                            is_visible = d.Visible
+                        except:
                             try:
-                                pythoncom.CoCollectFreeUnusedLibraries()
+                                is_visible = getattr(d, 'Visible')
                             except:
                                 pass
+                                
+                        # Close only documents that were NOT already open before starting the script,
+                        # but always close invisible referenced/background documents to release locks.
+                        is_newly_opened = (norm_path not in already_open_paths) and (title.lower() not in already_open_paths)
+                        if is_newly_opened or not is_visible:
+                            try:
+                                dtype = d.GetType()
+                            except:
+                                dtype = getattr(d, 'GetType')
+                                if callable(dtype):
+                                    dtype = dtype()
+                            path_lower = (path or "").lower()
+                            title_lower = (title or "").lower()
+                            is_parent = (dtype in (2, 3) or 
+                                         path_lower.endswith(".sldasm") or 
+                                         path_lower.endswith(".slddrw") or
+                                         title_lower.endswith(".sldasm") or
+                                         title_lower.endswith(".slddrw"))
                             
-                            print(f"Closing referenced document: {title}", flush=True)
-                            swApp.CloseDoc(title)
-                            closed_any = True
-                    except Exception as e_close_doc:
-                        print(f"Warning: Failed to close document item: {e_close_doc}", flush=True)
-                
-                if not closed_any:
+                            # Generate unique closing identifiers
+                            ids = []
+                            if path:
+                                ids.append(path)
+                                ids.append(os.path.normpath(path))
+                                base = os.path.basename(path)
+                                if base:
+                                    ids.append(base)
+                                    base_no_ext = os.path.splitext(base)[0]
+                                    if base_no_ext:
+                                        ids.append(base_no_ext)
+                            if title:
+                                ids.append(title)
+                                title_no_ext = os.path.splitext(title)[0]
+                                if title_no_ext:
+                                    ids.append(title_no_ext)
+                            
+                            uniq_ids = []
+                            for iid in ids:
+                                if iid and isinstance(iid, str):
+                                    iid_s = iid.strip()
+                                    if iid_s and iid_s not in uniq_ids:
+                                        uniq_ids.append(iid_s)
+                                        
+                            doc_entry = {
+                                'title': title,
+                                'path': path,
+                                'uniq_ids': uniq_ids
+                            }
+                            if is_parent:
+                                parent_files.append(doc_entry)
+                            else:
+                                child_files.append(doc_entry)
+                    except Exception as e_inspect:
+                        print(f"Warning: Failed to inspect document for cleanup: {e_inspect}", flush=True)
+
+                # Clear COM references to docs_left before closing to avoid lock
+                docs_left = None
+                d = None
+                gc.collect()
+                try:
+                    pythoncom.CoCollectFreeUnusedLibraries()
+                except:
+                    pass
+
+                if not parent_files and not child_files:
                     break
+
+                closed_any = False
+                # Close parents first to release references on children
+                for doc_entry in parent_files:
+                    title = doc_entry['title']
+                    path = doc_entry['path']
+                    uniq_ids = doc_entry['uniq_ids']
+                    print(f"Closing newly opened/referenced parent document: {title} (path: {path})", flush=True)
+                    for identifier in uniq_ids:
+                        try:
+                            print(f"  Attempting CloseDoc('{identifier}')", flush=True)
+                            res = swApp.CloseDoc(identifier)
+                            print(f"    CloseDoc Result: {res}", flush=True)
+                            if res:
+                                closed_any = True
+                        except Exception as e_close_parent:
+                            print(f"    Warning: Failed to CloseDoc parent '{identifier}': {e_close_parent}", flush=True)
+                        try:
+                            print(f"  Attempting QuitDoc('{identifier}')", flush=True)
+                            res = swApp.QuitDoc(identifier)
+                            print(f"    QuitDoc Result: {res}", flush=True)
+                            closed_any = True
+                        except Exception as e_quit_parent:
+                            print(f"    Warning: Failed to QuitDoc parent '{identifier}': {e_quit_parent}", flush=True)
+
+                if closed_any:
+                    time.sleep(0.2)
+
+                # Close children second
+                for doc_entry in child_files:
+                    title = doc_entry['title']
+                    path = doc_entry['path']
+                    uniq_ids = doc_entry['uniq_ids']
+                    print(f"Closing newly opened/referenced child document: {title} (path: {path})", flush=True)
+                    for identifier in uniq_ids:
+                        try:
+                            print(f"  Attempting CloseDoc('{identifier}')", flush=True)
+                            res = swApp.CloseDoc(identifier)
+                            print(f"    CloseDoc Result: {res}", flush=True)
+                            if res:
+                                closed_any = True
+                        except Exception as e_close_child:
+                            print(f"    Warning: Failed to CloseDoc child '{identifier}': {e_close_child}", flush=True)
+                        try:
+                            print(f"  Attempting QuitDoc('{identifier}')", flush=True)
+                            res = swApp.QuitDoc(identifier)
+                            print(f"    QuitDoc Result: {res}", flush=True)
+                            closed_any = True
+                        except Exception as e_quit_child:
+                            print(f"    Warning: Failed to QuitDoc child '{identifier}': {e_quit_child}", flush=True)
+
+                time.sleep(0.2)
         except Exception as e_close_all:
             print(f"Warning: Error during referenced docs cleanup: {e_close_all}", file=sys.stderr, flush=True)
 
-        model = None
-        root_comp = None
-        config = None
+        # Close SolidWorks if we launched it and it wasn't already running before the script started
+        if swApp:
+            if not was_already_running:
+                import threading
+                def exit_sw_async(app):
+                    try:
+                        print("Exiting SolidWorks (launched by BOM runner)...", flush=True)
+                        app.ExitApp()
+                    except Exception as exit_e:
+                        print(f"Warning: Error during swApp.ExitApp(): {exit_e}", flush=True)
+                        
+                try:
+                    t_exit = threading.Thread(target=exit_sw_async, args=(swApp,), daemon=True)
+                    t_exit.start()
+                    t_exit.join(timeout=5.0)
+                except Exception as t_err:
+                    print(f"Failed to start async ExitApp thread: {t_err}", flush=True)
+            else:
+                print("SolidWorks was already running before BOM extraction. Keeping SolidWorks open.", flush=True)
+
         gc.collect()
+        
+        # Force terminate SolidWorks processes if we started it and it is still alive
+        if not was_already_running:
+            try:
+                import subprocess
+                subprocess.run("taskkill /F /IM SLDWORKS.exe", shell=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                subprocess.run("taskkill /F /IM sldworks_fs.exe", shell=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                print("Forcefully terminated remaining SolidWorks processes spawned by BOM runner.", flush=True)
+            except Exception as kill_e:
+                print(f"Could not clean up SolidWorks processes: {kill_e}", flush=True)
+
         pythoncom.CoUninitialize()
 
 if __name__ == "__main__":

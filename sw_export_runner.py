@@ -188,6 +188,7 @@ def force_visible(swApp):
 def start_or_bind_solidworks():
     pythoncom.CoInitialize()
     swApp = None
+    was_already_running = False
     
     # 1. Try to connect to an existing active instance first
     print("Attempting to connect to active SolidWorks instance via GetActiveObject...", flush=True)
@@ -195,6 +196,7 @@ def start_or_bind_solidworks():
         raw_obj = win32com.client.GetActiveObject("SldWorks.Application")
         swApp = get_dynamic_sw_app(raw_obj)
         print("Successfully bound to active SolidWorks instance.", flush=True)
+        was_already_running = True
     except Exception as e_active:
         pass
         
@@ -228,12 +230,13 @@ def start_or_bind_solidworks():
             raw_obj = win32com.client.GetObject(Class="SldWorks.Application")
             swApp = get_dynamic_sw_app(raw_obj)
             print("Successfully bound to SolidWorks instance via GetObject.", flush=True)
+            was_already_running = True
         except Exception as e_get:
             print(f"Failed to start or bind SolidWorks instance: {e_get}", flush=True)
             
-    return swApp
+    return swApp, was_already_running
 
-def close_all_documents_without_saving(swApp):
+def close_all_documents_without_saving(swApp, already_open_paths=None):
     print("close_all_documents_without_saving: start", flush=True)
     if not swApp:
         print("close_all_documents_without_saving: swApp is None", flush=True)
@@ -278,8 +281,8 @@ def close_all_documents_without_saving(swApp):
                 stuck_count = 0
             last_doc_count = current_count
             
-            parent_titles = []  # list of (title, path)
-            child_titles = []   # list of (title, path)
+            parent_files = []  # list of dict
+            child_files = []   # list of dict
             
             for d in docs_left:
                 try:
@@ -307,6 +310,24 @@ def close_all_documents_without_saving(swApp):
                     if not title:
                         continue
                         
+                    # Check visibility
+                    is_visible = True
+                    try:
+                        is_visible = d.Visible
+                    except:
+                        try:
+                            is_visible = getattr(d, 'Visible')
+                        except:
+                            pass
+                            
+                    # If already_open_paths is provided, skip closing files that were already open,
+                    # but only if they are visible (meaning the user is actively working on them in the UI).
+                    if already_open_paths and is_visible:
+                        norm_path = os.path.normpath(path or title).lower()
+                        title_lower = (title or "").lower()
+                        if norm_path in already_open_paths or title_lower in already_open_paths:
+                            continue
+                            
                     try:
                         dtype = d.GetType()
                     except Exception:
@@ -324,10 +345,39 @@ def close_all_documents_without_saving(swApp):
                                  title_lower.endswith(".sldasm") or
                                  title_lower.endswith(".slddrw"))
                                  
+                    # Generate unique closing identifiers
+                    ids = []
+                    if path:
+                        ids.append(path)
+                        ids.append(os.path.normpath(path))
+                        base = os.path.basename(path)
+                        if base:
+                            ids.append(base)
+                            base_no_ext = os.path.splitext(base)[0]
+                            if base_no_ext:
+                                ids.append(base_no_ext)
+                    if title:
+                        ids.append(title)
+                        title_no_ext = os.path.splitext(title)[0]
+                        if title_no_ext:
+                            ids.append(title_no_ext)
+                    
+                    uniq_ids = []
+                    for iid in ids:
+                        if iid and isinstance(iid, str):
+                            iid_s = iid.strip()
+                            if iid_s and iid_s not in uniq_ids:
+                                uniq_ids.append(iid_s)
+                                
+                    doc_entry = {
+                        'title': title,
+                        'path': path,
+                        'uniq_ids': uniq_ids
+                    }
                     if is_parent:
-                        parent_titles.append((title, path or title))
+                        parent_files.append(doc_entry)
                     else:
-                        child_titles.append((title, path or title))
+                        child_files.append(doc_entry)
                 except Exception as doc_err:
                     print(f"Error inspecting document: {doc_err}", flush=True)
             
@@ -343,11 +393,28 @@ def close_all_documents_without_saving(swApp):
             
             closed_any = False
             # Close parents first to break references
-            for title, path in parent_titles:
+            for doc_entry in parent_files:
+                title = doc_entry['title']
+                path = doc_entry['path']
+                uniq_ids = doc_entry['uniq_ids']
                 try:
-                    print(f"close_all_documents_without_saving: closing parent '{title}' (path: '{path}') via CloseDoc", flush=True)
-                    swApp.CloseDoc(title)
-                    closed_any = True
+                    print(f"close_all_documents_without_saving: closing parent '{title}' (path: '{path}')", flush=True)
+                    for identifier in uniq_ids:
+                        try:
+                            print(f"  Attempting CloseDoc('{identifier}')", flush=True)
+                            res = swApp.CloseDoc(identifier)
+                            print(f"    CloseDoc Result: {res}", flush=True)
+                            if res:
+                                closed_any = True
+                        except Exception as e_close:
+                            print(f"    Warning: CloseDoc parent '{identifier}' error: {e_close}", flush=True)
+                        try:
+                            print(f"  Attempting QuitDoc('{identifier}')", flush=True)
+                            res = swApp.QuitDoc(identifier)
+                            print(f"    QuitDoc Result: {res}", flush=True)
+                            closed_any = True
+                        except Exception as e_quit:
+                            print(f"    Warning: QuitDoc parent '{identifier}' error: {e_quit}", flush=True)
                 except Exception as e:
                     print(f"Error closing parent {title}: {e}", flush=True)
                     
@@ -355,11 +422,28 @@ def close_all_documents_without_saving(swApp):
                 time.sleep(0.2)
                 
             # Close children second
-            for title, path in child_titles:
+            for doc_entry in child_files:
+                title = doc_entry['title']
+                path = doc_entry['path']
+                uniq_ids = doc_entry['uniq_ids']
                 try:
-                    print(f"close_all_documents_without_saving: closing child '{title}' (path: '{path}') via CloseDoc", flush=True)
-                    swApp.CloseDoc(title)
-                    closed_any = True
+                    print(f"close_all_documents_without_saving: closing child '{title}' (path: '{path}')", flush=True)
+                    for identifier in uniq_ids:
+                        try:
+                            print(f"  Attempting CloseDoc('{identifier}')", flush=True)
+                            res = swApp.CloseDoc(identifier)
+                            print(f"    CloseDoc Result: {res}", flush=True)
+                            if res:
+                                closed_any = True
+                        except Exception as e_close:
+                            print(f"    Warning: CloseDoc child '{identifier}' error: {e_close}", flush=True)
+                        try:
+                            print(f"  Attempting QuitDoc('{identifier}')", flush=True)
+                            res = swApp.QuitDoc(identifier)
+                            print(f"    QuitDoc Result: {res}", flush=True)
+                            closed_any = True
+                        except Exception as e_quit:
+                            print(f"    Warning: QuitDoc child '{identifier}' error: {e_quit}", flush=True)
                 except Exception as e:
                     print(f"Error closing child {title}: {e}", flush=True)
                     
@@ -377,16 +461,37 @@ def close_all_documents_without_saving(swApp):
             print(f"close_all_documents_without_saving: Failed to restore UserControl: {uc_err}", flush=True)
     print("close_all_documents_without_saving: end", flush=True)
 
-def run_single_export(file_abs, target_formats, output_dir, workspace_path):
+def run_single_export(file_abs, target_formats, output_dir, workspace_path, every_configurations=True):
     if not WIN32_AVAILABLE:
         print("Error: PyWin32 is not installed or not running on Windows.")
         sys.exit(1)
         
     pythoncom.CoInitialize()
-    swApp = start_or_bind_solidworks()
+    swApp, was_running = start_or_bind_solidworks()
     if swApp is None:
         print("Failed to bind to active SolidWorks instance for single export.")
         sys.exit(1)
+        
+    already_open_paths = set()
+    try:
+        val_docs = getattr(swApp, 'GetDocuments', None)
+        open_docs_before = val_docs() if callable(val_docs) else val_docs
+        if open_docs_before:
+            for d in open_docs_before:
+                try:
+                    p_val = getattr(d, 'GetPathName', None)
+                    p = p_val() if callable(p_val) else p_val
+                    if p:
+                        already_open_paths.add(os.path.normpath(p).lower())
+                    else:
+                        t_val = getattr(d, 'GetTitle', None)
+                        t = t_val() if callable(t_val) else t_val
+                        if t:
+                            already_open_paths.add(t.lower())
+                except:
+                    pass
+    except Exception as doc_err:
+        print(f"Warning: Failed to get initial open documents: {doc_err}", flush=True)
         
     model = None
     try:
@@ -465,16 +570,40 @@ def run_single_export(file_abs, target_formats, output_dir, workspace_path):
             
             if do_step_asm:
                 configs_to_process = [None]
+                active_cfg_name = None
                 try:
-                    conf_val = model.GetConfigurationNames
-                    if callable(conf_val):
-                        config_names = conf_val()
-                    else:
-                        config_names = conf_val
-                    if config_names and len(config_names) >= 2:
-                        configs_to_process = config_names
-                except Exception as conf_err:
-                    print(f"Failed to get configuration names for sldasm: {conf_err}")
+                    cfg_mgr = getattr(model, 'ConfigurationManager', None)
+                    if cfg_mgr:
+                        active_cfg = getattr(cfg_mgr, 'ActiveConfiguration', None)
+                        if active_cfg:
+                            active_cfg_name = active_cfg.Name
+                except:
+                    pass
+                if not active_cfg_name:
+                    try:
+                        act_cfg_val = getattr(model, 'GetActiveConfiguration', None)
+                        active_cfg = act_cfg_val() if callable(act_cfg_val) else act_cfg_val
+                        if active_cfg:
+                            active_cfg_name = active_cfg.Name
+                    except:
+                        pass
+                        
+                if every_configurations:
+                    try:
+                        conf_val = model.GetConfigurationNames
+                        if callable(conf_val):
+                            config_names = conf_val()
+                        else:
+                            config_names = conf_val
+                        if config_names and len(config_names) >= 2:
+                            configs_to_process = config_names
+                        else:
+                            configs_to_process = [active_cfg_name] if active_cfg_name else [None]
+                    except Exception as conf_err:
+                        print(f"Failed to get configuration names for sldasm: {conf_err}")
+                        configs_to_process = [active_cfg_name] if active_cfg_name else [None]
+                else:
+                    configs_to_process = [active_cfg_name] if active_cfg_name else [None]
                 
                 orig_step_ap = None
                 orig_step_appearances = None
@@ -580,16 +709,40 @@ def run_single_export(file_abs, target_formats, output_dir, workspace_path):
                 # Determine configurations list to iterate
                 configs_to_process = [None]
                 if active_fmt == "STEP":
+                    active_cfg_name = None
                     try:
-                        conf_val = model.GetConfigurationNames
-                        if callable(conf_val):
-                            config_names = conf_val()
-                        else:
-                            config_names = conf_val
-                        if config_names and len(config_names) >= 2:
-                            configs_to_process = config_names
-                    except Exception as conf_err:
-                        print(f"Failed to get configuration names: {conf_err}")
+                        cfg_mgr = getattr(model, 'ConfigurationManager', None)
+                        if cfg_mgr:
+                            active_cfg = getattr(cfg_mgr, 'ActiveConfiguration', None)
+                            if active_cfg:
+                                active_cfg_name = active_cfg.Name
+                    except:
+                        pass
+                    if not active_cfg_name:
+                        try:
+                            act_cfg_val = getattr(model, 'GetActiveConfiguration', None)
+                            active_cfg = act_cfg_val() if callable(act_cfg_val) else act_cfg_val
+                            if active_cfg:
+                                active_cfg_name = active_cfg.Name
+                        except:
+                            pass
+                            
+                    if every_configurations:
+                        try:
+                            conf_val = model.GetConfigurationNames
+                            if callable(conf_val):
+                                config_names = conf_val()
+                            else:
+                                config_names = conf_val
+                            if config_names and len(config_names) >= 2:
+                                configs_to_process = config_names
+                            else:
+                                configs_to_process = [active_cfg_name] if active_cfg_name else [None]
+                        except Exception as conf_err:
+                            print(f"Failed to get configuration names: {conf_err}")
+                            configs_to_process = [active_cfg_name] if active_cfg_name else [None]
+                    else:
+                        configs_to_process = [active_cfg_name] if active_cfg_name else [None]
                         
                 for config_name in configs_to_process:
                     if config_name:
@@ -669,26 +822,65 @@ def run_single_export(file_abs, target_formats, output_dir, workspace_path):
                 except:
                     pass
                     
-                print(f"Closing main document: '{title_to_close}' (path: '{file_abs}') via CloseDoc", flush=True)
-                orig_uc = True
-                try:
-                    orig_uc = swApp.UserControl
-                    swApp.UserControl = False
-                except:
-                    pass
+                norm_file_abs = os.path.normpath(file_abs).lower()
+                is_main_newly_opened = (norm_file_abs not in already_open_paths) and (title_to_close.lower() not in already_open_paths)
                 
-                try:
-                    swApp.CloseDoc(title_to_close)
-                finally:
+                if is_main_newly_opened:
+                    print(f"Closing main document: '{title_to_close}' (path: '{file_abs}') via CloseDoc/QuitDoc", flush=True)
+                    orig_uc = True
                     try:
-                        swApp.UserControl = orig_uc
+                        orig_uc = swApp.UserControl
+                        swApp.UserControl = False
                     except:
                         pass
+                    
+                    try:
+                        main_ids = []
+                        if file_abs:
+                            main_ids.append(file_abs)
+                            main_ids.append(os.path.normpath(file_abs))
+                            base = os.path.basename(file_abs)
+                            if base:
+                                main_ids.append(base)
+                                base_no_ext = os.path.splitext(base)[0]
+                                if base_no_ext:
+                                    main_ids.append(base_no_ext)
+                        if title_to_close:
+                            main_ids.append(title_to_close)
+                            title_no_ext = os.path.splitext(title_to_close)[0]
+                            if title_no_ext:
+                                main_ids.append(title_no_ext)
+                                
+                        uniq_main_ids = []
+                        for iid in main_ids:
+                            if iid and isinstance(iid, str):
+                                iid_s = iid.strip()
+                                if iid_s and iid_s not in uniq_main_ids:
+                                    uniq_main_ids.append(iid_s)
+                                    
+                        for identifier in uniq_main_ids:
+                            try:
+                                print(f"  Attempting CloseDoc('{identifier}') for main doc", flush=True)
+                                swApp.CloseDoc(identifier)
+                            except:
+                                pass
+                            try:
+                                print(f"  Attempting QuitDoc('{identifier}') for main doc", flush=True)
+                                swApp.QuitDoc(identifier)
+                            except:
+                                pass
+                    finally:
+                        try:
+                            swApp.UserControl = orig_uc
+                        except:
+                            pass
+                else:
+                    print(f"Main document '{title_to_close}' was already open before export. Keeping it open.", flush=True)
             except Exception as e_close_main:
                 print(f"Warning: Failed to close main document '{file_abs}': {e_close_main}", flush=True)
 
         # Final cleanup for any remaining documents (skeletons, assemblies, etc.)
-        close_all_documents_without_saving(swApp)
+        close_all_documents_without_saving(swApp, already_open_paths)
         
     except Exception as file_e:
         print(f"Error processing {file_abs}: {repr(file_e)}")
@@ -719,22 +911,57 @@ def run_single_export(file_abs, target_formats, output_dir, workspace_path):
                     except:
                         pass
                         
-                    orig_uc = True
-                    try:
-                        orig_uc = swApp.UserControl
-                        swApp.UserControl = False
-                    except:
-                        pass
-                    try:
-                        swApp.CloseDoc(title_to_close)
-                    finally:
+                    norm_file_abs = os.path.normpath(file_abs).lower()
+                    is_main_newly_opened = (norm_file_abs not in already_open_paths) and (title_to_close.lower() not in already_open_paths)
+                    
+                    if is_main_newly_opened:
+                        orig_uc = True
                         try:
-                            swApp.UserControl = orig_uc
+                            orig_uc = swApp.UserControl
+                            swApp.UserControl = False
                         except:
                             pass
+                        try:
+                            main_ids = []
+                            if file_abs:
+                                main_ids.append(file_abs)
+                                main_ids.append(os.path.normpath(file_abs))
+                                base = os.path.basename(file_abs)
+                                if base:
+                                    main_ids.append(base)
+                                    base_no_ext = os.path.splitext(base)[0]
+                                    if base_no_ext:
+                                        main_ids.append(base_no_ext)
+                            if title_to_close:
+                                main_ids.append(title_to_close)
+                                title_no_ext = os.path.splitext(title_to_close)[0]
+                                if title_no_ext:
+                                    main_ids.append(title_no_ext)
+                                    
+                            uniq_main_ids = []
+                            for iid in main_ids:
+                                if iid and isinstance(iid, str):
+                                    iid_s = iid.strip()
+                                    if iid_s and iid_s not in uniq_main_ids:
+                                        uniq_main_ids.append(iid_s)
+                                        
+                            for identifier in uniq_main_ids:
+                                try:
+                                    swApp.CloseDoc(identifier)
+                                except:
+                                    pass
+                                try:
+                                    swApp.QuitDoc(identifier)
+                                except:
+                                    pass
+                        finally:
+                            try:
+                                swApp.UserControl = orig_uc
+                            except:
+                                pass
                 except:
                     pass
-            close_all_documents_without_saving(swApp)
+            close_all_documents_without_saving(swApp, already_open_paths)
         sys.exit(1)
     finally:
         pythoncom.CoUninitialize()
@@ -752,6 +979,7 @@ def run_export(job_file):
     prefix = job.get("prefix", "")
     output_dir = job.get("output_dir", "2D")
     all_files = job.get("files", [])
+    every_configurations = job.get("every_configurations", True)
     
     # Normalize prefix (handle None or empty string or "*")
     if prefix is None or prefix.strip() == "" or prefix.strip() == "*":
@@ -795,17 +1023,39 @@ def run_export(job_file):
         sys.exit(1)
 
     has_errors = False
+    was_already_running = False
+    already_open_paths = set()
 
     # Initialize COM
     pythoncom.CoInitialize()
     
     # Connect to SolidWorks
     sw_pid = None
-    swApp = start_or_bind_solidworks()
+    swApp, was_already_running = start_or_bind_solidworks()
     if swApp is None:
         print("[ERROR] Failed to start or bind SolidWorks instance.", flush=True)
         pythoncom.CoUninitialize()
         sys.exit(1)
+
+    try:
+        val_docs = getattr(swApp, 'GetDocuments', None)
+        open_docs_before = val_docs() if callable(val_docs) else val_docs
+        if open_docs_before:
+            for d in open_docs_before:
+                try:
+                    p_val = getattr(d, 'GetPathName', None)
+                    p = p_val() if callable(p_val) else p_val
+                    if p:
+                        already_open_paths.add(os.path.normpath(p).lower())
+                    else:
+                        t_val = getattr(d, 'GetTitle', None)
+                        t = t_val() if callable(t_val) else t_val
+                        if t:
+                            already_open_paths.add(t.lower())
+                except:
+                    pass
+    except Exception as doc_err:
+        print(f"Warning: Failed to get initial open documents: {doc_err}", flush=True)
 
     # Apply configuration and preferences to the bound swApp instance (always executed)
     try:
@@ -892,7 +1142,7 @@ def run_export(job_file):
             env_vars["PYTHONIOENCODING"] = "utf-8"
             env_vars["SW_BATCH_EXPORT"] = "True"
             proc = subprocess.Popen(
-                [sys.executable, "-u", __file__, "--single", file_abs, ",".join(target_formats), output_dir, workspace_path],
+                [sys.executable, "-u", __file__, "--single", file_abs, ",".join(target_formats), output_dir, workspace_path, str(every_configurations)],
                 stdout=subprocess.PIPE,
                 stderr=subprocess.STDOUT,
                 text=True,
@@ -964,7 +1214,7 @@ def run_export(job_file):
                 
                 print("Launching a new SolidWorks instance to resume...", flush=True)
                 try:
-                    swApp = start_or_bind_solidworks()
+                    swApp, was_already_running = start_or_bind_solidworks()
                     if swApp:
                         force_visible(swApp)
                         try:
@@ -1021,36 +1271,42 @@ def run_export(job_file):
             pass
 
     finally:
-        # Close all open documents and exit SolidWorks
+        # Close all open documents and exit SolidWorks if we started it
         if swApp:
             try:
-                close_all_documents_without_saving(swApp)
+                close_all_documents_without_saving(swApp, already_open_paths)
             except Exception as close_err:
                 print(f"Error during final documents cleanup: {close_err}")
                 
-            def exit_sw_async(app):
+            if not was_already_running:
+                def exit_sw_async(app):
+                    try:
+                        app.ExitApp()
+                    except Exception as exit_e:
+                        print(f"Error during swApp.ExitApp(): {exit_e}")
+                        
                 try:
-                    app.ExitApp()
-                except Exception as exit_e:
-                    print(f"Error during swApp.ExitApp(): {exit_e}")
-                    
-            try:
-                t_exit = threading.Thread(target=exit_sw_async, args=(swApp,), daemon=True)
-                t_exit.start()
-                t_exit.join(timeout=5.0) # Wait up to 5.0 seconds for graceful ExitApp
-            except Exception as t_err:
-                print(f"Failed to start async ExitApp thread: {t_err}")
+                    t_exit = threading.Thread(target=exit_sw_async, args=(swApp,), daemon=True)
+                    t_exit.start()
+                    t_exit.join(timeout=5.0) # Wait up to 5.0 seconds for graceful ExitApp
+                except Exception as t_err:
+                    print(f"Failed to start async ExitApp thread: {t_err}")
+            else:
+                print("SolidWorks was already running before export. Skipping ExitApp.")
                 
-        # Clean up process if still alive
-        try:
-            import subprocess
-            if sw_pid:
-                subprocess.run(f"taskkill /F /PID {sw_pid}", shell=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-            subprocess.run("taskkill /F /IM SLDWORKS.exe", shell=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-            subprocess.run("taskkill /F /IM sldworks_fs.exe", shell=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-            print("Forcefully terminated all remaining SolidWorks processes to ensure clean exit.")
-        except Exception as kill_e:
-            print(f"Could not clean up SolidWorks processes: {kill_e}")
+        # Clean up process if still alive and we started it
+        if not was_already_running:
+            try:
+                import subprocess
+                if sw_pid:
+                    subprocess.run(f"taskkill /F /PID {sw_pid}", shell=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                subprocess.run("taskkill /F /IM SLDWORKS.exe", shell=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                subprocess.run("taskkill /F /IM sldworks_fs.exe", shell=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                print("Forcefully terminated all remaining SolidWorks processes to ensure clean exit.")
+            except Exception as kill_e:
+                print(f"Could not clean up SolidWorks processes: {kill_e}")
+        else:
+            print("SolidWorks was already running. Skipping process termination.")
                 
         pythoncom.CoUninitialize()
         
@@ -1078,7 +1334,9 @@ if __name__ == "__main__":
         target_formats = formats_str.split(",")
         if target_formats == [""]:
             target_formats = []
-        run_single_export(file_abs, target_formats, output_dir, workspace_path)
+        every_cfg_str = sys.argv[6] if len(sys.argv) > 6 else "True"
+        every_configurations = (every_cfg_str.lower() == "true")
+        run_single_export(file_abs, target_formats, output_dir, workspace_path, every_configurations)
     else:
         if len(sys.argv) < 2:
             print("Usage: python sw_export_runner.py <job_file_path>")

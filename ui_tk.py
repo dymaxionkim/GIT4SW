@@ -4679,29 +4679,80 @@ class GIT4SWApp(tk.Tk):
 
         full_path = os.path.join(self.workspace_path, filepath)
 
+        # Check if SolidWorks is running before we do anything (config query or BOM runner)
+        was_running_before = False
+        try:
+            import win32com.client
+            # SldWorks.Application is registered in ROT if SolidWorks is running
+            raw_obj = win32com.client.GetActiveObject("SldWorks.Application")
+            if raw_obj:
+                was_running_before = True
+        except:
+            pass
+        self.was_sw_running_before_bom = was_running_before
+
+        # Capture initially open files to pass to the BOM runner so it knows what to close
+        open_before_abs = []
+        for f in self.last_open_files:
+            open_before_abs.append(os.path.normpath(os.path.join(self.workspace_path, f)).lower())
+        self.sw_open_before_bom = ",".join(open_before_abs)
+
         # Connect to SolidWorks via a separate subprocess to avoid GUI thread COM apartment clashes
         config_names = []
         try:
             import json
             import sys
+            import subprocess
             
             target_path_fs = os.path.normpath(full_path).replace('\\', '/')
             
-            py_code = f"""
+            py_code = """
 import win32com.client
 import win32com.client.dynamic
 import pythoncom
 import json
 import sys
 import os
+import time
+
+def get_sw_app():
+    # Try active object
+    try:
+        raw_obj = win32com.client.GetActiveObject("SldWorks.Application")
+        return win32com.client.dynamic.Dispatch(raw_obj)
+    except:
+        pass
+    # Try GetObject
+    try:
+        raw_obj = win32com.client.GetObject(Class="SldWorks.Application")
+        return win32com.client.dynamic.Dispatch(raw_obj)
+    except:
+        pass
+    # Try launching
+    sldworks_exe = r"C:\\Program Files\\SOLIDWORKS Corp\\SOLIDWORKS\\sldworks.exe"
+    if os.path.exists(sldworks_exe):
+        import subprocess
+        subprocess.Popen([sldworks_exe])
+        poll_timeout = 20.0
+        poll_start = time.time()
+        while time.time() - poll_start < poll_timeout:
+            try:
+                raw_obj = win32com.client.GetActiveObject("SldWorks.Application")
+                return win32com.client.dynamic.Dispatch(raw_obj)
+            except:
+                time.sleep(1.0)
+    return None
 
 try:
     pythoncom.CoInitialize()
-    raw_obj = win32com.client.GetActiveObject("SldWorks.Application")
-    sw_app = win32com.client.dynamic.Dispatch(raw_obj)
-    
-    path = {repr(target_path_fs)}
+    sw_app = get_sw_app()
+    if not sw_app:
+        print(json.dumps([]))
+        sys.exit(0)
+        
+    path = __TARGET_PATH__
     config_names = []
+    already_open_paths = set()
     
     # 1. Try to check open documents first
     try:
@@ -4712,29 +4763,52 @@ try:
                 try:
                     path_val = getattr(d, 'GetPathName', None)
                     d_path = path_val() if callable(path_val) else path_val
+                    if d_path:
+                        already_open_paths.add(os.path.normpath(d_path).lower())
+                    else:
+                        t_val = getattr(d, 'GetTitle', None)
+                        t = t_val() if callable(t_val) else t_val
+                        if t:
+                            already_open_paths.add(t.lower())
+                            
                     if d_path and os.path.normpath(d_path).lower() == os.path.normpath(path).lower():
                         cfg_val = getattr(d, 'GetConfigurationNames', None)
                         cfg_list = cfg_val() if callable(cfg_val) else cfg_val
                         if cfg_list:
                             config_names = list(cfg_list)
-                            break
                 except:
                     pass
     except:
         pass
         
-    # 2. Fallback to app GetConfigurationNames
+    # 2. If not found in open docs, open silently and read-only to query
     if not config_names:
+        opened_temp = False
+        model = None
         try:
-            val_cfg = getattr(sw_app, 'GetConfigurationNames', None)
-            if val_cfg:
-                if callable(val_cfg):
-                    val = val_cfg(path)
-                else:
-                    val = val_cfg
-                if val:
-                    config_names = list(val)
-        except:
+            error = win32com.client.VARIANT(pythoncom.VT_BYREF | pythoncom.VT_I4, 0)
+            warning = win32com.client.VARIANT(pythoncom.VT_BYREF | pythoncom.VT_I4, 0)
+            # doc_type = 2 (swDocASSEMBLY), options = 1 | 2 (swOpenDocOptions_Silent | swOpenDocOptions_ReadOnly)
+            model = sw_app.OpenDoc6(path, 2, 1 | 2, "", error, warning)
+            if model:
+                opened_temp = True
+                cfg_val = getattr(model, 'GetConfigurationNames', None)
+                cfg_list = cfg_val() if callable(cfg_val) else cfg_val
+                if cfg_list:
+                    config_names = list(cfg_list)
+        except Exception as open_err:
+            pass
+        finally:
+            model = None
+            import gc
+            gc.collect()
+            try:
+                pythoncom.CoCollectFreeUnusedLibraries()
+            except:
+                pass
+                
+            # Keep the assembly and its components open so they remain loaded
+            # for the subsequent BOM extraction run.
             pass
             
     print(json.dumps(config_names))
@@ -4745,7 +4819,7 @@ finally:
         pythoncom.CoUninitialize()
     except:
         pass
-"""
+""".replace("__TARGET_PATH__", repr(target_path_fs))
             # Run the query using the current python interpreter without opening a shell window
             creation_flags = 0
             if sys.platform == 'win32':
@@ -4756,7 +4830,7 @@ finally:
                 capture_output=True,
                 text=True,
                 creationflags=creation_flags,
-                timeout=5.0
+                timeout=30.0
             )
             
             if res.returncode == 0:
@@ -4834,6 +4908,11 @@ finally:
                 cmd = [sys.executable, "-u", runner_path, full_path]
                 if config_name:
                     cmd.extend(["--config", config_name])
+                if hasattr(self, 'was_sw_running_before_bom'):
+                    running_str = "true" if self.was_sw_running_before_bom else "false"
+                    cmd.extend(["--was-running", running_str])
+                if hasattr(self, 'sw_open_before_bom') and self.sw_open_before_bom:
+                    cmd.extend(["--open-before", self.sw_open_before_bom])
                 
                 proc = subprocess.Popen(
                     cmd,
@@ -4861,7 +4940,8 @@ finally:
                 
                 if returncode == 0:
                     base_name = os.path.splitext(os.path.basename(filepath))[0]
-                    self.task_queue.put(('success', f"✅ BOM Tree and Partlist successfully saved for '{base_name}' in 2D/BOM/ folder.", None))
+                    config_suffix = f"__{config_name}" if config_name else ""
+                    self.task_queue.put(('success', f"✅ BOM Tree and Partlist successfully saved for '{base_name}{config_suffix}' in 2D/BOM/ folder.", None))
                 else:
                     self.task_queue.put(('error', f"❌ BOM extraction failed with exit code {returncode}.", None))
             except Exception as e:
@@ -4877,7 +4957,7 @@ finally:
         # Create toplevel popup
         pop = tk.Toplevel(self)
         pop.title("Solidworks EXPORT")
-        pop.geometry("420x390")
+        pop.geometry("420x460")
         pop.resizable(False, False)
         
         # Apply window background color matching main GUI
@@ -4908,6 +4988,17 @@ finally:
         
         cb_step_asm = tk.Checkbutton(lf, text="STEP_ASM (.sldasm)", variable=step_asm_var, bg="#f3f4f6", activebackground="#f3f4f6", selectcolor="#ffffff", fg="#1f2937", font="TkDefaultFont")
         cb_step_asm.pack(anchor="w", padx=15, pady=2)
+        
+        # Configuration Option Frame
+        cfg_lf = tk.LabelFrame(pop, text="Configuration Option", bg="#f3f4f6", fg="#059669", font="TkDefaultFont", relief="groove")
+        cfg_lf.pack(fill="x", padx=20, pady=(5, 5))
+        
+        every_cfg_var = tk.BooleanVar(value=True)
+        rb_every = tk.Radiobutton(cfg_lf, text="Every Configurations (All)", variable=every_cfg_var, value=True, bg="#f3f4f6", activebackground="#f3f4f6", selectcolor="#ffffff", fg="#1f2937", font="TkDefaultFont")
+        rb_every.pack(anchor="w", padx=15, pady=2)
+        
+        rb_active = tk.Radiobutton(cfg_lf, text="Active Configuration Only", variable=every_cfg_var, value=False, bg="#f3f4f6", activebackground="#f3f4f6", selectcolor="#ffffff", fg="#1f2937", font="TkDefaultFont")
+        rb_active.pack(anchor="w", padx=15, pady=2)
         
         # Input Frame
         input_frm = ttk.Frame(pop, style="TFrame")
@@ -5014,6 +5105,7 @@ finally:
                 "formats": formats,
                 "prefix": prefix_val,
                 "output_dir": out_dir_val,
+                "every_configurations": every_cfg_var.get(),
                 "files": filtered_files
             }
             
