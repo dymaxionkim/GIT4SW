@@ -560,8 +560,20 @@ class FileCommitHistoryDialog(tk.Toplevel):
                 error = win32com.client.VARIANT(pythoncom.VT_BYREF | pythoncom.VT_I4, 0)
                 warning = win32com.client.VARIANT(pythoncom.VT_BYREF | pythoncom.VT_I4, 0)
                 
-                # Open read-only (2) and auto-resolve missing references (128)
-                model = sw_app.OpenDoc6(file_path, doc_type, 2 | 128, "", error, warning)
+                # Use robust open options based on document type
+                # 1 = Silent, 2 = ReadOnly, 128 = AutoMissingComponentResolve
+                # 32 = LoadModel (required for drawings/assemblies to resolve geometry)
+                # 64 = IgnoreActivation (for parts, prevents parent assembly auto-loading)
+                if doc_type == 3:  # swDocDRAWING
+                    open_options = 1 | 32 | 2 | 128
+                elif doc_type == 1:  # swDocPART
+                    open_options = 1 | 64 | 2 | 128
+                elif doc_type == 2:  # swDocASSEMBLY
+                    open_options = 1 | 32 | 2 | 128
+                else:
+                    open_options = 2 | 128
+                
+                model = sw_app.OpenDoc6(file_path, doc_type, open_options, "", error, warning)
                 if not model:
                     raise RuntimeError(f"Failed to open document in SOLIDWORKS: {os.path.basename(file_path)} (Error: {error.value})")
                 
@@ -645,16 +657,40 @@ class FileCommitHistoryDialog(tk.Toplevel):
                     
                 # Save both as PDF
                 print("Saving drawing versions as PDF...", flush=True)
-                model_theirs.SaveAs3(theirs_pdf_path, 0, 9) # 9 = Silent + Avoid Save dialogs
-                model_ours.SaveAs3(ours_pdf_path, 0, 9)
+                
+                # Activate theirs first and save
+                print("Activating reference drawing...", flush=True)
+                error_act = win32com.client.VARIANT(pythoncom.VT_BYREF | pythoncom.VT_I4, 0)
+                sw_app.ActivateDoc3(os.path.basename(theirs_temp_path), False, 2, error_act)
+                time.sleep(1)
+                print("Saving reference drawing to PDF...", flush=True)
+                res_theirs = model_theirs.SaveAs3(theirs_pdf_path, 0, 9)
+                time.sleep(2)
+                
+                # Activate ours and save
+                print("Activating modified drawing...", flush=True)
+                sw_app.ActivateDoc3(os.path.basename(ours_temp_path), False, 2, error_act)
+                time.sleep(1)
+                print("Saving modified drawing to PDF...", flush=True)
+                res_ours = model_ours.SaveAs3(ours_pdf_path, 0, 9)
+                time.sleep(2)
+                
+                # Release COM references before closing to prevent locks
+                model_theirs = None
+                model_ours = None
                 
                 # Close documents immediately to release files
                 for model in opened_docs:
                     try:
                         title = model.GetTitle()
+                        print(f"Closing drawing: {title}", flush=True)
+                        model = None
+                        import gc
+                        gc.collect()
+                        pythoncom.CoCollectFreeUnusedLibraries()
                         sw_app.CloseDoc(title)
-                    except Exception:
-                        pass
+                    except Exception as close_err:
+                        print(f"Failed to close doc {title}: {close_err}", flush=True)
                 opened_docs.clear()
                 
                 # Verify PDF creation
