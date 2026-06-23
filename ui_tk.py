@@ -598,7 +598,7 @@ class FileCommitHistoryDialog(tk.Toplevel):
                 )
                 
             sw_app.Visible = True  # Ensure visible
-            
+
             # Document Type mapping
             if ext_lower == ".sldprt":
                 doc_type = 1  # swDocPART
@@ -608,8 +608,28 @@ class FileCommitHistoryDialog(tk.Toplevel):
                 doc_type = 3  # swDocDRAWING
             else:
                 raise ValueError(f"Unsupported file extension for diff: {ext}")
-                
-            # Helper to get the document title safely (handling property/method differences in early/late binding)
+
+            # ── Snapshot of currently open docs BEFORE we open anything ──────
+            # Used in finally to close dependency files SW auto-loads.
+            _pre_open_paths = set()
+            try:
+                _scan_doc = sw_app.GetFirstDocument()
+                while _scan_doc:
+                    try:
+                        _p = _scan_doc.GetPathName()
+                        if _p:
+                            _pre_open_paths.add(os.path.normpath(_p).lower())
+                    except Exception:
+                        pass
+                    try:
+                        _scan_doc = _scan_doc.GetNext()
+                    except Exception:
+                        break
+            except Exception:
+                pass
+            print(f"Pre-open snapshot: {len(_pre_open_paths)} docs already open.", flush=True)
+
+            # Helper to get the document title safely
             def get_doc_title(model_doc):
                 if not model_doc:
                     return ""
@@ -621,30 +641,40 @@ class FileCommitHistoryDialog(tk.Toplevel):
                         return getattr(model_doc, 'GetTitle')
                     except Exception:
                         return ""
-                        
-            # Helper to open a file in SOLIDWORKS (visible, read-only)
-            def open_document(file_path):
-                print(f"Opening in SolidWorks: {file_path}", flush=True)
-                error = win32com.client.VARIANT(pythoncom.VT_BYREF | pythoncom.VT_I4, 0)
+
+            # Helper to open a file in SOLIDWORKS
+            # read_only=True  → swOpenDocOptions_ReadOnly (2) for drawings (PDF export)
+            # read_only=False → no ReadOnly flag; required for CompareGeometry3 to
+            #                   annotate the model with colour-coded diff regions and
+            #                   to save comparison reports.
+            def open_document(file_path, read_only=True):
+                print(f"Opening in SolidWorks (read_only={read_only}): {file_path}", flush=True)
+                error   = win32com.client.VARIANT(pythoncom.VT_BYREF | pythoncom.VT_I4, 0)
                 warning = win32com.client.VARIANT(pythoncom.VT_BYREF | pythoncom.VT_I4, 0)
-                
-                # Use robust open options based on document type
-                # 1 = Silent, 2 = ReadOnly, 128 = AutoMissingComponentResolve
-                # 32 = LoadModel (required for drawings/assemblies to resolve geometry)
-                # 64 = IgnoreActivation (for parts, prevents parent assembly auto-loading)
-                if doc_type == 3:  # swDocDRAWING
-                    open_options = 1 | 32 | 2 | 128
+
+                # swOpenDocOptions flags:
+                #   1   = Silent
+                #   2   = ReadOnly
+                #   32  = LoadModel  (drawings/assemblies: resolve geometry)
+                #   64  = IgnoreActivation  (parts: no parent assembly auto-load)
+                #   128 = AutoMissingComponentResolve
+                _ro = 2 if read_only else 0
+                if doc_type == 3:    # swDocDRAWING
+                    open_options = 1 | 32 | _ro | 128
                 elif doc_type == 1:  # swDocPART
-                    open_options = 1 | 64 | 2 | 128
+                    open_options = 1 | 64 | _ro | 128
                 elif doc_type == 2:  # swDocASSEMBLY
-                    open_options = 1 | 32 | 2 | 128
+                    open_options = 1 | 32 | _ro | 128
                 else:
-                    open_options = 2 | 128
-                
+                    open_options = _ro | 128
+
                 model = sw_app.OpenDoc6(file_path, doc_type, open_options, "", error, warning)
                 if not model:
-                    raise RuntimeError(f"Failed to open document in SOLIDWORKS: {os.path.basename(file_path)} (Error: {error.value})")
-                
+                    raise RuntimeError(
+                        f"SolidWorks에서 문서를 열 수 없습니다: "
+                        f"{os.path.basename(file_path)} (Error={error.value})"
+                    )
+
                 opened_docs.append(model)
                 return model
                 
@@ -740,10 +770,12 @@ class FileCommitHistoryDialog(tk.Toplevel):
                 ref_path = os.path.normpath(theirs_temp_path)  # _THEIRS = Reference
                 mod_path = os.path.normpath(ours_temp_path)    # _OURS   = Modified
 
-                print(f"Opening reference doc: {ref_path}", flush=True)
-                doc_ref = open_document(ref_path)   # added to opened_docs list
-                print(f"Opening modified doc:  {mod_path}", flush=True)
-                doc_mod = open_document(mod_path)   # added to opened_docs list
+                # Open WITHOUT ReadOnly so CompareGeometry3 can annotate models
+                # with colour-coded diff regions and write the report file.
+                print(f"Opening reference doc (writable): {ref_path}", flush=True)
+                doc_ref = open_document(ref_path, read_only=False)
+                print(f"Opening modified doc  (writable): {mod_path}", flush=True)
+                doc_mod = open_document(mod_path, read_only=False)
 
                 if self.cancel_event.is_set():
                     return
@@ -1011,47 +1043,50 @@ class FileCommitHistoryDialog(tk.Toplevel):
                 self.after(0, lambda _e=str(e), _tb=tb: self._on_diff_error(f"{_e}\n\n{_tb}"))
                 
         finally:
-            # Close documents opened during the diff (both via open_document()
-            # and any documents CompareGeometry3 may have opened internally).
+            # ── Close all documents opened during the diff ───────────────────
             if sw_app:
                 # 1. Close docs we opened explicitly (tracked in opened_docs)
-                for model in list(opened_docs):
+                for _model in list(opened_docs):
                     try:
-                        title = get_doc_title(model)
-                        if title:
-                            print(f"Closing tracked doc: {title}", flush=True)
-                            sw_app.CloseDoc(title)
+                        _title = get_doc_title(_model)
+                        if _title:
+                            print(f"Closing tracked doc: {_title}", flush=True)
+                            sw_app.CloseDoc(_title)
                     except Exception as _ce:
                         print(f"CloseDoc (tracked) failed: {_ce}", flush=True)
                 opened_docs.clear()
 
-                # 2. Also scan all open SW documents for our temp filenames
-                # (handles docs CompareGeometry3 opened internally)
-                _temp_basenames = set()
-                for _tp in [ours_temp_path, theirs_temp_path]:
-                    if _tp:
-                        _temp_basenames.add(os.path.basename(_tp).lower())
-
-                if _temp_basenames:
-                    try:
-                        _open_doc = sw_app.GetFirstDocument()
-                        _visited = set()
-                        while _open_doc:
+                # 2. Close ANY doc that was NOT open before the diff started.
+                #    This catches:
+                #    a) Docs CompareGeometry3 opened internally (temp files)
+                #    b) Dependency files SW auto-loaded when resolving the model
+                #       (sub-parts, sub-assemblies, textures, etc.)
+                time.sleep(0.5)  # give SW a moment to settle
+                try:
+                    _cur_doc = sw_app.GetFirstDocument()
+                    _to_close = []
+                    while _cur_doc:
+                        try:
+                            _path = _cur_doc.GetPathName()
+                            if _path:
+                                _norm = os.path.normpath(_path).lower()
+                                if _norm not in _pre_open_paths:
+                                    _to_close.append(get_doc_title(_cur_doc))
+                        except Exception:
+                            pass
+                        try:
+                            _cur_doc = _cur_doc.GetNext()
+                        except Exception:
+                            break
+                    for _t in _to_close:
+                        if _t:
+                            print(f"Closing auto-loaded dep: {_t}", flush=True)
                             try:
-                                _title = get_doc_title(_open_doc)
-                                if _title and _title not in _visited:
-                                    _visited.add(_title)
-                                    if _title.lower() in _temp_basenames:
-                                        print(f"Closing SW-internal doc: {_title}", flush=True)
-                                        sw_app.CloseDoc(_title)
-                            except Exception:
-                                pass
-                            try:
-                                _open_doc = _open_doc.GetNext()
-                            except Exception:
-                                break
-                    except Exception as _scan_err:
-                        print(f"Doc scan for cleanup failed: {_scan_err}", flush=True)
+                                sw_app.CloseDoc(_t)
+                            except Exception as _de:
+                                print(f"  → failed: {_de}", flush=True)
+                except Exception as _scan_err:
+                    print(f"Dependency scan for cleanup failed: {_scan_err}", flush=True)
 
             # Clean up temporary PDFs
             for path in [ours_pdf_path, theirs_pdf_path]:
