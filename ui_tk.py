@@ -3030,6 +3030,9 @@ class GIT4SWApp(tk.Tk):
         self.btn_graph = ttk.Button(actions_frm, text="Graph", command=self.show_git_graph)
         self.btn_graph.pack(side="right", padx=4)
         
+        self.btn_browse_graph = ttk.Button(actions_frm, text="Browse Graph", command=self.browse_git_graph)
+        self.btn_browse_graph.pack(side="right", padx=4)
+        
         return view
 
     def create_maintainer_view(self):
@@ -3721,6 +3724,111 @@ class GIT4SWApp(tk.Tk):
             self.write_log("Successfully launched Git Graph terminal.", "success")
         except Exception as e:
             self.write_log(f"Failed to launch Git Graph terminal: {e}", "error")
+
+    def browse_git_graph(self):
+        if not self.git_service.is_git_repo():
+            messagebox.showwarning("No Repository", "Current workspace is not a valid Git repository.")
+            return
+
+        self.increment_tasks()
+        self.btn_browse_graph.state(["disabled"])
+        
+        def run():
+            try:
+                import git
+                from pyvis.network import Network
+                import webbrowser
+                
+                repo_path = self.workspace_path
+                output_filename = os.path.join(repo_path, "git_graph.html")
+                
+                # 1. Git repository load
+                repo = self.git_service.repo
+                if not repo:
+                    raise RuntimeError("Failed to load Git repository.")
+                
+                # 2. Initialize Pyvis Network
+                net = Network(height="750px", width="100%", bgcolor="#222222", font_color="white")
+                net.barnes_hut()
+                
+                # Collect branches and tags
+                commit_branches = {}
+                for branch in repo.branches:
+                    try:
+                        commit_branches[branch.commit.hexsha] = branch.name
+                    except ValueError:
+                        pass
+                
+                commit_tags = {}
+                for tag in repo.tags:
+                    try:
+                        commit_tags[tag.commit.hexsha] = tag.name
+                    except ValueError:
+                        pass
+                
+                # 3. Walk commits and add nodes/edges
+                visited = set()
+                
+                for commit in repo.iter_commits("--all"):
+                    if commit.hexsha in visited:
+                        continue
+                    visited.add(commit.hexsha)
+                    
+                    short_sha = commit.hexsha[:7]
+                    summary = commit.summary
+                    
+                    node_label = short_sha
+                    title_hover = (
+                        f"<b>Commit:</b> {commit.hexsha}<br>"
+                        f"<b>Author:</b> {commit.author.name}<br>"
+                        f"<b>Date:</b> {commit.authored_datetime}<br><br>"
+                        f"<b>Message:</b> {summary}"
+                    )
+                    
+                    color = "#1E88E5" # Default commit: Blue
+                    size = 15
+                    
+                    if commit.hexsha in commit_branches:
+                        node_label = f"[{commit_branches[commit.hexsha]}] {short_sha}"
+                        color = "#4CAF50" # Branch: Green
+                        size = 22
+                        
+                    if commit.hexsha in commit_tags:
+                        node_label = f"tag: {commit_tags[commit.hexsha]} ({short_sha})"
+                        color = "#FFC107" # Tag: Yellow
+                        size = 20
+                        
+                    net.add_node(
+                        commit.hexsha,
+                        label=node_label,
+                        title=title_hover,
+                        color=color,
+                        size=size
+                    )
+                    
+                    for parent in commit.parents:
+                        net.add_edge(parent.hexsha, commit.hexsha, arrows="to", color="#888888")
+                
+                # Write HTML and open in browser
+                net.write_html(output_filename)
+                
+                # Open HTML file in browser
+                webbrowser.open("file://" + os.path.realpath(output_filename))
+                
+                def on_done():
+                    self.write_log(f"Interactive Git graph successfully generated and opened.", "success")
+                    
+                self.task_queue.put(('success', "Interactive Git graph generated successfully!", on_done))
+                
+            except Exception as e:
+                self.task_queue.put(('error', f"Failed to generate browse graph:\n{e}", None))
+            finally:
+                def enable_btn():
+                    self.btn_browse_graph.state(["!disabled"])
+                self.task_queue.put(('sw_status', None, enable_btn))
+                self.decrement_tasks()
+                
+        threading.Thread(target=run, daemon=True).start()
 
     def on_file_selected_change(self):
         # 1. Update BOM button activation state based on selection & background task status
