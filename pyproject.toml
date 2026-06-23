@@ -13,6 +13,8 @@ dependencies = [
     "pywin32>=306; sys_platform == 'win32'",
     "pandas",
     "openpyxl",
+    "opencv-python",
+    "numpy",
 ]
 
 

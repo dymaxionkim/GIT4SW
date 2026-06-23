@@ -432,8 +432,231 @@ class FileCommitHistoryDialog(tk.Toplevel):
         if not tags:
             return
         hexsha = tags[0]
-        # Visual Diff action placeholder (to be implemented later)
-        pass
+        
+        self.btn_diff.state(["disabled"])
+        self.btn_exit.state(["disabled"])
+        self.lbl_status.config(text="Running Visual Diff in SolidWorks... Please wait.", foreground="#2563eb")
+        
+        # Spawn thread for diff
+        diff_thread = threading.Thread(target=self._run_visual_diff, args=(hexsha,), daemon=True)
+        diff_thread.start()
+        
+    def _run_visual_diff(self, hexsha):
+        import pythoncom
+        import win32com.client
+        import shutil
+        import cv2
+        import numpy as np
+        import time
+        
+        # Initialize COM for this thread
+        pythoncom.CoInitialize()
+        
+        ours_temp_path = None
+        theirs_temp_path = None
+        ours_img_path = None
+        theirs_img_path = None
+        diff_result_path = None
+        
+        sw_app = None
+        opened_docs = []
+        
+        try:
+            # 1. Setup paths
+            backup_dir = os.path.join(self.parent.workspace_path, ".backup")
+            os.makedirs(backup_dir, exist_ok=True)
+            
+            base, ext = os.path.splitext(os.path.basename(self.file_rel_path))
+            ext_lower = ext.lower()
+            
+            ours_temp_path = os.path.join(backup_dir, f"{base}__OURS{ext}")
+            theirs_temp_path = os.path.join(backup_dir, f"{base}__THEIRS{ext}")
+            
+            ours_img_path = os.path.join(backup_dir, f"{base}__OURS.png")
+            theirs_img_path = os.path.join(backup_dir, f"{base}__THEIRS.png")
+            diff_result_path = os.path.join(backup_dir, f"{base}__DIFF_RESULT.png")
+            
+            # Remove previous images/temp files if they exist
+            for temp_file in [ours_temp_path, theirs_temp_path, ours_img_path, theirs_img_path, diff_result_path]:
+                if os.path.exists(temp_file):
+                    try:
+                        os.remove(temp_file)
+                    except Exception:
+                        pass
+            
+            # 2. Copy/Extract files
+            # Copy OURS
+            shutil.copy2(os.path.join(self.parent.workspace_path, self.file_rel_path), ours_temp_path)
+            
+            # Fetch and smudge THEIRS
+            repo = self.parent.git_service.repo
+            git_path = "git"
+            if hasattr(self.parent.git_service, 'git_path') and self.parent.git_service.git_path:
+                if os.path.exists(self.parent.git_service.git_path):
+                    git_path = self.parent.git_service.git_path
+                    
+            cmd = [git_path, "show", f"{hexsha}:{self.file_rel_path}"]
+            res = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, cwd=self.parent.workspace_path)
+            if res.returncode != 0:
+                raise RuntimeError(f"Git show failed: {res.stderr.decode('utf-8', errors='replace')}")
+                
+            data = res.stdout
+            if data.startswith(b"version https://git-lfs"):
+                # Smudge LFS
+                smudge_cmd = [git_path, "lfs", "smudge"]
+                res_smudge = subprocess.run(smudge_cmd, input=data, stdout=subprocess.PIPE, stderr=subprocess.PIPE, cwd=self.parent.workspace_path)
+                if res_smudge.returncode == 0:
+                    data = res_smudge.stdout
+                else:
+                    print(f"Warning: git lfs smudge failed: {res_smudge.stderr.decode('utf-8')}")
+                    
+            with open(theirs_temp_path, "wb") as f:
+                f.write(data)
+                
+            # Check if cancel event is set
+            if self.cancel_event.is_set():
+                return
+                
+            # 3. Connect to SolidWorks
+            print("Connecting to SolidWorks...", flush=True)
+            try:
+                raw_sw = win32com.client.GetActiveObject("SldWorks.Application")
+                try:
+                    import win32com.client.dynamic
+                    sw_app = win32com.client.dynamic.Dispatch(raw_sw)
+                except Exception:
+                    sw_app = win32com.client.Dispatch(raw_sw)
+            except Exception:
+                raise RuntimeError("SOLIDWORKS is not currently running. Please open SOLIDWORKS first.")
+                
+            # Document Type and options mapping
+            if ext_lower == ".sldprt":
+                doc_type = 1  # swDocPART
+                open_options = 1 | 64 | 2 | 128  # Silent | IgnoreActivation | ReadOnly | AutoMissingComponentResolve
+            elif ext_lower == ".sldasm":
+                doc_type = 2  # swDocASSEMBLY
+                open_options = 1 | 32 | 2 | 128  # Silent | LoadModel | ReadOnly | AutoMissingComponentResolve
+            elif ext_lower == ".slddrw":
+                doc_type = 3  # swDocDRAWING
+                open_options = 1 | 32 | 2 | 128  # Silent | LoadModel | ReadOnly | AutoMissingComponentResolve
+            else:
+                raise ValueError(f"Unsupported file extension for diff: {ext}")
+                
+            # 4. Helper to open and save PNG
+            def export_model_to_png(file_path, png_path):
+                print(f"Opening model in SolidWorks: {file_path}", flush=True)
+                error = win32com.client.VARIANT(pythoncom.VT_BYREF | pythoncom.VT_I4, 0)
+                warning = win32com.client.VARIANT(pythoncom.VT_BYREF | pythoncom.VT_I4, 0)
+                
+                model = sw_app.OpenDoc6(file_path, doc_type, open_options, "", error, warning)
+                if not model:
+                    raise RuntimeError(f"Failed to open document in SOLIDWORKS: {os.path.basename(file_path)} (Error: {error.value})")
+                
+                opened_docs.append(model)
+                
+                if self.cancel_event.is_set():
+                    return
+                
+                # Activate Doc
+                sw_app.ActivateDoc3(model.GetTitle(), True, 2, 0)
+                
+                # Show isometric view for 3D, Zoom to fit
+                if doc_type in (1, 2):
+                    model.ShowNamedView2("*Isometric", 7)
+                model.ViewZoomtofit2()
+                
+                # Save as PNG
+                print(f"Saving image to {png_path}", flush=True)
+                model.SaveAs3(png_path, 0, 9) # 9 = Silent | AvoidDialogueOnSave
+                
+                time.sleep(0.5)
+                
+                # Verify image was created
+                if not os.path.exists(png_path):
+                    raise RuntimeError(f"SOLIDWORKS failed to export image to {os.path.basename(png_path)}")
+            
+            # Export both
+            export_model_to_png(ours_temp_path, ours_img_path)
+            if self.cancel_event.is_set():
+                return
+                
+            export_model_to_png(theirs_temp_path, theirs_img_path)
+            if self.cancel_event.is_set():
+                return
+            
+            # 5. Image Comparison using OpenCV
+            print("Performing image diff comparison...", flush=True)
+            img_ours = cv2.imread(ours_img_path)
+            img_theirs = cv2.imread(theirs_img_path)
+            
+            if img_ours is None or img_theirs is None:
+                raise RuntimeError("Could not read exported images from disk.")
+                
+            # Ensure identical resolution
+            h1, w1 = img_ours.shape[:2]
+            h2, w2 = img_theirs.shape[:2]
+            if (h1, w1) != (h2, w2):
+                img_theirs = cv2.resize(img_theirs, (w1, h1))
+                
+            # Diff calculation
+            diff = cv2.absdiff(img_ours, img_theirs)
+            gray = cv2.cvtColor(diff, cv2.COLOR_BGR2GRAY)
+            _, thresh = cv2.threshold(gray, 10, 255, cv2.THRESH_BINARY)
+            
+            # Dilate diff mask for visibility
+            kernel = np.ones((5, 5), np.uint8)
+            thresh_dilated = cv2.dilate(thresh, kernel, iterations=2)
+            
+            # Color overlay: mark changes in red on the OURS image
+            highlight = img_ours.copy()
+            highlight[thresh_dilated == 255] = [0, 0, 255] # Red in BGR
+            
+            # Horizontal stack: Ours | Theirs | Diff
+            combined = np.hstack((img_ours, img_theirs, highlight))
+            cv2.imwrite(diff_result_path, combined)
+            
+            # 6. Open the result image
+            print("Opening diff result image...", flush=True)
+            os.startfile(diff_result_path)
+            
+            # Success callback to UI
+            if not self.cancel_event.is_set():
+                self.after(0, self._on_diff_success)
+            
+        except Exception as e:
+            print(f"Error in visual diff: {e}", flush=True)
+            if not self.cancel_event.is_set():
+                self.after(0, lambda: self._on_diff_error(str(e)))
+            
+        finally:
+            # Clean up opened SolidWorks documents
+            if sw_app:
+                for model in opened_docs:
+                    try:
+                        title = model.GetTitle()
+                        sw_app.CloseDoc(title)
+                    except Exception as e_close:
+                        print(f"Error closing doc: {e_close}")
+            
+            # Clean up temporary CAD files (keep the images for viewing, delete the temporary models)
+            for path in [ours_temp_path, theirs_temp_path]:
+                if path and os.path.exists(path):
+                    try:
+                        os.remove(path)
+                    except Exception:
+                        pass
+                        
+            pythoncom.CoUninitialize()
+            
+    def _on_diff_success(self):
+        self.lbl_status.config(text="Visual Diff successfully completed!", foreground="#10b981")
+        self.btn_diff.state(["!disabled"])
+        self.btn_exit.state(["!disabled"])
+        
+    def _on_diff_error(self, err_msg):
+        self.lbl_status.config(text=f"Visual Diff failed: {err_msg}", foreground="#ef4444")
+        self.btn_diff.state(["!disabled"])
+        self.btn_exit.state(["!disabled"])
         
     def on_exit(self):
         self.cancel_event.set()
