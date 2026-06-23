@@ -733,34 +733,52 @@ class FileCommitHistoryDialog(tk.Toplevel):
                 if self.cancel_event.is_set():
                     return
 
-                # ── 4-C. Run CompareGeometry3 ───────────────────────────────
-                # NOTE: CompareGeometry3 opens the documents internally from the
-                # file paths supplied; do NOT pre-open them first.
+                # ── 4-C. Pre-open both files so SW tracks them ──────────────
+                # Opening first ensures they appear in the SW document list,
+                # gives us model refs for cleanup, and allows CompareGeometry3
+                # to use the already-open docs (avoids re-open conflicts).
+                ref_path = os.path.normpath(theirs_temp_path)  # _THEIRS = Reference
+                mod_path = os.path.normpath(ours_temp_path)    # _OURS   = Modified
+
+                print(f"Opening reference doc: {ref_path}", flush=True)
+                doc_ref = open_document(ref_path)   # added to opened_docs list
+                print(f"Opening modified doc:  {mod_path}", flush=True)
+                doc_mod = open_document(mod_path)   # added to opened_docs list
+
+                if self.cancel_event.is_set():
+                    return
+
+                # Activate the reference (THEIRS) document as the active one
+                error_act = win32com.client.VARIANT(pythoncom.VT_BYREF | pythoncom.VT_I4, 0)
+                sw_app.ActivateDoc3(os.path.basename(ref_path), False, 2, error_act)
+                time.sleep(0.5)
+
+                # ── 4-D. Run CompareGeometry3 ────────────────────────────────
+                # gtGdfError enum:  0=OK, 15=OpeningResultsFailed (comparison OK, UI failed)
+                # gtGdfDifferenceStatus: 0=NoDifference, 1=Difference
                 #
-                # CompareGeometry3 signature:
-                #   (File1, Config1, File2, Config2,
-                #    Options,       ← 1 = gtGdfFaceAndVolumeCompare
-                #    ReportOption,  ← 2 = gtResultShowUI (shows comparison in SW UI)
-                #    ReportPath, AddToBinder, Overwrite,
-                #    VolDiffStatus, FaceDiffStatus)  ← output longs
+                # CompareGeometry3(File1, Config1, File2, Config2,
+                #   Options, ReportOption, ReportPath,
+                #   AddToBinder, Overwrite, VolDiffStatus, FaceDiffStatus)
                 #
+                # Options:      1 = gtGdfFaceAndVolumeCompare
+                # ReportOption: 0 = gtResultNoReport
+                #               1 = gtResultSaveReport
+                #               2 = gtResultShowUI
                 vol_status  = win32com.client.VARIANT(pythoncom.VT_BYREF | pythoncom.VT_I4, 0)
                 face_status = win32com.client.VARIANT(pythoncom.VT_BYREF | pythoncom.VT_I4, 0)
 
-                ref_path  = os.path.normpath(theirs_temp_path)  # _THEIRS = Reference
-                mod_path  = os.path.normpath(ours_temp_path)    # _OURS   = Modified
-
                 print(f"CompareGeometry3: ref={ref_path}", flush=True)
                 print(f"CompareGeometry3: mod={mod_path}", flush=True)
-                print("Running CompareGeometry3...", flush=True)
+                print("Running CompareGeometry3 (ReportOption=ShowUI)...", flush=True)
 
                 try:
                     res_comp = sw_util_comp_geom.CompareGeometry3(
-                        ref_path, "",   # Reference document (_THEIRS)
-                        mod_path, "",   # Modified document  (_OURS)
-                        1,              # Options: gtGdfFaceAndVolumeCompare = 1
-                        2,              # ReportOption: gtResultShowUI = 2
-                        "",             # ReportPath (empty → show UI only)
+                        ref_path, "",   # Reference (_THEIRS)
+                        mod_path, "",   # Modified  (_OURS)
+                        1,              # Options: gtGdfFaceAndVolumeCompare
+                        2,              # ReportOption: gtResultShowUI
+                        "",             # ReportPath
                         False,          # AddToBinder
                         True,           # Overwrite
                         vol_status,
@@ -771,99 +789,95 @@ class FileCommitHistoryDialog(tk.Toplevel):
                 except Exception as _cg_err:
                     raise RuntimeError(f"CompareGeometry3 호출 중 오류: {_cg_err}")
 
-                # ── Result interpretation ────────────────────────────────────
-                # gtGdfError enum (selected values):
-                #   0  = gtGdfNoError          — full success
-                #   15 = gtGdfOpeningResultsFailed — comparison OK, but UI display failed
-                # gtGdfDifferenceStatus for vol/face:
-                #   0  = gtGdfNoDifference
-                #   1  = gtGdfDifference
                 _vol  = vol_status.value
                 _face = face_status.value
                 _comparison_ran = (_vol in (0, 1)) and (_face in (0, 1))
 
+                _err_names = {
+                    0: "NoError",
+                    1: "FileNotFound", 2: "FileNotSolidBody", 3: "DocOpenFailed",
+                    4: "InvalidDocType", 5: "InvalidOptions", 6: "SaveReportFailed",
+                    7: "AddToBinderFailed", 8: "FaceCompareNotDone",
+                    9: "VolumeCompareNotDone", 10: "GeomCompNotDone",
+                    11: "NoActiveDoc", 12: "NoSolidBodies",
+                    13: "CreatingTempFileFailed", 14: "InvalidConfig",
+                    15: "OpeningResultsFailed",
+                }
+                _err_name = _err_names.get(res_comp, f"Unknown({res_comp})")
+
                 if res_comp == 0:
-                    # Full success — comparison ran and SW UI opened
-                    pass
+                    # Full success — SW opened the comparison result UI
+                    # Keep temp files so the user can interact in SW
+                    self.temp_files_to_clean = [ours_temp_path, theirs_temp_path]
+                    if not self.cancel_event.is_set():
+                        self.after(0, self._on_diff_success)
+
                 elif res_comp == 15 and _comparison_ran:
-                    # Comparison completed but SW couldn't display the results UI.
-                    # Fall back: save a report file and inform the user.
-                    print("res_comp=15 (gtGdfOpeningResultsFailed): comparison OK, "
-                          "retrying with SaveReport fallback...", flush=True)
-                    _report_dir = os.path.join(
-                        os.path.normpath(os.path.join(self.parent.workspace_path, ".backup")),
-                        f"{base}_GeomCompare"
+                    # Comparison data computed OK but SW couldn't show results UI.
+                    # Fallback: save an HTML report and open it in the browser.
+                    print(f"res_comp=15 ({_err_name}): comparison data OK — saving HTML report...", flush=True)
+
+                    _report_dir = os.path.normpath(
+                        os.path.join(self.parent.workspace_path, ".backup",
+                                     f"{base}_GeomCompare")
                     )
                     os.makedirs(_report_dir, exist_ok=True)
+
                     vol_status2  = win32com.client.VARIANT(pythoncom.VT_BYREF | pythoncom.VT_I4, 0)
                     face_status2 = win32com.client.VARIANT(pythoncom.VT_BYREF | pythoncom.VT_I4, 0)
+                    _report_saved = False
                     try:
-                        res_comp2 = sw_util_comp_geom.CompareGeometry3(
+                        res2 = sw_util_comp_geom.CompareGeometry3(
                             ref_path, "",
                             mod_path, "",
-                            1,              # Options: gtGdfFaceAndVolumeCompare
-                            1,              # ReportOption: gtResultSaveReport = 1
-                            _report_dir,    # Save report here
+                            1,              # gtGdfFaceAndVolumeCompare
+                            1,              # gtResultSaveReport
+                            _report_dir,    # folder to save report in
                             False,
                             True,
                             vol_status2,
                             face_status2,
                         )
-                        print(f"SaveReport fallback returned: {res_comp2} "
+                        print(f"SaveReport fallback returned: {res2} "
                               f"(vol={vol_status2.value}, face={face_status2.value})", flush=True)
-                        # Open the report folder so the user can inspect it
-                        try:
+                        # Check for any files in the report dir
+                        _report_files = os.listdir(_report_dir) if os.path.isdir(_report_dir) else []
+                        print(f"Report dir contents: {_report_files}", flush=True)
+                        if _report_files:
+                            _report_saved = True
+                            # Open Explorer to show report
                             import subprocess as _sub
                             _sub.Popen(["explorer", _report_dir])
-                        except Exception:
-                            pass
                     except Exception as _fb_err:
-                        print(f"SaveReport fallback failed: {_fb_err}", flush=True)
+                        print(f"SaveReport fallback raised: {_fb_err}", flush=True)
 
-                    # Treat as success — display result summary to user
-                    _diff_desc = []
+                    # Build result summary
+                    _diff_parts = []
                     if _vol == 1:
-                        _diff_desc.append("부피(Volume) 차이 있음")
-                    elif _vol == 0:
-                        _diff_desc.append("부피(Volume) 동일")
+                        _diff_parts.append("• 부피(Volume): 차이 있음")
+                    else:
+                        _diff_parts.append("• 부피(Volume): 동일")
                     if _face == 1:
-                        _diff_desc.append("면(Face) 차이 있음")
-                    elif _face == 0:
-                        _diff_desc.append("면(Face) 동일")
-                    _summary = "\n".join(_diff_desc) if _diff_desc else "비교 완료"
-                    if not self.cancel_event.is_set():
-                        self.after(0, lambda s=_summary: self._on_diff_success_with_msg(
-                            f"비교 완료 (결과 UI를 열지 못해 리포트 폴더를 탐색기로 열었습니다):\n{s}"
-                        ))
-                    # Keep temp files and exit early
+                        _diff_parts.append("• 면(Face): 차이 있음")
+                    else:
+                        _diff_parts.append("• 면(Face): 동일")
+                    _summary_lines = "\n".join(_diff_parts)
+                    _report_note = (f"\n\n리포트 저장 위치:\n{_report_dir}"
+                                    if _report_saved
+                                    else "\n\n(리포트 저장에 실패했습니다. SOLIDWORKS에서 두 파일이 열려 있습니다.)")
+                    _msg = f"형상 비교 완료:\n{_summary_lines}{_report_note}"
+
                     self.temp_files_to_clean = [ours_temp_path, theirs_temp_path]
-                    return  # skip the normal success callback below
+                    if not self.cancel_event.is_set():
+                        self.after(0, lambda m=_msg: self._on_diff_success_with_msg(m))
+
                 else:
                     # Genuine error
-                    _err_names = {
-                        1: "FileNotFound", 2: "FileNotSolidBody", 3: "DocOpenFailed",
-                        4: "InvalidDocType", 5: "InvalidOptions", 6: "SaveReportFailed",
-                        7: "AddToBinderFailed", 8: "FaceCompareNotDone",
-                        9: "VolumeCompareNotDone", 10: "GeomCompNotDone",
-                        11: "NoActiveDoc", 12: "NoSolidBodies",
-                        13: "CreatingTempFileFailed", 14: "InvalidConfig",
-                        15: "OpeningResultsFailed",
-                    }
-                    _err_name = _err_names.get(res_comp, f"Unknown({res_comp})")
                     raise RuntimeError(
                         f"CompareGeometry3 실패: {_err_name} (코드={res_comp})\n"
                         f"VolStatus={_vol}, FaceStatus={_face}"
                     )
 
-                # Keep temporary CAD files so the user can interact in SolidWorks
-                self.temp_files_to_clean = [ours_temp_path, theirs_temp_path]
-
-                # Success callback
-                if not self.cancel_event.is_set():
-                    self.after(0, self._on_diff_success)
-
-
-                    
             elif doc_type == 3:  # DRAWING (.slddrw)
                 model_theirs = open_document(theirs_temp_path)
                 model_ours = open_document(ours_temp_path)
@@ -997,15 +1011,48 @@ class FileCommitHistoryDialog(tk.Toplevel):
                 self.after(0, lambda _e=str(e), _tb=tb: self._on_diff_error(f"{_e}\n\n{_tb}"))
                 
         finally:
-            # Clean up drawing documents if they are still open (e.g., if error occurred)
-            if sw_app and opened_docs:
-                for model in opened_docs:
+            # Close documents opened during the diff (both via open_document()
+            # and any documents CompareGeometry3 may have opened internally).
+            if sw_app:
+                # 1. Close docs we opened explicitly (tracked in opened_docs)
+                for model in list(opened_docs):
                     try:
                         title = get_doc_title(model)
-                        sw_app.CloseDoc(title)
-                    except Exception:
-                        pass
-                        
+                        if title:
+                            print(f"Closing tracked doc: {title}", flush=True)
+                            sw_app.CloseDoc(title)
+                    except Exception as _ce:
+                        print(f"CloseDoc (tracked) failed: {_ce}", flush=True)
+                opened_docs.clear()
+
+                # 2. Also scan all open SW documents for our temp filenames
+                # (handles docs CompareGeometry3 opened internally)
+                _temp_basenames = set()
+                for _tp in [ours_temp_path, theirs_temp_path]:
+                    if _tp:
+                        _temp_basenames.add(os.path.basename(_tp).lower())
+
+                if _temp_basenames:
+                    try:
+                        _open_doc = sw_app.GetFirstDocument()
+                        _visited = set()
+                        while _open_doc:
+                            try:
+                                _title = get_doc_title(_open_doc)
+                                if _title and _title not in _visited:
+                                    _visited.add(_title)
+                                    if _title.lower() in _temp_basenames:
+                                        print(f"Closing SW-internal doc: {_title}", flush=True)
+                                        sw_app.CloseDoc(_title)
+                            except Exception:
+                                pass
+                            try:
+                                _open_doc = _open_doc.GetNext()
+                            except Exception:
+                                break
+                    except Exception as _scan_err:
+                        print(f"Doc scan for cleanup failed: {_scan_err}", flush=True)
+
             # Clean up temporary PDFs
             for path in [ours_pdf_path, theirs_pdf_path]:
                 if path and os.path.exists(path):
@@ -1013,7 +1060,7 @@ class FileCommitHistoryDialog(tk.Toplevel):
                         os.remove(path)
                     except Exception:
                         pass
-                        
+
             # Clean up drawing temporary CAD files if they exist and weren't cleaned
             if ext_lower == ".slddrw":
                 for path in [ours_temp_path, theirs_temp_path]:
@@ -1022,8 +1069,9 @@ class FileCommitHistoryDialog(tk.Toplevel):
                             os.remove(path)
                         except Exception:
                             pass
-                            
+
             pythoncom.CoUninitialize()
+
             
     def _on_diff_success(self):
         self.lbl_status.config(text="Visual Diff successfully completed!", foreground="#10b981")
