@@ -1692,6 +1692,8 @@ class GIT4SWApp(tk.Tk):
             widget.destroy()
             
         self.config_entries.clear()
+        self.config_combos = {}
+        self.config_find_btns = {}
         
         config_data = self.load_config_data()
         if not config_data:
@@ -1700,29 +1702,51 @@ class GIT4SWApp(tk.Tk):
         # Place label and entry widgets
         self.config_fields_frame.columnconfigure(0, weight=0)
         self.config_fields_frame.columnconfigure(1, weight=1)
+        self.config_fields_frame.columnconfigure(2, weight=0)
+        self.config_fields_frame.columnconfigure(3, weight=0)
         
-        # Predefined order for keys (workspace_path is excluded as requested)
+        # Predefined display names
+        display_names = {
+            "git_path": "Git Path",
+            "git-lfs_path": "Git-Lfs Path",
+            "solidworks_path": "Solidworks Path",
+            "edrawings_path": "eDrawings Path",
+            "github_token": "Github Token",
+            "default_local_path": "Default Local Path",
+            "organization_name": "Organization Name",
+        }
+        
+        # Predefined order for keys (workspace_path, auto_sync, imagemagick_path excluded)
         keys_order = [
             "git_path",
             "git-lfs_path",
             "solidworks_path",
             "edrawings_path",
-            "imagemagick_path",
             "github_token",
             "default_local_path",
             "organization_name"
         ]
         
         for k in config_data.keys():
-            if k not in ("workspace_path", "auto_sync") and k not in keys_order:
+            if k not in ("workspace_path", "auto_sync", "imagemagick_path") and k not in keys_order:
                 keys_order.append(k)
-                
+        
+        # Keys eligible for Find button + combobox
+        find_targets = {
+            "git_path": "git.exe",
+            "git-lfs_path": "git-lfs.exe",
+            "solidworks_path": "SLDWORKS.exe",
+            "edrawings_path": "eDrawings.exe",
+        }
+        
         for row_idx, key in enumerate(keys_order):
             if key not in config_data:
                 continue
+            if key == "imagemagick_path":
+                continue
                 
             val = config_data[key]
-            display_name = key.replace("_", " ").title()
+            display_name = display_names.get(key, key.replace("_", " ").title())
             
             # Label
             lbl = ttk.Label(self.config_fields_frame, text=f"{display_name}:", font=("TkDefaultFont", 9, "bold"), anchor="w", background="#ffffff")
@@ -1732,9 +1756,73 @@ class GIT4SWApp(tk.Tk):
             ent = ttk.Entry(self.config_fields_frame)
             ent.insert(0, str(val))
             ent.grid(row=row_idx, column=1, padx=0, pady=3, sticky="ew")
-            
-            # Save a reference to the entry
             self.config_entries[key] = ent
+            
+            # Find button + Combobox for path keys
+            if key in find_targets:
+                cb = ttk.Combobox(self.config_fields_frame, state="readonly", width=30)
+                cb.grid(row=row_idx, column=2, padx=(8, 4), pady=3, sticky="w")
+                self._configure_combobox_dropdown_width(cb)
+                cb.bind("<<ComboboxSelected>>",
+                        lambda e, c=cb, en=ent: self._on_config_path_selected(c, en))
+                self.config_combos[key] = cb
+                
+                btn = ttk.Button(self.config_fields_frame, text="Find", width=6,
+                                 command=lambda k=key, t=find_targets[key]: self.find_executable(k, t))
+                btn.grid(row=row_idx, column=3, padx=(0, 0), pady=3, sticky="w")
+                self.config_find_btns[key] = btn
+
+    def _on_config_path_selected(self, combo, entry):
+        entry.delete(0, "end")
+        entry.insert(0, combo.get())
+        combo.set('')
+
+    def _configure_combobox_dropdown_width(self, combo):
+        def on_postcommand():
+            values = list(combo.cget('values') or [])
+            if not values:
+                return
+            longest = max((len(str(v)) for v in values), default=0)
+            try:
+                popup = combo.tk.call('ttk::combobox::PopdownWindow', combo)
+                lb_path = str(popup) + '.l'
+                combo.tk.call(lb_path, 'configure', '-width', longest + 2)
+            except Exception:
+                pass
+        combo.config(postcommand=on_postcommand)
+
+    def find_executable(self, key, target_filename):
+        btn = self.config_find_btns.get(key)
+        cb = self.config_combos.get(key)
+        if not btn or not cb:
+            return
+        
+        btn.state(["disabled"])
+        btn.config(text="...")
+        
+        def worker():
+            results = []
+            try:
+                for root, dirs, files in os.walk("C:\\"):
+                    for f in files:
+                        if f.lower() == target_filename.lower():
+                            results.append(os.path.join(root, f))
+            except Exception:
+                pass
+            
+            def update():
+                if cb:
+                    cb['values'] = results
+                if btn:
+                    btn.config(text="Find")
+                    btn.state(["!disabled"])
+                if not results:
+                    self.write_log(f"No {target_filename} found on C: drive.", "warning")
+                else:
+                    self.write_log(f"Found {len(results)} {target_filename} location(s).", "success")
+            self.after(0, update)
+        
+        threading.Thread(target=worker, daemon=True).start()
 
     @queue_during_bg_tasks
     def save_config_from_view(self):

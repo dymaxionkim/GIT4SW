@@ -133,7 +133,7 @@ Details and examples for each configuration item are as follows:
   - *Example*: `C:\Users\dhkima\scoop\apps\git\current\mingw64\bin\git-lfs.exe`
 * **Solidworks Path**: The absolute path of the SolidWorks executable (`SLDWORKS.exe`) installed on your local system. It is used as the execution path when clicking the "Open Solidworks" button in the File Manager or during Fallback exception recovery.
   - *Example*: `C:\Program Files\SOLIDWORKS Corp\SOLIDWORKS\SLDWORKS.exe`
-* **Edrawings Path**: The absolute path of the external eDrawings drawing preview executable (`eDrawings.exe`). It is used when clicking the eDrawings button in the File Manager.
+* **eDrawings Path**: The absolute path of the external eDrawings drawing preview executable (`eDrawings.exe`). It is used when clicking the eDrawings button in the File Manager.
   - *Example*: `C:\Program Files\SOLIDWORKS Corp\eDrawings\eDrawings.exe`
 * **Github Token**: The GitHub Personal Access Token used for authenticating when creating personal development remote branches or automatically publishing new private repositories in Maintainer mode.
   - *Example*: `ghp_**********************************`
