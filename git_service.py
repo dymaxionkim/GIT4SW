@@ -1226,6 +1226,21 @@ class GitService:
         except Exception:
             return ""
 
+    def get_first_commit_info(self):
+        """Returns (author_name, formatted_date) of the very first commit in the repository."""
+        if not self.is_git_repo():
+            return ("", "")
+        try:
+            out = self._run_lfs_cmd(["git", "log", "--reverse", "--format=%an|%ad", "--date=format:%Y-%m-%d %H:%M"])
+            if out:
+                first_line = out.strip().splitlines()[0]
+                parts = first_line.split("|", 1)
+                if len(parts) == 2:
+                    return (parts[0], parts[1])
+            return ("", "")
+        except Exception:
+            return ("", "")
+
     def merge_branch(self, source_branch):
         """Merges the specified source branch into the current branch using git CLI."""
         if not self.is_git_repo():

@@ -2202,12 +2202,17 @@ class GIT4SWApp(tk.Tk):
         self.lbl_sw_status_repo_size = tk.Label(self.sw_status_grid, text="• Repository Size: -", bg="#ffffff", fg="#1f2937", anchor="w", font="TkDefaultFont")
         self.lbl_sw_status_repo_size.grid(row=1, column=1, sticky="w", pady=0)
         
+        self.lbl_sw_status_repo_start = tk.Label(self.sw_status_grid, text="• Repository Start: -", bg="#ffffff", fg="#1f2937", anchor="w", font="TkDefaultFont")
+        self.lbl_sw_status_repo_start.grid(row=2, column=1, sticky="w", pady=0)
+        
         return view
 
     def refresh_dashboard(self):
         self.update_repo_branch_info()
         self.ent_local_dir.delete(0, tk.END)
         self.ent_local_dir.insert(0, os.path.normpath(self.workspace_path))
+        # Reset cached first-commit info so it's re-fetched for the new repository
+        self._cached_repo_start = None
         
         if not self.git_service.is_git_repo():
             self.lbl_local_status.config(text="⚠️ Not a Git Repo", foreground="#ef4444")
@@ -6754,6 +6759,7 @@ finally:
                             self.lbl_sw_status_locked.config(text=f"• Locked Files: {content.get('locked_files', '-')}")
                             self.lbl_sw_status_total.config(text=f"• Total Files: {content.get('total_files', '-')}")
                             self.lbl_sw_status_repo_size.config(text=f"• Repository Size: {content.get('repo_size', '-')}")
+                            self.lbl_sw_status_repo_start.config(text=f"• Repository Start: {content.get('repo_start', '-')}")
                         else:
                             self.write_log(content, "info")
                     
@@ -6942,12 +6948,25 @@ finally:
 
                 repo_size_str = format_size(repo_size)
 
+                # Get first commit info (cached — only fetch once or when repo changes)
+                if not hasattr(self, '_cached_repo_start') or self._cached_repo_start is None:
+                    try:
+                        author, date_str = self.git_service.get_first_commit_info()
+                        if author and date_str:
+                            self._cached_repo_start = f"{date_str} by {author}"
+                        else:
+                            self._cached_repo_start = "-"
+                    except Exception:
+                        self._cached_repo_start = "-"
+                repo_start_str = self._cached_repo_start
+
                 status_data = {
                     'active': active_text,
                     'total_files': total_files,
                     'open_files': num_open,
                     'locked_files': num_locked,
-                    'repo_size': repo_size_str
+                    'repo_size': repo_size_str,
+                    'repo_start': repo_start_str
                 }
                 
                 # Update status label
