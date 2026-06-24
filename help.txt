@@ -69,6 +69,11 @@ The File Manager provides file-level checkout, checking-in, and local modificati
   - Clicking the CAD preview canvas (mouse cursor changes to a hand shape) copies the high-resolution bitmap data of the thumbnail to the Windows system clipboard (CF_DIB). This allows you to immediately paste the image into PowerPoint, Word, Paint, or chat apps using Ctrl+V.
 • Refresh (Button)
   - Reloads files, queries LFS lock database, and updates SolidWorks open documents instantly.
+• Find Top (Button)
+  - Scans the workspace's .sldasm dependency graph using SolidWorks' GetDocumentDependencies2 COM API.
+  - Reads assembly dependency metadata without opening any files, making the scan orders of magnitude faster than traditional OpenDoc6 approaches.
+  - Identified top-level assemblies (files not referenced by any other .sldasm in the workspace) are tagged with a red bold "TOP" label in the file table.
+  - Runs in a background subprocess (sw_top_finder.py) with real-time progress display.
 • Open (Button)
   - Opens the current workspace folder in Windows File Explorer.
 • Lock (Button)

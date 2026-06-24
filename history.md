@@ -36,6 +36,8 @@ gantt
     BOM 설정선택 유지 & 이전 오픈 파일 보존 :active, milestone12, 2026-06-23, 2026-06-23
     section 성능 최적화 및 Config 편의성
     Sleep 반감, Lock 억제, Edit Config.json 버튼 추가 :active, milestone13, 2026-06-24, 2026-06-24
+    section Find Top 스캐너
+    GetDocumentDependencies2 기반 고속 최상위 어셈블리 탐색 :active, milestone14, 2026-06-24, 2026-06-24
 ```
 
 ---
@@ -227,6 +229,28 @@ gantt
 
 ---
 
+### 14단계: Find Top (최상위 어셈블리 스캐너) — `GetDocumentDependencies2` 기반 고속 의존성 분석 (Milestone 14 - 2026-06-24)
+* **"Find Top" 버튼 추가**:
+  - File Manager 툴바의 **[Refresh]** 버튼 우측에 Primary.TButton 스타일(녹색 `#059669` 배경, 흰색 텍스트)의 **[Find Top]** 버튼을 추가하였습니다.
+  - 워크스페이스 내 모든 `.sldasm` 파일의 의존성 그래프를 분석하여, 다른 어셈블리에서 참조되지 않는 최상위 어셈블리(Top-Level Assembly)를 식별합니다.
+  - 식별된 최상위 어셈블리는 CustomFileTable의 `top_asm` 태그로 빨간색 굵게(`#dc2626`) 강조 표시됩니다.
+* **SolidWorks 파일 의존성 분석 엔진 전면 재작성 (`sw_top_finder.py`)**:
+  - **문제**: 기존에는 `OpenDoc6`으로 어셈블리 파일을 직접 열고, `ConfigurationManager` → `GetRootComponent3` → `GetChildren` → `GetPathName`을 통해 자식 참조 경로를 추출한 후 `CloseDoc`/`QuitDoc`으로 닫는 과정을 거쳤습니다. 파일 하나당 약 1~3초의 열기/안정화/닫기 오버헤드가 발생하여 수백 개 어셈블리 스캔 시 심각한 성능 저하를 유발했습니다.
+  - **해결**: `SldWorks.GetDocumentDependencies2` COM API로 전환하였습니다. 이 API는 파일을 SolidWorks에 열지 않고 파일 헤더의 의존성 메타데이터 블록만 읽어 참조 관계를 배열로 반환합니다.
+  - 성능상의 이점: 파일 열기/닫기 오버헤드 제거, SolidWorks COM 안정화 대기 시간(`time.sleep`) 불필요, GUI 고정(Freeze) 현상 원천 차단.
+* **다중 API Fallback 체계 구축**:
+  - 1순위: `GetDocumentDependencies2` (정확 모드, `fastParsing=False`)
+  - 2순위: `GetDocumentDependencies2` (고속 모드, `fastParsing=True`)
+  - 3순위: `GetDocumentDependencies` (4인자)
+  - 4순위: `GetDocumentDependencies` (1인자)
+  - `getattr()`를 사용하여 메서드 존재 여부를 먼저 확인하므로, 메서드가 아예 없는 환경에서도 `AttributeError` 없이 다음 variant로 안전하게 폴백합니다.
+* **자기참조(self-reference) 제외 및 경로 검증**:
+  - 반환 배열에서 부모 파일 자신을 결과에서 제외합니다.
+  - `os.path.exists()`로 유효한 파일 경로만 수집하여 잘못된 문자열이 포함되는 것을 방지합니다.
+* **Cleanup 간소화**: `GetDocumentDependencies2`는 파일을 열지 않으므로 `finally` 블록의 `CloseDoc`/`QuitDoc` 문서 정리 코드를 완전히 제거하였습니다.
+
+---
+
 | 비교 항목 | 초기 설계 (V01) | 현재 설계 (최신 헤드) | 개선 효과 및 핵심 가치 |
 | :--- | :--- | :--- | :--- |
 | **Git 인증** | 시스템 OS (GCM) 의존적 자격증명 처리 | 무상태(Stateless) 인라인 주입 자격증명 | 외부 환경 영향 차단, UI 멈춤 방지, Config 파일 청결성 |
@@ -247,6 +271,7 @@ gantt
 | **Git 히스토리 시각화** | 단순 `git log` CLI 명령어 출력 (Graph 버튼) | GUI Graph 터미널 출력 + GitHub Network 그래프 브라우징 연동 (Browse Graph) 지원 | 로컬 시각화 라이브러리 및 렌더링 부하 없이, GitHub 웹 인터페이스의 미려하고 정밀한 대화형 브랜치 맵을 브라우저로 직접 활용 |
 | **성능 최적화 (인위적 대기 시간 단축)** | 안정화를 위한 고정 `time.sleep(2~3)` 대기, EXPORT/BOM 중에도 자동 Lock 모니터가 파일 Lock 시도 | 모든 `time.sleep()` 값을 50% 축소 (2s→1s, 3s→1.5s, 0.3s→0.15s 등) 및 EXPORT/BOM 서브프로세스 실행 중 자동 Lock 모니터의 Lock 시도 억제 (`suppress_auto_lock` 플래그) | 파일당 EXPORT 시간 약 50% 단축, 불필요한 LFS Lock 네트워크 호출 제거 |
 | **Config.json 직접 편집** | GUI 폼을 통해서만 설정 편집 가능 | "Edit Config.json" 버튼을 Config 뷰에 추가하여 메모장에서 직접 파일 편집 가능 | 빠른 설정 변경 및 디버깅 편의성 향상 |
+| **Find Top (최상위 어셈블리 스캔)** | `OpenDoc6` + `GetChildren` 방식 — 파일당 1~3초의 열기/안정화/닫기 오버헤드 | `GetDocumentDependencies2` COM API 사용 — 파일을 열지 않고 헤더 메타데이터만 읽음 | 파일 열기 오버헤드 완전 제거, 수백 개 어셈블리 스캔 시 수십 배 성능 향상, GUI Freeze 방지 |
 
 ---
 

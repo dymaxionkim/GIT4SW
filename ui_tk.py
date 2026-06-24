@@ -6,6 +6,7 @@ import tkinter.font as tkfont
 import threading
 import queue
 import json
+import ast
 import webbrowser
 import subprocess
 import time
@@ -69,8 +70,10 @@ class CustomFileTable(tk.Frame):
         # Define Tags for coloring entire row based on extension
         self.treeview.tag_configure("sldprt", foreground="#059669")
         self.treeview.tag_configure("sldasm", foreground="#d97706")
-        self.treeview.tag_configure("slddrw", foreground="#dc2626")
+        self.treeview.tag_configure("slddrw", foreground="#2b4de6")
         self.treeview.tag_configure("default_ext", foreground="#7c3aed")
+        # Top-level assembly highlight (bold red)
+        self.treeview.tag_configure("top_asm", foreground="#dc2626")
         
         # Bind keyboard shortcuts for selecting all items
         self.treeview.bind("<Control-a>", self.select_all_files)
@@ -1711,6 +1714,18 @@ class GIT4SWApp(tk.Tk):
             except Exception as e:
                 self.write_log(f"Failed to read config.json: {e}", "error")
                 
+        # Normalize string representations of lists back to actual lists
+        # (handles legacy config.json where commit_messages/column_order were saved as strings)
+        for list_key in ("commit_messages", "column_order"):
+            val = config_data.get(list_key)
+            if isinstance(val, str) and val.startswith('['):
+                try:
+                    parsed = ast.literal_eval(val)
+                    if isinstance(parsed, list):
+                        config_data[list_key] = parsed
+                except Exception:
+                    pass
+                
         return config_data
 
     def create_config_view(self):
@@ -1909,9 +1924,19 @@ class GIT4SWApp(tk.Tk):
             except Exception:
                 pass
                 
-        # Update keys from entry fields
+        # Update keys from entry fields, preserving original type when possible
         for key, ent in self.config_entries.items():
             val = ent.get().strip()
+            original = config_data.get(key)
+            if isinstance(original, list) and val.startswith('['):
+                # Try to parse the text back to a list (handles both JSON and Python repr)
+                try:
+                    parsed = ast.literal_eval(val)
+                    if isinstance(parsed, list):
+                        config_data[key] = parsed
+                        continue
+                except Exception:
+                    pass
             config_data[key] = val
             
         # Write to file
@@ -2563,10 +2588,10 @@ class GIT4SWApp(tk.Tk):
         # Header Row
         header_frm = ttk.Frame(main_panel)
         header_frm.pack(fill="x", pady=(0, 6))
-        lbl_file_title = ttk.Label(header_frm, text="File Check", style="Title.TLabel")
-        lbl_file_title.pack(side="left", padx=(0, 20))
         btn_refresh = ttk.Button(header_frm, text="Refresh", command=self.refresh_file_list)
         btn_refresh.pack(side="right")
+        self.btn_find_top = ttk.Button(header_frm, text="Find Top", style="Primary.TButton", command=self.find_top_assemblies)
+        self.btn_find_top.pack(side="right", padx=(0, 8))
         btn_open = ttk.Button(header_frm, text="Open", command=self.open_workspace_in_explorer)
         btn_open.pack(side="right", padx=(0, 8))
         
@@ -6530,6 +6555,142 @@ finally:
                 self.decrement_tasks()
                 
         threading.Thread(target=run, daemon=True).start()
+
+
+    def find_top_assemblies(self):
+        """Scan all visible .sldasm files via a background SolidWorks subprocess to find
+        top-level assemblies (those not referenced by any other assembly) and highlight
+        them in red in the file table."""
+        if not self.git_service.is_git_repo():
+            self.write_log("Not a Git repository.", "warning")
+            return
+
+        # Collect visible .sldasm file paths from the current file table
+        asm_files = []
+        for item in self.tree.get_children():
+            values = self.tree.item(item, 'values')
+            if values:
+                file_path = values[0].replace("\\", "/")
+                if file_path.lower().endswith(".sldasm"):
+                    asm_files.append(file_path)
+
+        if not asm_files:
+            self.write_log("No .sldasm files in the current file list to scan.", "warning")
+            return
+
+        self.write_log(f"🔍 Find Top: scanning {len(asm_files)} assembly file(s) in background...", "info")
+        self.btn_find_top.state(["disabled"])
+        self.increment_tasks()
+
+        # Store current top-level set to clear previous highlights
+        self._top_asm_set = set()
+
+        script_dir = os.path.dirname(os.path.abspath(__file__))
+        runner_path = os.path.join(script_dir, "sw_top_finder.py")
+
+        files_arg = ",".join(asm_files)
+
+        def run():
+            try:
+                import subprocess
+                env_vars = os.environ.copy()
+                env_vars["PYTHONIOENCODING"] = "utf-8"
+
+                cmd = [sys.executable, "-u", runner_path, self.workspace_path, "--files", files_arg]
+                proc = subprocess.Popen(
+                    cmd,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.STDOUT,
+                    text=True,
+                    bufsize=1,
+                    encoding="utf-8",
+                    errors="replace",
+                    env=env_vars
+                )
+
+                json_result = None
+                for line in proc.stdout:
+                    clean = line.strip()
+                    if not clean:
+                        continue
+                    # Try to parse JSON (last line)
+                    if clean.startswith("{"):
+                        try:
+                            json_result = json.loads(clean)
+                        except:
+                            pass
+                    else:
+                        if clean.startswith("[PROGRESS]"):
+                            # Could update a progress bar here
+                            pass
+                        elif clean.startswith("TOP:"):
+                            self.write_log(f"  {clean}", "info")
+                        elif clean.startswith("[") and "/" in clean:
+                            self.write_log(f"  {clean}", "info")
+                        elif any(kw in clean for kw in ["Scanning", "Scan complete", "Found", "Connected", "Launching", "References"]):
+                            self.write_log(f"  {clean}", "info")
+
+                proc.wait()
+                returncode = proc.returncode
+
+                if json_result and json_result.get("error"):
+                    self.task_queue.put(('error', f"❌ Find Top failed: {json_result['error']}", None))
+                elif json_result and json_result.get("top_assemblies") is not None:
+                    top_list = json_result["top_assemblies"]
+                    # Normalize to match table display (backslash, relative)
+                    top_set = set()
+                    for t in top_list:
+                        # t is a normalized lowercase absolute path with forward slashes
+                        # Convert to relative path with backslash for table matching
+                        try:
+                            rel = os.path.relpath(t, self.workspace_path).replace("/", "\\").lower()
+                            top_set.add(rel)
+                        except:
+                            top_set.add(t.lower())
+
+                    self._top_asm_set = top_set
+                    count = len(top_list)
+                    if count > 0:
+                        self.task_queue.put(('success', f"✅ Find Top complete: {count} top-level assembly(ies) found. Highlighted in red.", self._apply_top_asm_highlight))
+                    else:
+                        self.task_queue.put(('success', f"✅ Find Top complete: no top-level assemblies found.", None))
+                else:
+                    if returncode != 0:
+                        self.task_queue.put(('error', f"❌ Find Top failed with exit code {returncode}.", None))
+                    else:
+                        self.task_queue.put(('error', "❌ Find Top: no result received from scanner.", None))
+            except Exception as e:
+                self.task_queue.put(('error', f"❌ Find Top failed: {e}", None))
+            finally:
+                self.decrement_tasks()
+                self.task_queue.put(('callback', None, lambda: self.btn_find_top.state(["!disabled"])))
+
+        threading.Thread(target=run, daemon=True).start()
+
+    def _apply_top_asm_highlight(self):
+        """Apply red tag to top-level assembly rows in the file table."""
+        if not getattr(self, '_top_asm_set', None):
+            return
+        for item in self.tree.get_children():
+            values = self.tree.item(item, 'values')
+            if values:
+                file_path = values[0]
+                file_path_lower = file_path.lower()
+                if file_path_lower in self._top_asm_set:
+                    # Apply top_asm tag (red) while keeping extension tag
+                    self.tree.treeview.item(item, tags=("top_asm",))
+                else:
+                    # Restore original extension-based tag
+                    _, ext = os.path.splitext(file_path)
+                    ext_lower = ext.lower()
+                    if ext_lower == ".sldprt":
+                        self.tree.treeview.item(item, tags=("sldprt",))
+                    elif ext_lower == ".sldasm":
+                        self.tree.treeview.item(item, tags=("sldasm",))
+                    elif ext_lower == ".slddrw":
+                        self.tree.treeview.item(item, tags=("slddrw",))
+                    else:
+                        self.tree.treeview.item(item, tags=("default_ext",))
 
 
     def _show_conflict_dialog(self, conflicted_files, source_branch, current_branch):
