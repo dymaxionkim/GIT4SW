@@ -1662,6 +1662,21 @@ class GIT4SWApp(tk.Tk):
         # Refresh CAD preview
         self.on_file_selected_change()
 
+    # Keys in config.json that hold filesystem paths (stored with forward slashes for clean JSON)
+    _CONFIG_PATH_KEYS = (
+        "git_path", "git-lfs_path", "solidworks_path",
+        "edrawings_path", "workspace_path", "default_local_path",
+    )
+
+    def _normalize_config_paths(self, config_data):
+        """Convert backslashes to forward slashes in path-type config values for clean JSON storage."""
+        if not config_data:
+            return config_data
+        for key in self._CONFIG_PATH_KEYS:
+            if key in config_data and isinstance(config_data[key], str):
+                config_data[key] = config_data[key].replace("\\", "/")
+        return config_data
+
     def check_and_load_config(self):
         config_path = "config.json"
         template_path = "config.json.template"
@@ -1669,6 +1684,7 @@ class GIT4SWApp(tk.Tk):
             try:
                 with open(template_path, "r", encoding="utf-8") as f:
                     config_data = json.load(f)
+                self._normalize_config_paths(config_data)
                 with open(config_path, "w", encoding="utf-8") as f:
                     json.dump(config_data, f, indent=4, ensure_ascii=False)
                 
@@ -1697,6 +1713,7 @@ class GIT4SWApp(tk.Tk):
                     with open(template_path, "r", encoding="utf-8") as f:
                         config_data = json.load(f)
                     # Save it immediately as config.json
+                    self._normalize_config_paths(config_data)
                     with open(config_path, "w", encoding="utf-8") as f:
                         json.dump(config_data, f, indent=4, ensure_ascii=False)
                     self.write_log("config.json did not exist. Loaded from config.json.template and saved.", "info")
@@ -1917,6 +1934,9 @@ class GIT4SWApp(tk.Tk):
             val = ent.get().strip()
             config_data[key] = val
             
+        # Normalize path separators to forward slashes for clean JSON
+        self._normalize_config_paths(config_data)
+        
         # Write to file
         try:
             with open(config_path, "w", encoding="utf-8") as f:
@@ -4900,6 +4920,7 @@ class GIT4SWApp(tk.Tk):
             except Exception:
                 pass
         config_data["auto_sync"] = val
+        self._normalize_config_paths(config_data)
         try:
             with open(config_path, "w", encoding="utf-8") as f:
                 json.dump(config_data, f, indent=4, ensure_ascii=False)
@@ -5345,6 +5366,7 @@ class GIT4SWApp(tk.Tk):
             except Exception:
                 pass
         config["workspace_path"] = path
+        self._normalize_config_paths(config)
         try:
             with open(config_path, "w", encoding="utf-8") as f:
                 json.dump(config, f, indent=4, ensure_ascii=False)
