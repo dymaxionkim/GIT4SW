@@ -1670,7 +1670,7 @@ class GIT4SWApp(tk.Tk):
                 with open(template_path, "r", encoding="utf-8") as f:
                     config_data = json.load(f)
                 with open(config_path, "w", encoding="utf-8") as f:
-                    json.dump(config_data, f, indent=4)
+                    json.dump(config_data, f, indent=4, ensure_ascii=False)
                 
                 # If command line didn't pass a custom workspace, and template workspace path exists, update it
                 import sys
@@ -1698,7 +1698,7 @@ class GIT4SWApp(tk.Tk):
                         config_data = json.load(f)
                     # Save it immediately as config.json
                     with open(config_path, "w", encoding="utf-8") as f:
-                        json.dump(config_data, f, indent=4)
+                        json.dump(config_data, f, indent=4, ensure_ascii=False)
                     self.write_log("config.json did not exist. Loaded from config.json.template and saved.", "info")
                 except Exception as e:
                     self.write_log(f"Failed to load/apply from template: {e}", "error")
@@ -1920,7 +1920,7 @@ class GIT4SWApp(tk.Tk):
         # Write to file
         try:
             with open(config_path, "w", encoding="utf-8") as f:
-                json.dump(config_data, f, indent=4)
+                json.dump(config_data, f, indent=4, ensure_ascii=False)
                 
             # Update app variables that depend on these configs
             if "workspace_path" in config_data:
@@ -4902,7 +4902,7 @@ class GIT4SWApp(tk.Tk):
         config_data["auto_sync"] = val
         try:
             with open(config_path, "w", encoding="utf-8") as f:
-                json.dump(config_data, f, indent=4)
+                json.dump(config_data, f, indent=4, ensure_ascii=False)
             self.write_log(f"Auto Sync set to {'ON' if val else 'OFF'}", "info")
         except Exception as e:
             self.write_log(f"Failed to save auto sync state: {e}", "error")
@@ -5347,7 +5347,7 @@ class GIT4SWApp(tk.Tk):
         config["workspace_path"] = path
         try:
             with open(config_path, "w", encoding="utf-8") as f:
-                json.dump(config, f, indent=4)
+                json.dump(config, f, indent=4, ensure_ascii=False)
         except Exception as e:
             print(f"Error saving workspace path to config.json: {e}")
 
