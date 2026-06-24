@@ -4828,10 +4828,26 @@ class GIT4SWApp(tk.Tk):
                     if not branch:
                         raise RuntimeError("Cannot sync/pull because you are not currently on a branch (detached HEAD).")
 
+                    # --- Check if the current branch exists on remote ---
+                    # If not, push the local branch to remote first so that pull can proceed.
+                    remote_hash = self.git_service.get_branch_tip_commit(f"origin/{branch}")
+                    if not remote_hash:
+                        self.write_log(
+                            f"Remote branch 'origin/{branch}' does not exist. Pushing local branch to remote first...",
+                            "info"
+                        )
+                        try:
+                            self.git_service._run_lfs_cmd(["git", "push", "-u", "origin", branch])
+                            self.write_log(f"Successfully pushed local branch '{branch}' to remote.", "success")
+                            # Re-fetch to update remote tracking refs
+                            self.git_service._run_lfs_cmd(["git", "fetch", "origin"])
+                            remote_hash = self.git_service.get_branch_tip_commit(f"origin/{branch}")
+                        except Exception as push_e:
+                            raise RuntimeError(f"Failed to push local branch '{branch}' to remote: {push_e}")
+
                     # --- Version comparison: skip pull if already up-to-date ---
                     try:
                         local_hash = self.git_service.get_branch_tip_commit(branch)
-                        remote_hash = self.git_service.get_branch_tip_commit(f"origin/{branch}")
                         if local_hash and remote_hash and local_hash == remote_hash:
                             self.write_log(
                                 f"Already up-to-date with remote (local=remote={local_hash[:7]}). Pull skipped.",
