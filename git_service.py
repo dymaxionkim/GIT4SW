@@ -1186,6 +1186,8 @@ class GitService:
         if not file_paths:
             return
             
+        tracked = []
+        untracked = []
         for fp in file_paths:
             rel_path = self.get_correct_filepath_casing(fp)
             abs_path = os.path.join(self.repo_path, rel_path)
@@ -1197,13 +1199,22 @@ class GitService:
                 pass
                 
             if is_tracked:
-                self._run_lfs_cmd(["git", "checkout", "--", rel_path])
+                tracked.append(rel_path)
             else:
-                if os.path.exists(abs_path):
-                    try:
-                        os.remove(abs_path)
-                    except Exception as e:
-                        raise RuntimeError(f"Failed to delete untracked file {rel_path}: {e}")
+                untracked.append(rel_path)
+                
+        # Batch checkout all tracked files in a single git command
+        if tracked:
+            self._run_lfs_cmd(["git", "checkout", "--"] + tracked)
+            
+        # Delete untracked files individually
+        for rel_path in untracked:
+            abs_path = os.path.join(self.repo_path, rel_path)
+            if os.path.exists(abs_path):
+                try:
+                    os.remove(abs_path)
+                except Exception as e:
+                    raise RuntimeError(f"Failed to delete untracked file {rel_path}: {e}")
         self._load_repo()
 
     def get_current_commit_hash(self):

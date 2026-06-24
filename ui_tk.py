@@ -6439,7 +6439,8 @@ finally:
         ans = messagebox.askyesno(
             "Confirm Discard", 
             f"Are you sure you want to discard all local changes for the selected {len(files_to_discard)} files?\n\n"
-            "⚠️ Warning: This will overwrite or delete your local modifications and cannot be undone."
+            "⚠️ Warning: This will overwrite or delete your local modifications and cannot be undone.\n"
+            "Locked files will be automatically unlocked after discarding."
         )
         if not ans:
             return
@@ -6448,26 +6449,65 @@ finally:
         
         def run():
             self.increment_tasks()
+            import stat
             try:
                 # Run check_sw_open_state in worker thread
                 for file_rel_path in files_to_discard:
                     if not self.check_sw_open_state(file_rel_path):
                         return
                         
-                success_count = 0
-                errors = []
-                for file_rel_path in files_to_discard:
-                    try:
-                        self.git_service.discard_changes([file_rel_path])
-                        success_count += 1
-                    except Exception as e:
-                        errors.append(f"Failed to discard {file_rel_path}: {e}")
+                discard_errors = []
+                unlock_errors = []
                 
-                if errors:
-                    err_msg = "\n".join(errors)
-                    self.task_queue.put(('error', f"Discarded changes for {success_count} files, but errors occurred:\n\n{err_msg}", self.refresh_file_list))
+                try:
+                    self.git_service.discard_changes(files_to_discard)
+                except Exception as e:
+                    discard_errors.append(str(e))
+                
+                # After discard, unlock any files that are locked by us
+                for file_rel_path in files_to_discard:
+                    rel_path_lower = file_rel_path.lower().replace("\\", "/")
+                    is_locked_by_us = any(f.lower() == rel_path_lower for f in self.files_locked_by_us)
+                    if is_locked_by_us:
+                        try:
+                            self.git_service.unlock_file(file_rel_path)
+                            
+                            # Clean up tracking set
+                            matched = None
+                            for f in self.files_locked_by_us:
+                                if f.lower() == rel_path_lower:
+                                    matched = f
+                                    break
+                            if matched:
+                                self.files_locked_by_us.remove(matched)
+                            
+                            # Set disk to read-only after unlock
+                            abs_path = os.path.abspath(os.path.join(self.workspace_path, file_rel_path))
+                            if os.path.exists(abs_path):
+                                mode = os.stat(abs_path).st_mode
+                                os.chmod(abs_path, mode & ~stat.S_IWRITE)
+                        except Exception as e:
+                            unlock_errors.append(f"Failed to unlock {file_rel_path}: {e}")
+                
+                # Build result message
+                msg_parts = []
+                if not discard_errors:
+                    msg_parts.append(f"Discarded changes for {len(files_to_discard)} files")
                 else:
-                    self.task_queue.put(('success', f"Discarded changes for {success_count} files successfully!", self.refresh_file_list))
+                    msg_parts.append(f"Discarded with errors: {'; '.join(discard_errors)}")
+                    
+                unlocked_count = len(files_to_discard) - len(unlock_errors) if not discard_errors else 0
+                if unlock_errors:
+                    msg_parts.append(f"Unlocked with errors: {'; '.join(unlock_errors)}")
+                elif unlocked_count > 0:
+                    msg_parts.append(f"Unlocked {unlocked_count} file(s)")
+                
+                final_msg = ". ".join(msg_parts) + "."
+                
+                if discard_errors or unlock_errors:
+                    self.task_queue.put(('error', f"⚠️ {final_msg}", self.refresh_file_list))
+                else:
+                    self.task_queue.put(('success', f"✅ {final_msg}", self.refresh_file_list))
             finally:
                 self.decrement_tasks()
                 
