@@ -3061,10 +3061,9 @@ class GIT4SWApp(tk.Tk):
                         
                 success_count = 0
                 errors = []
-                for file_rel_path in files_to_lock:
-                    try:
-                        self.git_service.lock_file(file_rel_path)
-                        
+                results = self.git_service.batch_lock_files(files_to_lock, max_workers=10)
+                for file_rel_path, success, message in results:
+                    if success:
                         # Force clear read-only attribute on disk immediately after locking
                         abs_path = os.path.abspath(os.path.join(self.workspace_path, file_rel_path))
                         if os.path.exists(abs_path):
@@ -3074,10 +3073,9 @@ class GIT4SWApp(tk.Tk):
                                 os.chmod(abs_path, mode | stat.S_IWRITE)
                             except Exception as chmod_e:
                                 print(f"Failed to clear read-only on locked file '{abs_path}': {chmod_e}")
-                                
                         success_count += 1
-                    except Exception as e:
-                        errors.append(f"Failed to lock {file_rel_path}: {e}")
+                    else:
+                        errors.append(f"Failed to lock {file_rel_path}: {message}")
                 
                 if errors:
                     err_msg = "\n".join(errors)
@@ -3115,6 +3113,7 @@ class GIT4SWApp(tk.Tk):
                         
                 success_count = 0
                 errors = []
+                files_to_unlock_batch = []
                 for file_rel_path in files_to_unlock:
                     # Check if file is locked by someone else
                     rel_path_lower = file_rel_path.lower().replace("\\", "/")
@@ -3128,32 +3127,32 @@ class GIT4SWApp(tk.Tk):
                     if locked_by_others:
                         errors.append(f"Failed to unlock {file_rel_path}: Lock is held by another user.")
                         continue
-                        
-                    try:
-                        self.git_service.unlock_file(file_rel_path)
-                        
-                        # Re-enable read-only attribute on disk immediately after unlocking
-                        abs_path = os.path.abspath(os.path.join(self.workspace_path, file_rel_path))
-                        if os.path.exists(abs_path):
-                            import stat
-                            try:
-                                mode = os.stat(abs_path).st_mode
-                                os.chmod(abs_path, mode & ~stat.S_IWRITE)
-                            except Exception as chmod_e:
-                                print(f"Failed to set read-only on unlocked file '{abs_path}': {chmod_e}")
-                                
-                        success_count += 1
-                        
-                        # Clean up our tracking set
-                        matched_path = None
-                        for f in self.files_locked_by_us:
-                            if f.lower() == rel_path_lower:
-                                matched_path = f
-                                break
-                        if matched_path:
-                            self.files_locked_by_us.remove(matched_path)
-                    except Exception as e:
-                        errors.append(f"Failed to unlock {file_rel_path}: {e}")
+                    files_to_unlock_batch.append(file_rel_path)
+
+                if files_to_unlock_batch:
+                    results = self.git_service.batch_unlock_files(files_to_unlock_batch, max_workers=10)
+                    for file_rel_path, success, message in results:
+                        if success:
+                            # Re-enable read-only attribute on disk immediately after unlocking
+                            abs_path = os.path.abspath(os.path.join(self.workspace_path, file_rel_path))
+                            if os.path.exists(abs_path):
+                                import stat
+                                try:
+                                    mode = os.stat(abs_path).st_mode
+                                    os.chmod(abs_path, mode & ~stat.S_IWRITE)
+                                except Exception as chmod_e:
+                                    print(f"Failed to set read-only on unlocked file '{abs_path}': {chmod_e}")
+                            success_count += 1
+                            # Clean up our tracking set
+                            matched_path = None
+                            for f in self.files_locked_by_us:
+                                if f.lower() == file_rel_path.lower():
+                                    matched_path = f
+                                    break
+                            if matched_path:
+                                self.files_locked_by_us.remove(matched_path)
+                        else:
+                            errors.append(f"Failed to unlock {file_rel_path}: {message}")
                 
                 if errors:
                     err_msg = "\n".join(errors)
@@ -3198,10 +3197,9 @@ class GIT4SWApp(tk.Tk):
                         
                 success_count = 0
                 errors = []
-                for file_rel_path in files_to_unlock:
-                    try:
-                        self.git_service.unlock_file(file_rel_path, force=True)
-                        
+                results = self.git_service.batch_unlock_files(files_to_unlock, max_workers=10, force=True)
+                for file_rel_path, success, message in results:
+                    if success:
                         # Re-enable read-only attribute on disk immediately after force unlocking
                         abs_path = os.path.abspath(os.path.join(self.workspace_path, file_rel_path))
                         if os.path.exists(abs_path):
@@ -3211,10 +3209,9 @@ class GIT4SWApp(tk.Tk):
                                 os.chmod(abs_path, mode & ~stat.S_IWRITE)
                             except Exception as chmod_e:
                                 print(f"Failed to set read-only on force unlocked file '{abs_path}': {chmod_e}")
-                                
                         success_count += 1
-                    except Exception as e:
-                        errors.append(f"Failed to force unlock {file_rel_path}: {e}")
+                    else:
+                        errors.append(f"Failed to force unlock {file_rel_path}: {message}")
                 
                 if errors:
                     err_msg = "\n".join(errors)
@@ -6977,23 +6974,22 @@ finally:
                 
                 locks_lower = {k.lower().replace("\\", "/"): v for k, v in locks.items()}
                 
-                # 3. Detect newly opened files -> Auto Lock (case-insensitive checks)
+                # 3. Detect newly opened files -> collect for batch auto-lock
+                files_to_auto_lock = []
                 for rel_path in current_open_files:
                     was_open = any(f.lower() == rel_path.lower() for f in self.last_open_files)
                     if not was_open:
-                        # File just opened!
                         rel_path_lower = rel_path.lower().replace("\\", "/")
                         locked_by_others = False
-                        
+
                         # A. Check newly fetched locks from remote
                         if rel_path_lower in locks_lower:
                             is_ours = locks_lower[rel_path_lower]['is_ours']
                             if is_ours:
-                                # Already locked by us, track it
                                 self.files_locked_by_us.add(rel_path)
                             else:
                                 locked_by_others = True
-                        
+
                         # B. Check cached files_data in case remote lock fetch was bypassed or failed
                         if not locked_by_others and getattr(self, 'files_data', None):
                             for f in self.files_data:
@@ -7004,40 +7000,17 @@ finally:
                                         else:
                                             locked_by_others = True
                                     break
-                                    
-                        if locked_by_others:
-                            # Locked by someone else, we shouldn't lock it
-                            pass
-                        else:
-                            # Not locked, lock it!
+
+                        if not locked_by_others:
                             is_already_locked_by_us = any(x.lower() == rel_path_lower for x in self.files_locked_by_us)
                             if not is_already_locked_by_us and not getattr(self, 'suppress_auto_lock', False):
-                                def run_lock(path_to_lock):
-                                    self.increment_tasks()
-                                    success = False
-                                    try:
-                                        self.git_service.lock_file(path_to_lock)
-                                        self.files_locked_by_us.add(path_to_lock)
-                                        self.task_queue.put(('sw_status', f"Automatically locked {path_to_lock}", None))
-                                        success = True
-                                    except Exception as e:
-                                        self.task_queue.put(('silent_error', f"Auto-lock failed for {path_to_lock}: {e}", None))
-                                    finally:
-                                        self.decrement_tasks()
-                                        
-                                    if success:
-                                        import time
-                                        time.sleep(0.75)
-                                        if self.bg_tasks_count == 0:
-                                            self.task_queue.put(('callback', None, self.refresh_file_list))
-                                        
-                                threading.Thread(target=run_lock, args=(rel_path,), daemon=True).start()
-                
-                # 4. Detect closed files -> Auto Unlock (case-insensitive checks)
+                                files_to_auto_lock.append(rel_path)
+
+                # 4. Detect closed files -> collect for batch auto-unlock
+                auto_unlock_map = {}
                 for rel_path in self.last_open_files:
                     is_still_open = any(f.lower() == rel_path.lower() for f in current_open_files)
                     if not is_still_open:
-                        # File was closed!
                         is_locked_by_us = False
                         matched_path = None
                         for f in self.files_locked_by_us:
@@ -7045,54 +7018,73 @@ finally:
                                 is_locked_by_us = True
                                 matched_path = f
                                 break
-                                
+
                         if is_locked_by_us:
-                            # Verify that the file is not locked by another user
                             rel_path_lower = rel_path.lower().replace("\\", "/")
                             locked_by_others = False
-                            
-                            # A. Check remote locks
+
                             if rel_path_lower in locks_lower:
                                 is_ours = locks_lower[rel_path_lower]['is_ours']
                                 if not is_ours:
                                     locked_by_others = True
-                                    
-                            # B. Check cached files_data
+
                             if not locked_by_others and getattr(self, 'files_data', None):
                                 for f in self.files_data:
                                     if f['file'].lower().replace("\\", "/") == rel_path_lower:
                                         if f.get('locked', False) and not f.get('is_our_lock', False):
                                             locked_by_others = True
                                         break
-                                        
+
                             if locked_by_others:
-                                # Locked by someone else, clean up our tracking set and do not unlock
                                 if matched_path in self.files_locked_by_us:
                                     self.files_locked_by_us.remove(matched_path)
                             else:
-                                def run_unlock(path_to_unlock, path_to_remove):
-                                    self.increment_tasks()
-                                    success = False
-                                    try:
-                                        self.git_service.unlock_file(path_to_unlock)
-                                        if path_to_remove in self.files_locked_by_us:
-                                            self.files_locked_by_us.remove(path_to_remove)
-                                        self.task_queue.put(('sw_status', f"Automatically unlocked {path_to_unlock}", None))
-                                        success = True
-                                    except Exception as e:
-                                        self.task_queue.put(('silent_error', f"Auto-unlock failed for {path_to_unlock}: {e}", None))
-                                    finally:
-                                        self.decrement_tasks()
-                                        
-                                    if success:
-                                        import time
-                                        time.sleep(0.75)
-                                        if self.bg_tasks_count == 0:
-                                            self.task_queue.put(('callback', None, self.refresh_file_list))
-                                        
-                                threading.Thread(target=run_unlock, args=(rel_path, matched_path), daemon=True).start()
-                            
-                # 5. Build status message/dictionary for Dashboard
+                                auto_unlock_map[rel_path] = matched_path
+
+                # 5. Batch auto-lock in a single thread
+                if files_to_auto_lock:
+                    def batch_auto_lock():
+                        self.increment_tasks()
+                        try:
+                            results = self.git_service.batch_lock_files(files_to_auto_lock, max_workers=5)
+                            for path, success, msg in results:
+                                if success:
+                                    self.files_locked_by_us.add(path)
+                                    self.task_queue.put(('sw_status', f"Automatically locked {path}", None))
+                                else:
+                                    self.task_queue.put(('silent_error', f"Auto-lock failed for {path}: {msg}", None))
+                        finally:
+                            self.decrement_tasks()
+                        import time
+                        time.sleep(0.75)
+                        if self.bg_tasks_count == 0:
+                            self.task_queue.put(('callback', None, self.refresh_file_list))
+                    threading.Thread(target=batch_auto_lock, daemon=True).start()
+
+                # 6. Batch auto-unlock in a single thread
+                if auto_unlock_map:
+                    def batch_auto_unlock():
+                        self.increment_tasks()
+                        try:
+                            results = self.git_service.batch_unlock_files(list(auto_unlock_map.keys()), max_workers=5)
+                            for path, success, msg in results:
+                                if success:
+                                    if path in auto_unlock_map:
+                                        remove_target = auto_unlock_map[path]
+                                        if remove_target in self.files_locked_by_us:
+                                            self.files_locked_by_us.remove(remove_target)
+                                    self.task_queue.put(('sw_status', f"Automatically unlocked {path}", None))
+                                else:
+                                    self.task_queue.put(('silent_error', f"Auto-unlock failed for {path}: {msg}", None))
+                        finally:
+                            self.decrement_tasks()
+                        import time
+                        time.sleep(0.75)
+                        if self.bg_tasks_count == 0:
+                            self.task_queue.put(('callback', None, self.refresh_file_list))
+                    threading.Thread(target=batch_auto_unlock, daemon=True).start()
+
+                # 7. Build status message/dictionary for Dashboard
                 is_active = self.sw_service._get_sw_app() is not None
                 active_text = "Active" if is_active else "Inactive"
                 total_files = len(self.files_data) if getattr(self, 'files_data', None) else 0

@@ -4,6 +4,7 @@ import gc
 import time
 import argparse
 import json
+import ast
 import pandas as pd
 
 # Configure stdout and stderr to use UTF-8 and replace encoding errors to avoid crashes with localized chars
@@ -386,6 +387,8 @@ def main():
                 with open(config_path, "r", encoding="utf-8") as f:
                     config_data = json.load(f)
                 column_order = config_data.get("column_order", default_column_order)
+                if isinstance(column_order, str):
+                    column_order = ast.literal_eval(column_order)
             else:
                 column_order = default_column_order
         except Exception:

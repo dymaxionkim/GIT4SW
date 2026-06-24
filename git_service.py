@@ -5,6 +5,7 @@ import re
 import datetime
 import git
 import threading
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
 # Set Git/GCM environment variables at process startup to ensure zero interactive GUI dialogs/prompts
 os.environ["GCM_INTERACTIVE"] = "never"
@@ -860,6 +861,40 @@ class GitService:
         if force:
             args.append("--force")
         return self._run_lfs_cmd(args)
+
+    def _batch_lfs_operation(self, file_paths, action, max_workers=10, force=False):
+        """Process multiple LFS lock/unlock operations in parallel using ThreadPoolExecutor."""
+        rel_paths = [self.get_correct_filepath_casing(fp) for fp in file_paths]
+
+        def _process_single(rel_path):
+            try:
+                if action == "lock":
+                    result = self._run_lfs_cmd(["git", "lfs", "lock", rel_path])
+                elif action == "unlock":
+                    args = ["git", "lfs", "unlock", rel_path]
+                    if force:
+                        args.append("--force")
+                    result = self._run_lfs_cmd(args)
+                else:
+                    return rel_path, False, f"Invalid action: {action}"
+                return rel_path, True, result
+            except Exception as e:
+                return rel_path, False, str(e)
+
+        results = []
+        with ThreadPoolExecutor(max_workers=max_workers) as executor:
+            future_to_path = {executor.submit(_process_single, p): p for p in rel_paths}
+            for future in as_completed(future_to_path):
+                results.append(future.result())
+        return results
+
+    def batch_lock_files(self, file_paths, max_workers=10):
+        """Lock multiple files in parallel."""
+        return self._batch_lfs_operation(file_paths, "lock", max_workers=max_workers)
+
+    def batch_unlock_files(self, file_paths, max_workers=10, force=False):
+        """Unlock multiple files in parallel."""
+        return self._batch_lfs_operation(file_paths, "unlock", max_workers=max_workers, force=force)
 
     def sync_pull(self):
         """Sync pull remote repository (performs fetch + rebase via subprocess for robustness)."""
