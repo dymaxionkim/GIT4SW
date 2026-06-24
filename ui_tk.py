@@ -1726,9 +1726,6 @@ class GIT4SWApp(tk.Tk):
         card = ttk.Frame(view, style="Card.TFrame")
         card.pack(fill="both", expand=True, padx=16, pady=4)
         
-        lbl_card_title = ttk.Label(card, text="Edit config.json variables", style="CardTitle.TLabel")
-        lbl_card_title.pack(anchor="w", padx=16, pady=(12, 8))
-        
         # Container to hold layout
         container = tk.Frame(card, bg="#ffffff")
         container.pack(fill="both", expand=True, padx=16, pady=(0, 16))
@@ -1813,7 +1810,7 @@ class GIT4SWApp(tk.Tk):
             display_name = display_names.get(key, key.replace("_", " ").title())
             
             # Label
-            lbl = ttk.Label(self.config_fields_frame, text=f"{display_name}:", font=("TkDefaultFont", 9, "bold"), anchor="w", background="#ffffff")
+            lbl = ttk.Label(self.config_fields_frame, text=f"{display_name}:", font=("TkDefaultFont", 10, "bold"), anchor="w", background="#ffffff")
             lbl.grid(row=row_idx, column=0, padx=(0, 10), pady=3, sticky="w")
             
             if key in find_targets:
