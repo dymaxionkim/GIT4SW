@@ -530,7 +530,7 @@ class FileCommitHistoryDialog(tk.Toplevel):
                 if os.path.exists(sldworks_exe):
                     print(f"SolidWorks not running - launching: {sldworks_exe}", flush=True)
                     self.after(0, lambda: self.lbl_status.config(
-                        text="SolidWorks 실행 중... 잠시만 기다려 주세요.", foreground="#f59e0b"))
+                        text="SolidWorks is launching... Please wait a moment.", foreground="#f59e0b"))
                     try:
                         import subprocess as _subprocess
                         _subprocess.Popen([sldworks_exe])
@@ -549,7 +549,7 @@ class FileCommitHistoryDialog(tk.Toplevel):
                                 print("SolidWorks launched and bound successfully.", flush=True)
                                 break
                             except Exception:
-                                time.sleep(1.0)
+                                time.sleep(0.5)
                     except Exception as _launch_err:
                         print(f"Failed to launch SolidWorks: {_launch_err}", flush=True)
                 else:
@@ -570,8 +570,8 @@ class FileCommitHistoryDialog(tk.Toplevel):
 
             if sw_app is None:
                 raise RuntimeError(
-                    "SOLIDWORKS을 시작하거나 연결할 수 없습니다.\n"
-                    "수동으로 SOLIDWORKS를 실행한 후 다시 시도해 주세요.\n"
+                    "Could not start or bind to SOLIDWORKS.\n"
+                    "Please launch SOLIDWORKS manually and retry.\n"
                     "(Could not start or bind to SOLIDWORKS. Please launch it manually and retry.)"
                 )
 
@@ -586,30 +586,32 @@ class FileCommitHistoryDialog(tk.Toplevel):
                 raise ValueError(f"Unsupported file extension for diff: {ext}")
 
             # 6. Open both files in SolidWorks
-            # Diff 버튼으로 .backup/ 복사본을 열 때는 외부 참조(external references)로
-            # 연결된 어떤 파일도 함께 로드되지 않도록 차단한다.
+            # When opening .backup/ copies via the Diff button, block any files linked
+            # via external references from being loaded together.
             #
-            # [메커니즘]
-            #  - swOpenDocOptions_Silent (1)                       : 팝업/경고 무시
+            # [Mechanism]
+            #  - swOpenDocOptions_Silent (1)                       : ignore popups/warnings
             #  - swOpenDocOptions_IgnoreActivationAndSuppression (64):
-            #      파트/도면을 열 때 부모 어셈블리가 자동 활성화/로딩되는 것을 억제.
-            #      (SolidWorks 버전에 따라 swOpenDocOptions_DismissExternalReferences 와
-            #       동일 값 0x40 로 통칭되며, 부모 자동 로딩 억제 목적으로 사용됨)
-            #  - swOpenDocOptions_AutoMissingComponentResolve (128)  : 누락 컴포넌트 폴백
-            #  - swOpenDocOptions_LoadModel (32) [도면용]          : 도면이 참조 모델을
-            #      메모리에 로드. Diff에서는 이 플래그를 빼서 "캐시된 뷰"만 표시하고
-            #      참조 sldprt 가 로드되지 않도록 한다.
+            #      suppresses automatic activation/loading of parent assemblies when
+            #      opening parts/drawings.
+            #      (Depending on the SolidWorks version, this is equivalent to
+            #       swOpenDocOptions_DismissExternalReferences at the same value 0x40,
+            #       used to suppress automatic parent loading.)
+            #  - swOpenDocOptions_AutoMissingComponentResolve (128)  : missing component fallback
+            #  - swOpenDocOptions_LoadModel (32) [for drawings]     : loads the model
+            #      referenced by the drawing into memory. For Diff, this flag is omitted so
+            #      only "cached views" are shown and the referenced sldprt is not loaded.
             #
-            # [핵심] 단순 플래그만으로는 외부 참조 파일의 로딩 자체를 막을 수 없다.
-            #  사용자 환경설정 swLoadExternalReferences (번호 242) 를 0(None)으로 설정한
-            #  상태에서 OpenDoc6 를 호출해야 SolidWorks 가 외부 참조 대상 파일을
-            #  아예 로드하지 않는다. (이 프로젝트 sw_export_runner.py 의 사례와 동일)
-            #  호출 후에는 원래 설정값으로 반드시 복원한다.
+            # [Key] Flags alone cannot block loading of external reference files.
+            #  OpenDoc6 must be called while the user preference swLoadExternalReferences
+            #  (number 242) is set to 0 (None) for SolidWorks to not load external
+            #  reference files at all. (Same approach as sw_export_runner.py in this project.)
+            #  After the call, the original preference value must be restored.
             #
             # swUserPreferences_e:
             #   242 = swLoadExternalReferences
-            #     0 = swLoadExternalReferences_None  (외부 참조 로드 안 함)
-            #     1 = swLoadExternalReferences_All   (모든 참조 로드)
+            #     0 = swLoadExternalReferences_None  (do not load external references)
+            #     1 = swLoadExternalReferences_All   (load all references)
             REF_PREF_SW_LOAD_EXT_REFS = 242
             REF_PREF_VAL_NONE = 0
 
@@ -622,8 +624,9 @@ class FileCommitHistoryDialog(tk.Toplevel):
                 error   = win32com.client.VARIANT(pythoncom.VT_BYREF | pythoncom.VT_I4, 0)
                 warning = win32com.client.VARIANT(pythoncom.VT_BYREF | pythoncom.VT_I4, 0)
 
-                # 도면(.slddrw): LoadModel(32) 제거 → 참조 모델을 로드하지 않고
-                #   캐시된 뷰 데이터만 표시. 부모 자동 로딩 억제(64) 포함.
+                # Drawing (.slddrw): remove LoadModel(32) → do not load the referenced
+                #   model; display only cached view data. Includes parent auto-load
+                #   suppression (64).
                 if doc_type == 3:    # swDocDRAWING
                     open_options = SW_OPT_SILENT | SW_OPT_IGNORE_ACTIVATION | SW_OPT_AUTO_MISSING
                 elif doc_type == 1:  # swDocPART
@@ -631,7 +634,7 @@ class FileCommitHistoryDialog(tk.Toplevel):
                 else:
                     open_options = SW_OPT_SILENT | SW_OPT_IGNORE_ACTIVATION | SW_OPT_AUTO_MISSING
 
-                # 외부 참조 로딩 차단을 위해 환경설정 242 를 0(None) 으로 설정
+                # Set user preference 242 to 0 (None) to block external reference loading
                 orig_ext_ref_pref = None
                 try:
                     orig_ext_ref_pref = sw_app.GetUserPreferenceIntegerValue(REF_PREF_SW_LOAD_EXT_REFS)
@@ -643,7 +646,7 @@ class FileCommitHistoryDialog(tk.Toplevel):
                 try:
                     model = sw_app.OpenDoc6(file_path, doc_type, open_options, "", error, warning)
                 finally:
-                    # OpenDoc6 호출 직후 원래 설정값으로 복원
+                    # Restore original preference value immediately after OpenDoc6 call
                     if orig_ext_ref_pref is not None:
                         try:
                             sw_app.SetUserPreferenceIntegerValue(REF_PREF_SW_LOAD_EXT_REFS, orig_ext_ref_pref)
@@ -652,7 +655,7 @@ class FileCommitHistoryDialog(tk.Toplevel):
 
                 if not model:
                     raise RuntimeError(
-                        f"SolidWorks에서 문서를 열 수 없습니다: "
+                        f"Failed to open document in SolidWorks: "
                         f"{os.path.basename(file_path)} (Error={error.value})"
                     )
                 return model
@@ -1167,6 +1170,12 @@ class GIT4SWApp(tk.Tk):
         # Track open files and locked files by us in SolidWorks for auto Lock/Unlock
         self.last_open_files = set()
         self.files_locked_by_us = set()
+        # While EXPORT/BOM subprocesses are running, suppress the background monitor's
+        # automatic LFS Lock attempts.
+        # (EXPORT/BOM runners open files in ReadOnly mode, so Lock is unnecessary, and
+        #  this prevents the monitor from detecting files opened in the same SolidWorks
+        #  instance and attempting unnecessary Locks.)
+        self.suppress_auto_lock = False
         
         # Monitor thread for SolidWorks active document status
         self.sw_monitor_active = True
@@ -1208,7 +1217,7 @@ class GIT4SWApp(tk.Tk):
                   background=[("active", "#047857"), ("disabled", "#f3f4f6")],
                   foreground=[("active", "#ffffff"), ("disabled", "#9ca3af")])
                   
-        # [수정] Make my branch 전용 스타일 추가 (비활성화 시 배경 및 텍스트 모두 흰색)
+        # [Fix] Added dedicated style for Make my branch (when disabled, both background and text are white)
         style.configure("MakeBranch.TButton", padding=6, background="#059669", foreground="#ffffff", borderwidth=0)
         style.map("MakeBranch.TButton",
                   background=[("active", "#047857"), ("disabled", "#ffffff")],
@@ -1566,7 +1575,7 @@ class GIT4SWApp(tk.Tk):
                 self.btn_cleanup_lfs.state(["!disabled"])
             self.btn_merge.state(["!disabled"])
             self.btn_discard.state(["!disabled"])
-            # 파일 목록 상태에 따라 Lock/Unlock/Discard 등 버튼 재조정
+                        # Re-adjust Lock/Unlock/Discard buttons based on file list status
             self.update_button_states_by_file_list()
         else:
             self.btn_lock.state(["disabled"])
@@ -1734,6 +1743,9 @@ class GIT4SWApp(tk.Tk):
         
         self.btn_save_config = ttk.Button(btn_frm, text="Save Configuration", style="Primary.TButton", command=self.save_config_from_view)
         self.btn_save_config.pack(side="left")
+        
+        self.btn_edit_config = ttk.Button(btn_frm, text="Edit Config.json", command=self.edit_config_file)
+        self.btn_edit_config.pack(side="left", padx=(8, 0))
         
         self.config_entries = {}
         
@@ -1932,6 +1944,19 @@ class GIT4SWApp(tk.Tk):
         except Exception as e:
             self.write_log(f"Failed to save configuration: {e}", "error")
 
+    @queue_during_bg_tasks
+    def edit_config_file(self):
+        config_path = "config.json"
+        if not os.path.exists(config_path):
+            self.write_log("config.json does not exist.", "warning")
+            return
+        try:
+            abs_config_path = os.path.abspath(config_path)
+            subprocess.Popen(["notepad.exe", abs_config_path])
+            self.write_log(f"Opened {abs_config_path} in Notepad.", "info")
+        except Exception as e:
+            self.write_log(f"Failed to open config.json in Notepad: {e}", "error")
+
     def create_help_view(self):
         view = ttk.Frame(self.content_frame)
         
@@ -2100,7 +2125,7 @@ class GIT4SWApp(tk.Tk):
         self.cb_branch.pack(side="left", padx=(0, 8))
         self.cb_branch.bind("<<ComboboxSelected>>", self.on_branch_selected)
         
-        # [수정] 기본 스타일을 전용 스타일인 "MakeBranch.TButton"으로 지정
+        # [Fix] Set the default style to the dedicated "MakeBranch.TButton" style
         self.btn_make_my_branch = ttk.Button(branch_frm, text="Make my branch", command=self.make_my_branch, style="MakeBranch.TButton")
         self.btn_make_my_branch.pack(side="left")
         
@@ -2191,7 +2216,7 @@ class GIT4SWApp(tk.Tk):
                 self.btn_cleanup_lfs.state(["disabled"])
             self.btn_clone.state(["!disabled"])
             self.cb_branch.config(values=[], state="disabled")
-            # [수정] 비활성화 시 전용 스타일 강제 적용
+            # [Fix] Force-apply dedicated style when disabled
             self.btn_make_my_branch.config(style="MakeBranch.TButton", state="disabled")
         else:
             self.lbl_local_status.config(text="🟢 Git Repo Active", foreground="#10b981")
@@ -2205,7 +2230,7 @@ class GIT4SWApp(tk.Tk):
             if hasattr(self, 'btn_cleanup_lfs'):
                 self.btn_cleanup_lfs.state(["!disabled"])
             self.btn_clone.state(["!disabled"])
-            # [수정] 비활성화 시 전용 스타일 강제 적용
+            # [Fix] Force-apply dedicated style when disabled
             self.btn_make_my_branch.config(style="MakeBranch.TButton", state="disabled")
             self.load_branches_in_combo()
 
@@ -2302,7 +2327,7 @@ class GIT4SWApp(tk.Tk):
                     else:
                         self.cb_branch.set("")
                         
-                    # [수정] 버튼의 상태에 관계없이 일관되게 전용 스타일(MakeBranch.TButton)을 유지하도록 변경
+                    # [Fix] Changed to consistently keep the dedicated style (MakeBranch.TButton) regardless of the button state
                     if username and not branch_exists:
                         self.btn_make_my_branch.config(style="MakeBranch.TButton", state="normal")
                     else:
@@ -2395,7 +2420,7 @@ class GIT4SWApp(tk.Tk):
             
         self.is_switching_branch = True
         self.cb_branch.config(state="disabled")
-        # [수정] 전용 스타일과 함께 비활성화 상태 부여
+        # [Fix] Apply disabled state along with the dedicated style
         self.btn_make_my_branch.config(style="MakeBranch.TButton", state="disabled")
         
         def run():
@@ -2678,7 +2703,7 @@ class GIT4SWApp(tk.Tk):
                 def update_gui():
                     self.files_data = files_data
                     
-                    # Extract unique directories (\ 구분자로 표시)
+                    # Extract unique directories (displayed with \ separator)
                     dirs = set()
                     for file_info in files_data:
                         d = os.path.dirname(file_info['file']) or "."
@@ -2779,14 +2804,14 @@ class GIT4SWApp(tk.Tk):
             commit_messages.extend(str(item) for item in cm)
         else:
             commit_messages.extend([
-                "대략설계 : ",
-                "상세설계 : ",
-                "디자인리뷰 : ",
-                "도면작성 : ",
-                "프로토타입 제작 : ",
-                "프로토타입 수정보완 : ",
-                "시험평가 : ",
-                "생산이관 : "
+                "Conceptual Design: ",
+                "Detailed Design: ",
+                "Design Review: ",
+                "Drawing Creation: ",
+                "Prototype Manufacturing: ",
+                "Prototype Revision: ",
+                "Testing & Evaluation: ",
+                "Production Transfer: "
             ])
             
         if hasattr(self, 'cb_commit_msg'):
@@ -2801,7 +2826,7 @@ class GIT4SWApp(tk.Tk):
         self.txt_message.insert("1.0", selected)
 
     def populate_file_table(self):
-        # Save selection (트리 표시값(\)을 내부 형식(/)으로 변환하여 저장)
+        # Save selection (convert tree display value (\) to internal format (/) for storage)
         selected_paths = []
         for item in self.tree.selection():
             values = self.tree.item(item, 'values')
@@ -2818,7 +2843,7 @@ class GIT4SWApp(tk.Tk):
         selected_path = self.cb_path_filter.get()
         if not selected_path:
             selected_path = "All Files"
-        # 콤보박스 표시값(\)을 내부 형식(/)으로 변환
+        # Convert combobox display value (\) to internal format (/)
         selected_path_norm = selected_path.replace("\\", "/") if selected_path != "All Files" else "All Files"
         
         # 1. Filter files_data
@@ -2871,7 +2896,7 @@ class GIT4SWApp(tk.Tk):
                     
             owner_text = file_info['locked_by'] if file_info['locked'] else "—"
             
-            # 파일 경로를 \ 구분자로 표시
+            # Display file path with \ separator
             display_path = file_info['file'].replace("/", "\\")
             
             new_item = self.tree.insert("", "end", values=(
@@ -2889,19 +2914,19 @@ class GIT4SWApp(tk.Tk):
             count = len(self.tree.selection())
             self.lbl_selected_count.config(text=f"Selected files: {count}")
 
-        # 파일 목록 상태에 따라 버튼 활성화/비활성화
+        # Enable/disable buttons based on file list status
         self.update_button_states_by_file_list()
 
     def update_button_states_by_file_list(self):
-        """테이블의 Locked/Status 컬럼 상태에 따라 버튼 활성화/비활성화.
-        백그라운드 작업 중이거나 Git 저장소가 아닌 경우에는 호출하지 않는다."""
+        """Enable/disable buttons based on the Locked/Status column states in the table.
+        Not called while background tasks are running or when not in a Git repository."""
         if getattr(self, 'bg_tasks_count', 0) > 0:
             return
         if not self.git_service.is_git_repo():
             return
 
-        # 테이블의 컬럼에서 직접 상태를 읽어서 판단
-        # 컬럼 순서: 0=File Path, 1=Status, 2=SolidWorks, 3=Locked
+        # Determine state by reading directly from table columns
+        # Column order: 0=File Path, 1=Status, 2=SolidWorks, 3=Locked
         has_locked = False
         has_unlocked = False
         has_modified = False
@@ -2911,19 +2936,19 @@ class GIT4SWApp(tk.Tk):
             if not values:
                 continue
 
-            # Locked 컬럼 (index 3): "—" 또는 빈 값이면 Unlocked, 값이 있으면 Locked
+            # Locked column (index 3): "—" or empty means Unlocked; a value means Locked
             locked_val = values[3] if len(values) > 3 else ""
             if locked_val and str(locked_val).strip() not in ("", "—", "-"):
                 has_locked = True
             else:
                 has_unlocked = True
 
-            # Status 컬럼 (index 1): "Modified"가 포함되어 있으면 Modified
+            # Status column (index 1): if it contains "Modified" it is Modified
             status_val = values[1] if len(values) > 1 else ""
             if status_val and "Modified" in str(status_val):
                 has_modified = True
 
-        # Unlock / Force Unlock: Locked 파일이 있을 때만 활성화
+        # Unlock / Force Unlock: enabled only when there are Locked files
         if has_locked:
             self.btn_unlock.state(["!disabled"])
             self.btn_force_unlock.state(["!disabled"])
@@ -2931,13 +2956,13 @@ class GIT4SWApp(tk.Tk):
             self.btn_unlock.state(["disabled"])
             self.btn_force_unlock.state(["disabled"])
 
-        # Lock: Unlocked 파일이 있을 때만 활성화
+        # Lock: enabled only when there are Unlocked files
         if has_unlocked:
             self.btn_lock.state(["!disabled"])
         else:
             self.btn_lock.state(["disabled"])
 
-        # Discard / Upload Selected / Upload Every: Modified 파일이 있을 때만 활성화
+        # Discard / Upload Selected / Upload Every: enabled only when there are Modified files
         if has_modified:
             self.btn_discard.state(["!disabled"])
             self.btn_save_ver.state(["!disabled"])
@@ -3036,7 +3061,7 @@ class GIT4SWApp(tk.Tk):
                 self.decrement_tasks()
                 
             import time
-            time.sleep(1.5)
+            time.sleep(0.75)
             self.task_queue.put(('callback', None, self.refresh_file_list))
                 
         threading.Thread(target=run, daemon=True).start()
@@ -3112,7 +3137,7 @@ class GIT4SWApp(tk.Tk):
                 self.decrement_tasks()
                 
             import time
-            time.sleep(1.5)
+            time.sleep(0.75)
             self.task_queue.put(('callback', None, self.refresh_file_list))
                 
         threading.Thread(target=run, daemon=True).start()
@@ -3173,7 +3198,7 @@ class GIT4SWApp(tk.Tk):
                 self.decrement_tasks()
                 
             import time
-            time.sleep(1.5)
+            time.sleep(0.75)
             self.task_queue.put(('callback', None, self.refresh_file_list))
                 
         threading.Thread(target=run, daemon=True).start()
@@ -3244,8 +3269,8 @@ class GIT4SWApp(tk.Tk):
                     res_q = queue.Queue()
                     def show_lock_warning():
                         ans = messagebox.askyesno(
-                            "경고",
-                            "경고: 대상 파일 중 하나 이상이 현재 다른 계정에 의하여 Locked되어 있습니다. 이 파일들을 제외하고 진행하겠습니까?"
+                            "Warning",
+                            "Warning: One or more target files are currently Locked by another account. Proceed excluding these files?"
                         )
                         res_q.put(ans)
                     self.task_queue.put(('callback', None, show_lock_warning))
@@ -3377,7 +3402,7 @@ class GIT4SWApp(tk.Tk):
                 
             if success:
                 import time
-                time.sleep(1.5)
+                time.sleep(0.75)
                 self.task_queue.put(('callback', None, self.refresh_file_list))
                 
         threading.Thread(target=run, daemon=True).start()
@@ -3475,8 +3500,8 @@ class GIT4SWApp(tk.Tk):
                     res_q = queue.Queue()
                     def show_lock_warning():
                         ans = messagebox.askyesno(
-                            "경고",
-                            "경고: 대상 파일 중 하나 이상이 현재 다른 계정에 의하여 Locked되어 있습니다. 이 파일들을 제외하고 진행하겠습니까?"
+                            "Warning",
+                            "Warning: One or more target files are currently Locked by another account. Proceed excluding these files?"
                         )
                         res_q.put(ans)
                     self.task_queue.put(('callback', None, show_lock_warning))
@@ -4670,7 +4695,7 @@ class GIT4SWApp(tk.Tk):
                                 except Exception:
                                     pass
 
-                    time.sleep(0.2)
+                    time.sleep(0.1)
 
                     # Step 2: Close the target documents using QuitDoc FIRST.
                     # This releases the active document lock and parent-child reference links.
@@ -4687,7 +4712,7 @@ class GIT4SWApp(tk.Tk):
                             print(f"DEBUG: Failed to close {title}: {ce}")
 
                     # Allow SolidWorks to settle and release COM reference locks
-                    time.sleep(0.3)
+                    time.sleep(0.15)
 
                     # Step 3: Clean up all REMAINING open documents (referenced/linked assemblies and skeletons)
                     # using a dependency-aware iterative cleanup loop to avoid reference prompts.
@@ -4754,7 +4779,7 @@ class GIT4SWApp(tk.Tk):
                                     pass
                                     
                             if closed_any:
-                                time.sleep(0.1)
+                                time.sleep(0.05)
                                 
                             # Close children
                             for d, d_title in child_docs:
@@ -4769,7 +4794,7 @@ class GIT4SWApp(tk.Tk):
                                     
                             if not closed_any:
                                 break
-                            time.sleep(0.1)
+                            time.sleep(0.05)
                             iteration += 1
                     except Exception as e_post:
                         print(f"Warning: Failed to cleanup remaining referenced docs: {e_post}")
@@ -5481,7 +5506,7 @@ def get_sw_app():
                 raw_obj = win32com.client.GetActiveObject("SldWorks.Application")
                 return win32com.client.dynamic.Dispatch(raw_obj)
             except:
-                time.sleep(1.0)
+                time.sleep(0.5)
     return None
 
 try:
@@ -5532,7 +5557,7 @@ try:
             # doc_type = 2 (swDocASSEMBLY), options = 1 | 2 | 64
             #   1  = swOpenDocOptions_Silent
             #   2  = swOpenDocOptions_ReadOnly
-            #   64 = swOpenDocOptions_IgnoreActivationAndSuppression (부모 어셈블리 자동 로딩 억제)
+            #   64 = swOpenDocOptions_IgnoreActivationAndSuppression (suppress parent assembly auto-loading)
             model = sw_app.OpenDoc6(path, 2, 1 | 2 | 64, "", error, warning)
             if model:
                 opened_temp = True
@@ -5634,6 +5659,9 @@ finally:
         # Start task in UI
         self.increment_tasks()
         self.btn_bom.state(["disabled"]) # Disable during task execution
+        # Suppress the background monitor's automatic LFS Lock attempts so they do not
+        # interfere while the BOM runner opens files in SolidWorks as ReadOnly.
+        self.suppress_auto_lock = True
         msg_suffix = f" (Config: {config_name})" if config_name else ""
         self.write_log(f"🚀 Starting BOM extraction for {os.path.basename(filepath)}{msg_suffix}...", "info")
 
@@ -5699,6 +5727,8 @@ finally:
                 self.task_queue.put(('error', f"❌ Failed to run BOM extraction: {e}", None))
             finally:
                 self.decrement_tasks()
+                # Re-enable automatic Lock suppression after BOM runner exits
+                self.suppress_auto_lock = False
                 
         import threading
         threading.Thread(target=run_bom, daemon=True).start()
@@ -5883,6 +5913,10 @@ finally:
                 env_vars = os_env.environ.copy()
                 env_vars["PYTHONIOENCODING"] = "utf-8"
                 
+                # Suppress the background monitor's automatic LFS Lock attempts so they do not
+                # interfere while the EXPORT runner opens files in SolidWorks as ReadOnly.
+                self.suppress_auto_lock = True
+                
                 # Run subprocess capturing stdout and stderr
                 proc = subprocess.Popen(
                     [sys.executable, "-u", runner_path, job_path],
@@ -5917,7 +5951,7 @@ finally:
                 lbl_status = tk.Label(progress_pop, text=f"Initializing SolidWorks... (0 / {len(filtered_files)} Completed)", font="TkDefaultFont", bg="#f3f4f6", fg="#1f2937")
                 lbl_status.pack(pady=2)
                 
-                # 파일명 표시 라벨 (2행 공간 확보를 위해 height=2)
+                # Filename label (height=2 to reserve space for two lines)
                 lbl_file = tk.Label(progress_pop, text="Launching background SolidWorks engine...", font="TkDefaultFont", bg="#f3f4f6", fg="#6b7280", wraplength=400, height=2)
                 lbl_file.pack(pady=(0, 10), fill="x")
                 
@@ -5965,6 +5999,8 @@ finally:
                         pass
                         
                 def on_finish(returncode, jp):
+                    # Re-enable automatic Lock suppression after EXPORT runner exits
+                    self.suppress_auto_lock = False
                     if os.path.exists(jp):
                         try:
                             os.remove(jp)
@@ -5979,12 +6015,12 @@ finally:
                         return
                         
                     if returncode == 0:
-                        # 알림 팝업 대신 진행 창에 완료 메시지 표시
+                        # Show completion message in the progress window instead of a notification popup
                         try:
                             lbl_status.config(text=f"Export Complete! ({len(filtered_files)}/{len(filtered_files)} files)", fg="#dc2626")
                             lbl_file.config(text="✅ SolidWorks export process has completed successfully!", fg="#dc2626", height=2)
                             prog_bar["value"] = len(filtered_files)
-                            # Cancel 버튼을 Close 버튼으로 변경
+                            # Change the Cancel button to a Close button
                             btn_cancel.config(text="Close")
                             btn_cancel.config(command=lambda: progress_pop.destroy())
                         except Exception:
@@ -6043,6 +6079,8 @@ finally:
                 threading.Thread(target=monitor_thread, daemon=True).start()
                 
             except Exception as run_err:
+                # Re-enable automatic Lock suppression on Popen failure
+                self.suppress_auto_lock = False
                 messagebox.showerror("Error", f"Failed to start background export process: {run_err}")
                 if os.path.exists(job_path):
                     try:
@@ -6283,7 +6321,7 @@ finally:
                             print(f"Failed to clear read-only on '{abs_file_path}': {chmod_e}")
                         file_open_settings[abs_file_path] = {
                             # 1 = swOpenDocOptions_Silent (read-write)
-                            # 64 = swOpenDocOptions_IgnoreActivationAndSuppression (부모 어셈블리 자동 로딩 억제)
+                            # 64 = swOpenDocOptions_IgnoreActivationAndSuppression (suppress parent assembly auto-loading)
                             'options': 1 | 64,
                             'is_ours': True
                         }
@@ -6296,7 +6334,7 @@ finally:
                             print(f"Failed to set read-only on '{abs_file_path}': {chmod_e}")
                         file_open_settings[abs_file_path] = {
                             # 1 = swOpenDocOptions_Silent, 2 = swOpenDocOptions_ReadOnly
-                            # 64 = swOpenDocOptions_IgnoreActivationAndSuppression (부모 어셈블리 자동 로딩 억제)
+                            # 64 = swOpenDocOptions_IgnoreActivationAndSuppression (suppress parent assembly auto-loading)
                             'options': 1 | 2 | 64,
                             'is_ours': False
                         }
@@ -6614,7 +6652,7 @@ finally:
                     is_repo = self.git_service.is_git_repo()
                     self.btn_lock.config(text="Lock")
                     if is_repo:
-                        # 먼저 모든 버튼을 활성화한 후, 파일 목록 상태에 따라 비활성화
+                        # First enable all buttons, then disable them based on file list status
                         self.btn_lock.state(["!disabled"])
                         self.btn_unlock.state(["!disabled"])
                         self.btn_force_unlock.state(["!disabled"])
@@ -6627,7 +6665,7 @@ finally:
                         self.btn_discard.state(["!disabled"])
                         if hasattr(self, 'btn_clone'):
                             self.btn_clone.state(["!disabled"])
-                        # 파일 목록 상태에 따라 Lock/Unlock/Discard 등 버튼 재조정
+            # Re-adjust Lock/Unlock/Discard buttons based on file list status
                         self.update_button_states_by_file_list()
                     else:
                         self.btn_lock.state(["disabled"])
@@ -6753,7 +6791,7 @@ finally:
                         else:
                             # Not locked, lock it!
                             is_already_locked_by_us = any(x.lower() == rel_path_lower for x in self.files_locked_by_us)
-                            if not is_already_locked_by_us:
+                            if not is_already_locked_by_us and not getattr(self, 'suppress_auto_lock', False):
                                 def run_lock(path_to_lock):
                                     self.increment_tasks()
                                     success = False
@@ -6769,7 +6807,7 @@ finally:
                                         
                                     if success:
                                         import time
-                                        time.sleep(1.5)
+                                        time.sleep(0.75)
                                         if self.bg_tasks_count == 0:
                                             self.task_queue.put(('callback', None, self.refresh_file_list))
                                         
@@ -6828,7 +6866,7 @@ finally:
                                         
                                     if success:
                                         import time
-                                        time.sleep(1.5)
+                                        time.sleep(0.75)
                                         if self.bg_tasks_count == 0:
                                             self.task_queue.put(('callback', None, self.refresh_file_list))
                                         
@@ -6888,8 +6926,8 @@ finally:
             except Exception as e:
                 print(f"Error in SolidWorks background monitor loop: {e}")
                 
-            # Dynamic polling interval: 6.0 seconds if SolidWorks is running, 12.0 seconds if not.
-            poll_interval = 6.0 if (self.sw_service._get_sw_app() is not None) else 12.0
+            # Dynamic polling interval: 3.0 seconds if SolidWorks is running, 6.0 seconds if not.
+            poll_interval = 3.0 if (self.sw_service._get_sw_app() is not None) else 6.0
             threading.Event().wait(poll_interval)
 
     def destroy(self):

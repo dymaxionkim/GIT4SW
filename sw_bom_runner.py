@@ -73,7 +73,7 @@ def connect_to_solidworks():
                     print("Connected to SolidWorks after launching.", flush=True)
                     break
                 except Exception:
-                    time.sleep(1.0)
+                    time.sleep(0.5)
                     
     if swApp is None:
         try:
@@ -152,11 +152,11 @@ def main():
     all_bom_rows = []
     already_open_paths = set()
     try:
-        # --- 핵심 수정: already_open_paths는 --open-before 인자로만 구성 ---
-        # GetDocuments()로 갱신하면 컨피그 조회 서브프로세스가 열어둔 파일(어셈블리 +
-        # 의존성 파일들)이 already_open_paths에 들어가서 닫지 못하게 된다.
-        # --open-before는 UI에서 BOM 버튼 클릭 시점에 사용자가 미리 열어둔 파일 목록만
-        # 포함하므로, 이것만 신뢰할 수 있다. --open-before가 없으면 빈 집합(=모두 닫기).
+        # --- Key fix: already_open_paths is composed only from the --open-before argument ---
+        # If refreshed via GetDocuments(), files opened by the config-lookup subprocess
+        # (assembly + dependency files) would be added to already_open_paths and could not be closed.
+        # --open-before only includes the files the user had open at the moment the BOM button was
+        # clicked in the UI, so it is the only reliable source. Without --open-before, use an empty set (=close all).
         if args.open_before:
             for path_str in args.open_before.split(','):
                 path_str_clean = path_str.strip()
@@ -173,7 +173,7 @@ def main():
 
         # Open document silently and read-only.
         # swOpenDocOptions_Silent = 1, swOpenDocOptions_ReadOnly = 2,
-        # swOpenDocOptions_IgnoreActivationAndSuppression = 64 (부모 어셈블리 자동 로딩 억제).
+        # swOpenDocOptions_IgnoreActivationAndSuppression = 64 (suppress automatic loading of parent assembly).
         doc_type = 2 # swDocASSEMBLY
         options = 1 | 2 | 64
         error = win32com.client.VARIANT(pythoncom.VT_BYREF | pythoncom.VT_I4, 0)
@@ -527,7 +527,7 @@ def main():
         try:
             print(f"Closing documents opened during BOM extraction in SolidWorks...", flush=True)
 
-            # UserControl을 임시로 False로 설정하여 백그라운드 닫기가 UI에 방해받지 않도록 함
+            # Temporarily set UserControl to False so background closing is not blocked by the UI
             orig_user_control = True
             try:
                 orig_user_control = swApp.UserControl
@@ -535,18 +535,18 @@ def main():
             except Exception:
                 pass
 
-            # 경로 정규화 헬퍼: 슬래시 방향과 대소문자를 통일하여 매칭 실패 방지
+            # Path normalization helper: unify slash direction and case to prevent matching failures
             def _norm(p):
                 if not p:
                     return ""
                 return os.path.normpath(p).replace("\\", "/").lower()
 
-            # already_open_paths를 동일한 정규화 방식으로 재구성
+            # Rebuild already_open_paths with the same normalization scheme
             normalized_already_open = set()
             for ap in already_open_paths:
                 if ap:
                     normalized_already_open.add(_norm(ap))
-                    # 타이틀(파일명) 형태도 추가
+                    # Also add the title (file name) form
                     base = os.path.basename(ap)
                     if base:
                         normalized_already_open.add(_norm(base))
@@ -555,13 +555,13 @@ def main():
                             normalized_already_open.add(no_ext.lower())
 
             def _is_already_open(path, title):
-                """path/title이 BOM 실행 전부터 열려있던 문서인지 판단 (정규화 매칭)"""
+                """Determine whether path/title was open before the BOM run (normalized matching)"""
                 np = _norm(path)
                 nt = _norm(title)
-                # 경로 전체 매칭
+                # Full path match
                 if np and np in normalized_already_open:
                     return True
-                # 타이틀 매칭 (확장자 포함/제외 모두)
+                # Title match (both with and without extension)
                 if nt:
                     if nt in normalized_already_open:
                         return True
@@ -613,7 +613,7 @@ def main():
                         title_val = d.GetTitle
                         title = title_val() if callable(title_val) else title_val
                                 
-                        # BOM 실행 전부터 열려있던 문서가 아닌 경우(=새로 열린 경우) 닫기 대상.
+                        # If not a document open before the BOM run (= newly opened), it is a close target.
                         is_pre_existing = _is_already_open(path, title)
                         if not is_pre_existing:
                             try:
@@ -664,7 +664,7 @@ def main():
                             else:
                                 child_files.append(doc_entry)
                         else:
-                            # BOM 실행 전부터 열려있던 문서는 로그만 출력
+                            # For documents open before the BOM run, only log
                             print(f"  Skipping (pre-existing): {title} (path: {path})", flush=True)
                     except Exception as e_inspect:
                         print(f"Warning: Failed to inspect document for cleanup: {e_inspect}", flush=True)
@@ -709,7 +709,7 @@ def main():
                         print(f"  ⚠️ Failed to close parent: {title} (path: {path})", flush=True)
 
                 if closed_any:
-                    time.sleep(0.3)
+                    time.sleep(0.15)
 
                 # Close children second
                 for doc_entry in child_files:
@@ -735,24 +735,24 @@ def main():
                     else:
                         print(f"  ⚠️ Failed to close child: {title} (path: {path})", flush=True)
 
-                time.sleep(0.3)
-                # COM 참조 해제 후 가비지 컬렉션으로 락 해제 시도
+                time.sleep(0.15)
+                # Release COM references then run garbage collection to release locks
                 gc.collect()
                 try:
                     pythoncom.CoCollectFreeUnusedLibraries()
                 except:
                     pass
 
-            # UserControl 복원
+            # Restore UserControl
             try:
                 swApp.UserControl = orig_user_control
             except Exception:
                 pass
 
             # ----- Final verification pass -----
-            # 닫기 루프가 끝난 뒤에도 여전히 열려 있는 문서가 있는지 확인한다.
-            # 이 중 BOM 실행 중 새로 열린(already_open_paths에 없는) 문서가 남아 있다면
-            # 닫기 명령이 실패한 것이므로 경고를 출력하고 추가 닫기 시도를 한다.
+            # Check whether any documents are still open after the close loop completes.
+            # If any newly opened documents (not in already_open_paths) remain, the close
+            # command failed; emit a warning and retry closing.
             for verify_iter in range(3):
                 docs_remaining = None
                 try:
@@ -765,7 +765,7 @@ def main():
                     print("BOM cleanup verified: all newly opened documents are closed.", flush=True)
                     break
 
-                # 수집 대상: BOM 실행 중 새로 열렸으나 아직 열려 있는 문서
+                # Collection target: documents newly opened during the BOM run that are still open
                 still_open = []
                 for d in docs_remaining:
                     try:
@@ -787,12 +787,12 @@ def main():
                     print(f"BOM cleanup verified: {len(docs_remaining)} document(s) remain open but all were open before BOM run.", flush=True)
                     break
 
-                # 닫기 시도가 있었으나 실패한 문서들에 대해 경고 출력
+                # Emit warnings for documents that were attempted to close but failed
                 for entry in still_open:
                     print(f"⚠️ Warning: document failed to close and is still open: '{entry['title']}' (path: {entry['path']})", flush=True)
                 print(f"Verification retry {verify_iter + 1}/3: {len(still_open)} newly opened document(s) still open. Retrying close...", flush=True)
 
-                # 부모(asm/drw)부터 닫기
+                # Close parents (asm/drw) first
                 parents = [e for e in still_open if (e['path'] or "").lower().endswith((".sldasm", ".slddrw")) or (e['title'] or "").lower().endswith((".sldasm", ".slddrw"))]
                 children = [e for e in still_open if e not in parents]
 
@@ -836,15 +836,15 @@ def main():
                     if _try_close(e):
                         closed_any = True
                 if closed_any:
-                    time.sleep(0.3)
+                    time.sleep(0.15)
                 closed_any2 = False
                 for e in children:
                     if _try_close(e):
                         closed_any2 = True
                 if closed_any or closed_any2:
-                    time.sleep(0.3)
+                    time.sleep(0.15)
 
-            # 최종 재확인: 여전히 남아있는 새로 열린 문서가 있으면 명확한 에러 메시지 출력
+            # Final re-check: if any newly opened documents still remain, emit a clear error message
             docs_final = None
             try:
                 val = getattr(swApp, 'GetDocuments')

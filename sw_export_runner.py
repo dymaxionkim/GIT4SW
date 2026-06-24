@@ -219,7 +219,7 @@ def start_or_bind_solidworks():
                         print("Successfully bound to SolidWorks instance after manual process launch.", flush=True)
                         break
                     except Exception:
-                        time.sleep(1.0)
+                        time.sleep(0.5)
             except Exception as e_launch:
                 print(f"Failed to launch SolidWorks directly: {e_launch}.", flush=True)
                 
@@ -249,13 +249,13 @@ def close_all_documents_without_saving(swApp, already_open_paths=None):
     except Exception:
         pass
 
-    # 경로 정규화 헬퍼: 슬래시 방향과 대소문자를 통일하여 매칭 실패 방지
+    # Path normalization helper: unify slash direction and case to prevent matching failures
     def _norm(p):
         if not p:
             return ""
         return os.path.normpath(p).replace("\\", "/").lower()
 
-    # already_open_paths를 동일한 정규화 방식으로 재구성
+    # Rebuild already_open_paths using the same normalization scheme
     normalized_already_open = set()
     if already_open_paths:
         for ap in already_open_paths:
@@ -283,7 +283,7 @@ def close_all_documents_without_saving(swApp, already_open_paths=None):
                 return True
         return False
 
-    # GetDocuments()로 열린 문서 목록을 조회하는 헬퍼
+    # Helper to query the list of open documents via GetDocuments()
     def _get_open_docs():
         try:
             val = getattr(swApp, 'GetDocuments')
@@ -296,7 +296,7 @@ def close_all_documents_without_saving(swApp, already_open_paths=None):
                 return None
 
     try:
-        time.sleep(0.2)
+        time.sleep(0.1)
         iteration = 0
         last_doc_count = -1
         stuck_count = 0
@@ -344,7 +344,7 @@ def close_all_documents_without_saving(swApp, already_open_paths=None):
                     if not title:
                         continue
 
-                    # EXPORT 실행 전부터 열려있던 문서는 skip
+                    # Skip documents that were already open before EXPORT execution
                     if _is_already_open(path, title):
                         continue
 
@@ -437,7 +437,7 @@ def close_all_documents_without_saving(swApp, already_open_paths=None):
                     print(f"  ⚠️ Failed to close parent: {title} (path: {path})", flush=True)
 
             if closed_any:
-                time.sleep(0.3)
+                time.sleep(0.15)
 
             for doc_entry in child_files:
                 title = doc_entry['title']
@@ -465,7 +465,7 @@ def close_all_documents_without_saving(swApp, already_open_paths=None):
                 if not closed_this:
                     print(f"  ⚠️ Failed to close child: {title} (path: {path})", flush=True)
 
-            time.sleep(0.3)
+            time.sleep(0.15)
             gc.collect()
             try:
                 pythoncom.CoCollectFreeUnusedLibraries()
@@ -544,15 +544,15 @@ def close_all_documents_without_saving(swApp, already_open_paths=None):
                 if _try_close(e):
                     closed_any = True
             if closed_any:
-                time.sleep(0.3)
+                time.sleep(0.15)
             closed_any2 = False
             for e in children:
                 if _try_close(e):
                     closed_any2 = True
             if closed_any or closed_any2:
-                time.sleep(0.3)
+                time.sleep(0.15)
 
-        # 최종 재확인
+        # Final re-verification
         docs_final = _get_open_docs()
         if docs_final:
             leftover = []
@@ -598,11 +598,11 @@ def run_single_export(file_abs, target_formats, output_dir, workspace_path, ever
         print("Failed to bind to active SolidWorks instance for single export.")
         sys.exit(1)
         
-    # --- 핵심 수정: already_open_paths를 GetDocuments()로 채우지 않음 ---
-    # BOM과 동일한 원리: EXPORT 서브프로세스는 배치 모드에서 호출되며,
-    # 이전 서브프로세스가 열어둔 파일들이 GetDocuments()에 남아있을 수 있다.
-    # 이를 already_open_paths에 넣으면 닫지 못하게 되므로, 빈 집합을 사용한다.
-    # 닫기 시에는 현재 열린 모든 문서를 닫되, already_open_paths가 비어있으므로 모두 닫기 대상이 된다.
+    # --- Key fix: do not populate already_open_paths from GetDocuments() ---
+    # Same principle as BOM: the EXPORT subprocess is invoked in batch mode,
+    # and files left open by previous subprocesses may remain in GetDocuments().
+    # Adding them to already_open_paths would prevent closing them, so use an empty set.
+    # At close time, all currently open documents are closed; since already_open_paths is empty, all become close targets.
     already_open_paths = set()
         
     model = None
@@ -627,17 +627,17 @@ def run_single_export(file_abs, target_formats, output_dir, workspace_path, ever
             print(f"Failed to set user preferences in single export: {pref_e}")
                 
         f_lower = file_abs.lower()
-        # 공통 플래그:
+        # Common flags:
         #   1   = swOpenDocOptions_Silent
         #   2   = swOpenDocOptions_ReadOnly
-        #   32  = swOpenDocOptions_LoadModel        (도면/어셈블리: 참조 모델/컴포넌트 로드)
+        #   32  = swOpenDocOptions_LoadModel        (drawing/assembly: load referenced model/components)
         #   64  = swOpenDocOptions_IgnoreActivationAndSuppression
-        #         (부모 어셈블리 자동 활성화/로딩 억제 - sldprt/slddrw/sldasm 모두 적용하여
-        #          부모 어셈블리가 함께 열리는 현상을 차단)
+        #         (suppress parent assembly auto-activation/loading - applied to sldprt/slddrw/sldasm to
+        #          block the parent assembly from being opened alongside)
         #   128 = swOpenDocOptions_AutoMissingComponentResolve
         if f_lower.endswith(".slddrw"):
             doc_type = 3  # swDocDRAWING
-            # 도면: 참조 모델은 LoadModel(32)로 정상 로드, 부모 어셈블리 자동 로딩만 64로 차단.
+            # Drawing: referenced model loads normally via LoadModel(32); only parent assembly auto-loading is blocked via 64.
             open_options = 1 | 32 | 64 | 2 | 128
         elif f_lower.endswith(".sldprt"):
             doc_type = 1  # swDocPART
@@ -645,7 +645,7 @@ def run_single_export(file_abs, target_formats, output_dir, workspace_path, ever
             open_options = 1 | 64 | 2 | 128
         elif f_lower.endswith(".sldasm"):
             doc_type = 2  # swDocASSEMBLY
-            # 어셈블리: 컴포넌트는 LoadModel(32)로 정상 로드, 부모 어셈블리 자동 로딩만 64로 차단.
+            # Assembly: components load normally via LoadModel(32); only parent assembly auto-loading is blocked via 64.
             open_options = 1 | 32 | 64 | 2 | 128
         else:
             print(f"Unsupported file format: {file_abs}")
@@ -665,10 +665,10 @@ def run_single_export(file_abs, target_formats, output_dir, workspace_path, ever
         error = win32com.client.VARIANT(pythoncom.VT_BYREF | pythoncom.VT_I4, 0)
         warning = win32com.client.VARIANT(pythoncom.VT_BYREF | pythoncom.VT_I4, 0)
 
-        # --- 핵심 수정: already_open_paths를 GetDocuments()로 갱신하지 않음 ---
-        # BOM과 동일한 원리: 이전 서브프로세스가 닫지 못한 파일이 GetDocuments()에 남아있을 수 있어,
-        # 이를 already_open_paths에 넣으면 닫지 못하게 된다. already_open_paths는 빈 집합을 사용한다.
-        # 닫기 시에는 현재 열린 모든 문서를 닫는다.
+        # --- Key fix: do not update already_open_paths from GetDocuments() ---
+        # Same principle as BOM: files that a previous subprocess failed to close may remain in GetDocuments(),
+        # and adding them to already_open_paths would prevent closing them. Use an empty set for already_open_paths.
+        # At close time, all currently open documents are closed.
 
         model = swApp.OpenDoc6(file_abs, doc_type, open_options, "", error, warning)
 
@@ -686,7 +686,7 @@ def run_single_export(file_abs, target_formats, output_dir, workspace_path, ever
             
         act_error = win32com.client.VARIANT(pythoncom.VT_BYREF | pythoncom.VT_I4, 0)
         swApp.ActivateDoc3(os.path.basename(file_abs), False, 0, act_error)
-        time.sleep(2) # Delay for large document stabilization
+        time.sleep(1) # Delay for large document stabilization
         
         if f_lower.endswith(".sldasm"):
             # Unified sldasm processing (STEP_ASM)
@@ -750,7 +750,7 @@ def run_single_export(file_abs, target_formats, output_dir, workspace_path, ever
                             success = model.ShowConfiguration2(config_name)
                             if not success:
                                 print(f"Warning: ShowConfiguration2 returned False for configuration: {config_name}", flush=True)
-                            time.sleep(2) # Delay for large configuration switching rebuild
+                            time.sleep(1) # Delay for large configuration switching rebuild
                         except Exception as show_conf_err:
                             print(f"Failed to show configuration {config_name}: {show_conf_err}", flush=True)
                     
@@ -769,7 +769,7 @@ def run_single_export(file_abs, target_formats, output_dir, workspace_path, ever
                             
                     # Save with Silent option (9 = Silent | AvoidDialogueOnSave) and current version (0)
                     result = model.SaveAs3(dest_file_path, 0, 9)
-                    time.sleep(2) # Crucial delay to allow disk write to finalize and release lock
+                    time.sleep(1) # Crucial delay to allow disk write to finalize and release lock
                     if result == 0:
                         print(f"Successfully exported STEP_ASM {file_abs} -> {dest_file_path}")
                     else:
@@ -875,7 +875,7 @@ def run_single_export(file_abs, target_formats, output_dir, workspace_path, ever
                             success = model.ShowConfiguration2(config_name)
                             if not success:
                                 print(f"Warning: ShowConfiguration2 returned False for configuration: {config_name}", flush=True)
-                            time.sleep(2) # Delay for configuration switching rebuild
+                            time.sleep(1) # Delay for configuration switching rebuild
                             dest_file_path = os.path.join(dest_dir, f"{base_filename}__{config_name}{target_ext}")
                         except Exception as show_conf_err:
                             print(f"Failed to show configuration {config_name}: {show_conf_err}", flush=True)
@@ -892,7 +892,7 @@ def run_single_export(file_abs, target_formats, output_dir, workspace_path, ever
                             
                     # Save with Silent option (9 = Silent | AvoidDialogueOnSave) and current version (0)
                     result = model.SaveAs3(dest_file_path, 0, 9)
-                    time.sleep(2) # Crucial delay to allow disk write to finalize and release lock
+                    time.sleep(1) # Crucial delay to allow disk write to finalize and release lock
                     if result == 0:
                         print(f"Successfully exported {file_abs} -> {dest_file_path}")
                     else:
@@ -921,7 +921,7 @@ def run_single_export(file_abs, target_formats, output_dir, workspace_path, ever
         # Close the specific main model document first to release active reference links.
         if model:
             try:
-                time.sleep(0.2)
+                time.sleep(0.1)
                 
                 # Try to get the document title
                 title_to_close = None
@@ -1011,7 +1011,7 @@ def run_single_export(file_abs, target_formats, output_dir, workspace_path, ever
         if swApp:
             if model:
                 try:
-                    time.sleep(0.2)
+                    time.sleep(0.1)
                     
                     title_to_close = None
                     try:
@@ -1148,10 +1148,10 @@ def run_export(job_file):
 
     has_errors = False
     was_already_running = False
-    # --- 핵심 수정: already_open_paths를 GetDocuments()로 채우지 않음 ---
-    # BOM과 동일한 원리: 배치 모드에서 서브프로세스가 순차적으로 호출되며,
-    # 이전 서브프로세스가 닫지 못한 파일이 GetDocuments()에 남아있을 수 있다.
-    # 이를 already_open_paths에 넣으면 닫지 못하게 되므로, 빈 집합을 사용한다.
+    # --- Key fix: do not populate already_open_paths from GetDocuments() ---
+    # Same principle as BOM: in batch mode, subprocesses are invoked sequentially,
+    # and files that a previous subprocess failed to close may remain in GetDocuments().
+    # Adding them to already_open_paths would prevent closing them, so use an empty set.
     already_open_paths = set()
 
     # Initialize COM
@@ -1301,7 +1301,7 @@ def run_export(job_file):
                         proc.kill()
                     break
                     
-                time.sleep(0.1)
+                time.sleep(0.05)
                     
             if timed_out:
                 has_errors = True
@@ -1316,7 +1316,7 @@ def run_export(job_file):
                     print("Forcefully terminating all remaining SLDWORKS.exe and sldworks_fs.exe processes to ensure clean recovery...", flush=True)
                     subprocess.run("taskkill /F /IM SLDWORKS.exe", shell=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
                     subprocess.run("taskkill /F /IM sldworks_fs.exe", shell=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-                    time.sleep(3)
+                    time.sleep(1.5)
                 except Exception as kill_e:
                     print(f"Could not terminate SolidWorks processes: {kill_e}", flush=True)
                 
@@ -1366,9 +1366,9 @@ def run_export(job_file):
                 ext = os.path.splitext(file_rel)[1].lower()
                 if ext == ".sldasm":
                     print("[INFO] Stabilizing SolidWorks engine after Assembly processing...", flush=True)
-                    time.sleep(3.0)
+                    time.sleep(1.5)
                 else:
-                    time.sleep(0.5)
+                    time.sleep(0.25)
 
         # Restore global warning preferences
         try:
@@ -1382,17 +1382,17 @@ def run_export(job_file):
         # Close all open documents and exit SolidWorks if we started it
         if swApp:
             try:
-                # --- 핵심 수정: already_open_paths를 GetDocuments()로 갱신하지 않음 ---
-                # BOM과 동일한 원리: 배치 처리 중 서브프로세스가 닫지 못한 파일이
-                # GetDocuments()에 남아있을 수 있어, 이를 already_open_paths에 넣으면
-                # 닫지 못하게 된다. already_open_paths는 빈 집합을 사용하여 모든 문서를 닫는다.
-                # (SolidWorks가 이미 실행 중이었다면 사용자가 열어둔 파일도 닫히지만,
-                #  EXPORT는 배치 처리이므로 작업 완료 후 모든 파일을 닫는 것이 안전)
+                # --- Key fix: do not update already_open_paths from GetDocuments() ---
+                # Same principle as BOM: during batch processing, files that a subprocess failed to close
+                # may remain in GetDocuments(); adding them to already_open_paths would prevent closing them.
+                # Use an empty set for already_open_paths so that all documents get closed.
+                # (If SolidWorks was already running, files opened by the user will also be closed,
+                #  but EXPORT is a batch process, so closing all files on completion is safer.)
                 if was_already_running:
                     print("Closing all documents opened during export...", flush=True)
                     close_all_documents_without_saving(swApp, already_open_paths)
                 else:
-                    # SolidWorks를 새로 시작했다면: 모든 문서를 닫고 ExitApp으로 종료
+                    # If SolidWorks was started fresh: close all documents and exit via ExitApp
                     print("Closing all documents (SolidWorks was launched by export runner)...", flush=True)
                     close_all_documents_without_saving(swApp, already_open_paths=None)
             except Exception as close_err:

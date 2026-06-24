@@ -189,7 +189,7 @@ class SolidWorksMonitorService:
             
             # Add a small delay for SolidWorks internal engine state synchronization
             import time
-            time.sleep(0.2)
+            time.sleep(0.1)
 
             orig_user_control = True
             try:
@@ -254,7 +254,7 @@ class SolidWorksMonitorService:
                         pass
 
                 # Allow SolidWorks to settle and release COM reference locks
-                time.sleep(0.3)
+                time.sleep(0.15)
 
                 # Step 2: Clean up all REMAINING open documents (referenced/linked assemblies and skeletons)
                 # using a dependency-aware iterative cleanup loop to avoid reference prompts.
@@ -390,7 +390,7 @@ class SolidWorksMonitorService:
                                 pass
                                 
                         if closed_any:
-                            time.sleep(0.2)
+                            time.sleep(0.1)
                             
                         # Close children
                         for doc_entry in child_files:
@@ -418,7 +418,7 @@ class SolidWorksMonitorService:
                             except Exception:
                                 pass
                                 
-                        time.sleep(0.2)
+                        time.sleep(0.1)
                         iteration += 1
                 except Exception as e_post:
                     print(f"Warning: Failed to cleanup remaining referenced docs: {e_post}")
