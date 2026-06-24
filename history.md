@@ -34,6 +34,8 @@ gantt
     버튼별 읽기전용 구분 & COM 동적 디스패치 안정화 :active, milestone11, 2026-06-22, 2026-06-22
     section BOM 설정선택 유지 및 cleanup 개선
     BOM 설정선택 유지 & 이전 오픈 파일 보존 :active, milestone12, 2026-06-23, 2026-06-23
+    section 성능 최적화 및 Config 편의성
+    Sleep 반감, Lock 억제, Edit Config.json 버튼 추가 :active, milestone13, 2026-06-24, 2026-06-24
 ```
 
 ---
@@ -207,7 +209,23 @@ gantt
 
 ---
 
-## 📈 핵심 아키텍처 진화 대조표
+### 13단계: 성능 최적화 — 인위적 대기 시간 50% 단축 및 EXPORT/BOM 중 자동 Lock 억제 (Milestone 13 - 2026-06-24)
+* **EXPORT/BOM 중 자동 Lock 모니터 억제**:
+  - EXPORT 및 BOM 서브프로세스가 SolidWorks에 파일을 열 때(ReadOnly 모드), 백그라운드 자동 Lock 모니터가 이를 감지하여 불필요한 `git lfs lock`을 시도하는 문제를 해결하였습니다.
+  - `ui_tk.py`에 `suppress_auto_lock` 플래그를 도입하여, EXPORT/BOM 실행 중에는 모니터의 Lock 시도를 완전히 차단합니다. (BOM/EXPORT runner는 ReadOnly로 파일을 열므로 Lock 획득이 불필요합니다.)
+* **모든 `time.sleep()` 인위적 대기 시간 50% 축소**:
+  - **EXPORT 안정화 대기**: `SaveAs3` 후 2초 → 1초, `ShowConfiguration2` 후 2초 → 1초, Assembly 처리 후 3초 → 1.5초
+  - **문서 닫기 클린업 대기**: 0.3초 → 0.15초, 0.2초 → 0.1초
+  - **ROT 폴링 간격**: 1초 → 0.5초
+  - **백그라운드 모니터 폴링 주기**: SW 실행 중 6초 → 3초, 미실행 12초 → 6초
+  - **Lock/Unlock 후 refresh 대기**: 1.5초 → 0.75초
+  - 그 외 모든 `time.sleep()` 호출을 공통적으로 절반으로 축소하여 EXPORT 일괄 처리 시간을 약 50% 단축하였습니다.
+* **Config 뷰에 "Edit Config.json" 버튼 추가**:
+  - "Save Configuration" 버튼 우측에 "Edit Config.json" 버튼을 추가하였습니다.
+  - "Find" 버튼과 동일한 기본 TButton 스타일을 사용합니다.
+  - 클릭 시 `config.json` 파일을 윈도우 기본 메모장(`notepad.exe`)으로 직접 열어 빠른 설정 편집이 가능합니다.
+
+---
 
 | 비교 항목 | 초기 설계 (V01) | 현재 설계 (최신 헤드) | 개선 효과 및 핵심 가치 |
 | :--- | :--- | :--- | :--- |
@@ -227,10 +245,11 @@ gantt
 | **버튼별 읽기 전용** | 모든 경로에서 디스크 쓰기 속성을 강제 제거 또는 일괄 적용 | SolidWorks 버튼만 LFS 잠금에 기반해 동적 지정, BOM/EXPORT/eDrawings는 쓰기 권한 수정 배제 및 BOM 읽기전용 격리 | 불필요한 LFS 잠금 획득 연산 감소 및 다른 설계자 도면 덮어쓰기 위험 원천 예방 |
 | **BOM 설정 임시 파일** | 설정 조회 후 임시 오픈된 파일을 닫아 sub-component 로드 유실 | 설정 조회 후 닫지 않고 유지한 채 BOM 추출 수행, 이전 오픈 파일 목록을 보존하여 정확하게 cleanup | BOM 추출 시 불필요한 도면 재오픈 제거로 성능 향상 및 사용자 기존 파일 닫힘 방지 |
 | **Git 히스토리 시각화** | 단순 `git log` CLI 명령어 출력 (Graph 버튼) | GUI Graph 터미널 출력 + GitHub Network 그래프 브라우징 연동 (Browse Graph) 지원 | 로컬 시각화 라이브러리 및 렌더링 부하 없이, GitHub 웹 인터페이스의 미려하고 정밀한 대화형 브랜치 맵을 브라우저로 직접 활용 |
+| **성능 최적화 (인위적 대기 시간 단축)** | 안정화를 위한 고정 `time.sleep(2~3)` 대기, EXPORT/BOM 중에도 자동 Lock 모니터가 파일 Lock 시도 | 모든 `time.sleep()` 값을 50% 축소 (2s→1s, 3s→1.5s, 0.3s→0.15s 등) 및 EXPORT/BOM 서브프로세스 실행 중 자동 Lock 모니터의 Lock 시도 억제 (`suppress_auto_lock` 플래그) | 파일당 EXPORT 시간 약 50% 단축, 불필요한 LFS Lock 네트워크 호출 제거 |
+| **Config.json 직접 편집** | GUI 폼을 통해서만 설정 편집 가능 | "Edit Config.json" 버튼을 Config 뷰에 추가하여 메모장에서 직접 파일 편집 가능 | 빠른 설정 변경 및 디버깅 편의성 향상 |
 
 ---
 
-## 🚀 향후 발전 및 유지보수 방향 권장
 
 1. **동기화 시 충돌 파일 시각적 차이 비교 (CAD Diff)**: eDrawings 뷰어 등을 활용하여 충돌이 발생한 로컬 도면과 원격 도면의 썸네일을 좌우로 배치해 변경 이력을 한눈에 대조해 볼 수 있는 시각화 인터페이스 제공안 고려 권장.
 2. **다중 사용자 LFS Locks 시각화 고도화**: 현재 Locks 정보는 텍스트 리스트 형태로 표시되나, 네트워크 토폴로지 맵 또는 디자이너 프로필과 매칭하여 동시 협업 중인 파일 간의 종속성을 시각적으로 경고해 주는 협업 뷰 제공 검토 권장.

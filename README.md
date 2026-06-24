@@ -16,75 +16,24 @@
 
 ---
 
-## 1. Key Features and Characteristics
+## 1. Key Features
 
-* **Real-time SolidWorks API Integration Monitoring & Repository Size**: A background thread periodically tracks document objects in the active SolidWorks window. It automatically acquires a remote LFS Lock as soon as the user opens a CAD file and automatically releases the Lock when the window is closed. Additionally, the dashboard displays the total physical **Repository Size** (formatted in B, KB, MB, GB), which is updated automatically.
-* **Git LFS Cache Cleanup Wizard (Cleanup LFS Cache)**: Provides a built-in GUI wizard to safely clean up the local `.git/lfs/objects/` directory. It scans and keeps only LFS files associated with the current index (working tree) and the last 2 commits (`HEAD`, `HEAD~1`), purging all other obsolete historical caches to free up substantial local disk space.
-* **Work Safety and Upload/Authorization Prevention Features**:
-  - **Branch Switching & Sync Protection**: When switching branches or completing a sync, if there are unsaved changes in SolidWorks, it guides the user via a dialog popup to save and close changes first to prevent file corruption and lock conflicts, ensuring safe data coordination.
-  - **Safety Check During Upload**: If any of the target files for version upload are currently open in SolidWorks, it blocks the operation with a warning popup. Additionally, if a file locked by someone other than the user is included, users can choose whether to proceed by excluding only those specific files via a Yes/No warning window.
-  - **Button-Specific Read-Only Isolation & Dynamic LFS Lock Control**: When opening files with the **SolidWorks** button, the client checks the Git LFS Lock status. If you own the lock (or successfully lock it), the file is opened in Read-Write mode (with disk read-only attributes cleared). If locked by someone else or locking fails, it forces the file to open as **Read-Only** in SolidWorks (`swOpenDocOptions_ReadOnly`) and keeps it read-only on disk. Conversely, **eDrawings, EXPORT, and BOM** buttons do not require lock ownership or modify disk permissions; specifically, the BOM extractor opens the file directly in Read-Only mode silently to prevent lock conflicts.
-  - **COM Dynamic Dispatch Standardization**: Implemented dynamic dispatch (`win32com.client.dynamic.Dispatch`) to completely bypass cached early-binding COM wrappers in `%TEMP%\gen_py`, resolving the `TypeError: int() argument must be... not 'VARIANT'` runtime crash and ensuring robust OLE automation across all environments.
-* **Intuitive Color-coding and Sorting by Extension**:
-  - Maximized visibility through extension-based color coding in the file table (Part: Green `#059669`, Assembly: Orange `#d97706`, Drawing: Red `#dc2626`).
-  - **Enhanced Sorting Options**: A combo box for selecting file list sorting methods has been added with options like `by Status`, `by Solidworks`, and `by Locked`. When `by Status` is selected, files are sorted in the order of **New File -> Modified -> Unmodified**. When `by Solidworks` is selected, **Open files are positioned at the top**. All sorting applies a primary sort criterion followed by a uniform secondary alphabetical sort based on the relative file path (`File Path`).
-  - **Shortcut Support**: Pressing `Ctrl+A`, `Ctrl+a`, or `Ctrl+ㅁ` in the File Manager list selects all files at once.
-  - **Real-time CAD Thumbnail Preview**: When exactly one SolidWorks file (`.sldprt`, `.sldasm`, `.slddrw`) is selected in the File Manager list, a CAD thumbnail image is automatically extracted and displayed in a borderless preview area (4:3 ratio, 180x135) below the `History log` button in the left sidebar. (Extraction is processed asynchronously via a background thread to prevent UI freezing and supports both direct OLE structure decoding and Windows Shell COM interface hybrid extraction, ensuring perfect previews even for the latest versions like SolidWorks 2026.)
-  - **Thumbnail Clipboard Copy**: Clicking on the displayed thumbnail image (the cursor changes to a hand icon) immediately copies the thumbnail bitmap data to the Windows system clipboard, allowing it to be pasted into PowerPoint, Word, or messengers via `Ctrl+V`.
-* **Flexible Branch Management and Remote Deployment**:
-  - **"Make my branch" function**: Retrieves the user's GitHub account name to automatically create a dedicated remote branch for personal development and synchronizes the upstream, helping users work safely without affecting the `main` branch.
-  - **"Merge all branches into main" function**: In Maintainer mode, it provides bulk asynchronous merging of multiple collaborative development branches into the `main` branch along with conflict resolution options (Ours/Theirs selection modal).
-* **Background Sequential Queuing and Real-time Process Termination (Terminate button)**:
-  - **Sequential Button Execution Queue**: If another action button is clicked while a background process is running ("Working"), the task is added to a waiting queue and starts sequentially after the current task is completely finished.
-  - **Git Process Force Termination**: Provides a Terminate button in the System Log panel that can immediately and safely force-terminate the running Git subprocess tree; when terminated, all pending tasks in the queue are also automatically cleared.
-* **README.md Shortcut and Auto-sync in Dashboard**: A dedicated README.md edit button is provided to the right of the Active Branch area on the dashboard. Upon finishing editing and closing Notepad, the modified `README.md` file is automatically committed and pushed to the remote Git repository (`git add`, `commit`, `push`). If the file does not exist in the local repository, it automatically creates and applies it from the program template's `template/README.md` before opening Notepad.
-* **Auto Sync & Optimized Version Comparison**: An Auto Sync checkbox has been added to the Synchronization category on the dashboard. This enables sequential processing of "Get Latest Version (Sync)" and "Merge main branch into current branch" tasks automatically upon program startup or immediately after repository switching, cloning, or new creation. To avoid redundant Git processes, the client fetches remote updates first and compares commit hashes; if the local branch is already at the same commit as the target remote/main branch, or is already an ancestor (already merged), the merge/pull operation is cleanly skipped.
-* **Powerful Conflict Resolution Popup (LFS Pointer Error Response)**:
-  - If a conflict occurs during Sync/Merge/Upload, a multi-selection dialog rendered with system fonts is displayed. Users can select multiple files using the mouse and Ctrl/Shift combinations to perform bulk overwrite resolution (based on Local/Remote or branch name).
-  - Even in situations where `git merge` fails due to Git LFS pointer mismatches, it detects the exception, reliably brings up the conflict dialog, and handles it.
-  - **Automatic Local Backup for Conflicts**: Before prompting the user to resolve a conflict, the client automatically backs up the local conflicted files to the `.backup/` folder in the workspace root with a timestamp (`filename_YYYYMMDD_HHMMSS.ext`). This guarantees that your local modifications are never lost, even if you select the wrong resolution option.
-* **Maintainer "Make" Repository Auto-registration and Screen Transition**: In Maintainer mode, when a new repository creation (Make) is completed, it automatically registers the new local path and remote address in the Dashboard and Configuration settings and immediately transitions to the Dashboard view.
-* **Past Version Exploration and Restoration**: Displays the entire commit history as a list, allowing users to safely revert the workspace to a specific version just by double-clicking an entry (maintaining Standard Detached HEAD state). The history row for the currently checked-out version is clearly indicated with the UI theme's green text color and bold font.
-* **Git History Visualization (Graph button)**: A **[Graph]** button is provided at the far right of the Version History Log screen. Clicking it executes a separate windowed terminal (cmd) running the `git log --graph --oneline --all --decorate` command to visualize the entire branch's commit lineage as an ASCII graphic at a glance. The executed Git path automatically tracks the custom `git.exe` path configured in `config.json`.
-* **Interactive Git Graph Visualization (Browse Graph button)**: A **[Browse Graph]** button is provided to the left of the **[Graph]** button on the Version History Log screen. Clicking it automatically extracts the owner and repository name from the remote URL and immediately opens the GitHub Network graph page (`https://github.com/{owner}/{repo}/network`) in the default web browser. This allows users to leverage GitHub's premium and rich interactive branch/commit timeline viewer directly.
-* **Non-blocking Asynchronous UI Model**: To prevent the screen from freezing during long tasks such as commits, branch pushes, or remote LFS status queries, all operations are split into background multi-threads. An intuitive status is displayed via the bottom `System Log` status indicator (● Working / ● Idle) linked with real-time logs.
-* **Independent Executor Path Configuration**: Through `config.json`, both `git.exe` and `git-lfs.exe` execution paths can be perfectly customized, allowing the GitPython engine to call independent executables in special environments like Scoop.
-* **Exclusive for GitHub (github.com) Remote Repositories**: This program performs remote branch updates, administrator new repository creation, and integrated deployment via the `PyGithub` API library; therefore, it is tightly designed under the premise of using **github.com remote repository services**.
-* **Background Bulk SolidWorks Conversion (EXPORT button)**:
-  - A new **[EXPORT]** button is provided next to the file list in the File Manager tab.
-  - Clicking this button activates an intuitively designed popup dialog, allowing target files (Part `.sldprt`, Assembly `.sldasm`, Drawing `.slddrw`) to be converted asynchronously in bulk into various specifications (**PDF, DXF, STEP, STEP_ASM**).
-  - **Support for Simultaneous Multiple Format Selection**: Multiple formats can be selected via checkboxes for sequential conversion in a single execution. Prefix (`PREFIX` filtering) settings and output subdirectory (`OUTPUT_DIR`, default `2D`) settings are also possible.
-  - **Real-time INFO Inquiry**: Through the **[INFO]** button, users can preview summary statistics of the number of drawings, parts, and assemblies to be converted, along with a list of all relative paths in a table format. (The table is sorted by extension name and applies color tags by extension, just like the main file manager, making it easy to check at a glance.)
-  - **Safe Non-stop Background Operation**: When the Start button is clicked in the popup, an independent SolidWorks conversion sub-process runs in the background, allowing the main program UI to be used continuously without interruption during the conversion process.
-  - **Precise CAD Conversion Quality Control**:
-    - **PDF Output**: Forces Black & White conversion and high-quality line output, and automatically controls printer line weight options so that pen tables (thickness, etc.) from drawing properties are accurately reflected in the output.
-    - **STEP/STEP_ASM Output**: Strictly specifies the AP214 protocol standard format to ensure that the CAD file's color information (Appearances) and color texture data are fully extracted along with it. Files with 2 or more Configurations automatically generate separate STEP files per configuration.
-    - **Automatic System Restoration**: Once bulk conversion is complete, it automatically and safely restores the user's original preference default values set in SolidWorks System Options, and a notification dialog is displayed to the user upon completion.
-    - **Accurate Progress Count**: The Completed counter increments by exactly 1 per target CAD file (not per STEP output file), ensuring correct progress display even for files with multiple Configurations.
-    - **Watchdog Timeout Protection**: If SolidWorks hangs or encounters a deadlock (e.g., when loading a corrupted or heavy drawing file) for more than 3 minutes on a single file, a watchdog timer terminates the hung subprocess, kills the deadlocked SolidWorks process, spins up a fresh instance, and automatically resumes conversion from the next file in queue.
-    - **Robust Encoding & Localized Name Support**: The stdout/stderr communication streams use UTF-8 and fallback replacement (`errors="replace"`), preventing any background reader thread crashes in the Tkinter GUI when printing non-ASCII configuration or file names (such as the Korean configuration name `기본`).
-    - **Deadlock-Free Document Closing**: To prevent SolidWorks from hanging during document closing, `CloseDoc` is invoked using the document's Title (via `GetTitle()`) instead of the absolute file path. Furthermore, all active Python COM wrapper references to the files are cleared (`model = None`, etc.) and garbage collection is explicitly triggered (`gc.collect()` and `CoCollectFreeUnusedLibraries()`) before closing, releasing any lock on the files.
-* **Assembly BOM & Partlist Extraction (BOM button)**:
-  - A new **[BOM]** button is provided in the File Manager toolbar.
-  - It is enabled **only** when a single assembly (`.sldasm`) file is selected and no background tasks are running.
-  - Clicking this button recursively extracts a hierarchical BOM Tree and a flat Partlist, using the SolidWorks COM API to traverse the assembly hierarchy down to the lowest level.
-  - **Dynamic Configuration Selector Popup**: If the assembly has 2 or more configurations, it prompts the user with a configuration selection popup dialog. This query runs in a separate clean Python subprocess, completely bypassing COM apartment model clashes on the main GUI thread.
-  - **Smart Filtering**: Automatically excludes suppressed components and components marked as "Exclude from BOM" in SolidWorks.
-  - **Excel Formatting & Columns Schema**: Saves two sheets under `2D/BOM/` relative to the assembly's folder:
-    1. Hierarchical BOM Tree (`[assembly]__BOM.xlsx`): Displays the tree with indented `Partname` values (prepending `Depth - 1` space characters). If the `Partname` property is Null, it falls back to the base filename.
-    2. Flat Partlist (`[assembly]__PL.xlsx`): Aggregates all parts and sub-assemblies with total accumulated quantities.
-    - Standard columns are ordered strictly as: `Depth`, `Type`, `PartNumber`, `Partname`, `Qty`, `Material`, `Treatment`, `Weight`, `Description`, `File Name`, `Configuration`, `File Path`.
-  - **COM Reference & Document Cleanup**: Automatically closes the main assembly and all opened referenced sub-assemblies/part files recursively in SolidWorks, releasing all file handles.
-* **File Commit History & Visual Diff Explorer (Diff button)**:
-  - A new **[Diff]** button is provided in the File Manager toolbar, placed to the right of the BOM button.
-  - It is enabled **only** when a single part (`.sldprt`) or drawing (`.slddrw`) file is selected and no background tasks are running. When disabled, the button text is dimmed for clear state recognition.
-  - Clicking this button opens a popup window. To prevent the main GUI thread from freezing, it queries the file's Git commit history (`git log`) in a background thread and lists the commits in a Treeview table with Date, Author, and Commit summary.
-  - The dialog contains a scrollbar, a "Diff" button, and an "Exit" button. Selecting a commit enables the "Diff" button.
-  - When clicked, it copies the current file as `_OURS` and extracts the selected commit version as `_THEIRS` (automatically resolving Git LFS pointers to original binary files via `git lfs smudge`) inside the `.backup/` directory.
-  - It then opens both files in SolidWorks (auto-launching SolidWorks if it is not already running) and displays an informational popup prompting the user to run the comparison manually via the SolidWorks menu:
-    - **Parts (.sldprt)**: "Use Tools > Compare > Geometry menu to compare."
-    - **Drawings (.slddrw)**: "Use Tools > Compare > Draw Compare menu to compare."
-  - Both files are left open in SolidWorks so the user can inspect and interact with them directly; no documents are closed and SolidWorks is not terminated afterwards.
+* **Auto Lock & Monitor**: Background thread tracks open files via SolidWorks COM API. Acquires LFS Lock on file open, releases on close. Dashboard shows real-time repository size.
+* **LFS Cache Cleanup Wizard**: GUI tool to safely purge unused `.git/lfs/objects/`, keeping only files from the current index and last 2 commits.
+* **Work Safety**: Blocks upload if files are open in SolidWorks or locked by others. Branch switching warns about unsaved changes. Only the SolidWorks button manages LFS locks; eDrawings/EXPORT/BOM use ReadOnly mode.
+* **Color-coded File List**: Parts green `#059669`, assemblies orange `#d97706`, drawings red `#dc2626`. Sort by name, extension, status, SW open state, or lock state.
+* **CAD Thumbnail Preview**: Auto-extracts 4:3 thumbnail for selected file; click to copy to clipboard.
+* **Branch Management**: "Make my branch" auto-creates a personal remote branch. "Merge all branches into main" bulk-merges with Ours/Theirs conflict resolution.
+* **Sequential Task Queue**: Background operations queue automatically; Terminate button force-kills stuck Git processes.
+* **Auto Sync**: Fetches and merges on startup/repo change; skips if already up-to-date.
+* **Conflict Resolution**: Multi-file selection dialog with auto-backup to `.backup/`. Handles LFS pointer errors.
+* **EXPORT (Bulk Conversion)**: Convert `.sldprt`/`.sldasm`/`.slddrw` to PDF, DXF, STEP (AP214 color). Multiple formats per run. Watchdog (180s) kills and restarts hung SolidWorks automatically. Per-file progress counting, not per-configuration.
+* **BOM Extraction**: Recursively traverse assemblies to generate hierarchical BOM Tree and flat Partlist as Excel (`.xlsx`). Excludes suppressed and BOM-excluded components. Configuration selector for multi-config assemblies.
+* **Visual Diff (Diff button)**: Browse Git commit history for a file, then open the current version (`_OURS`) and selected commit (`_THEIRS`) in SolidWorks side-by-side for manual comparison (Geometry Compare for parts, Draw Compare for drawings).
+* **Version History & Graph**: Double-click any commit to restore workspace to that state. ASCII commit graph (via cmd) or interactive GitHub Network browser.
+* **GitHub Exclusive**: Tightly integrated with `github.com` via PyGithub for remote branch management and repository creation.
+* **Performance Optimized**: Auto-lock suppressed during EXPORT/BOM (ReadOnly files need no lock). All stabilization delays reduced by 50%.
+* **Config Editor**: "Edit Config.json" button opens the configuration file directly in Notepad.
 
 
 
@@ -123,7 +72,7 @@ Simply double-click the **`GIT4SW.bat`** batch file prepared in the project fold
 
 ### 4.1 Initial Setup
 
-After running the program for the first time, you must first perform essential environment settings in the Configuration Manager by clicking the **Config** button at the bottom of the left sidebar menu. After entering the appropriate paths and values in each input field, click the **[Save Configuration]** button at the bottom to save it to `config.json`, which is immediately reflected in the app.
+After running the program for the first time, you must first perform essential environment settings in the Configuration Manager by clicking the **Config** button at the bottom of the left sidebar menu. After entering the appropriate paths and values in each input field, click the **[Save Configuration]** button at the bottom to save it to `config.json`, which is immediately reflected in the app. You can also click **[Edit Config.json]** to open the configuration file directly in Notepad for manual editing.
 
 Details and examples for each configuration item are as follows:
 

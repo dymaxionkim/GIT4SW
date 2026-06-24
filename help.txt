@@ -141,6 +141,8 @@ Configure system and application paths to ensure integration runs smoothly.
   - Custom executable/folder paths for Git, Git LFS, SolidWorks, eDrawings, GitHub Personal Access Token, default local directory, and default GitHub organization name. Each path field (Git, Git LFS, SolidWorks, eDrawings) has a combobox and a "Find" button that scans the C: drive for the corresponding executable and lets you pick the path from a dropdown list. Note: The "auto_sync" configuration parameter is saved in config.json as a boolean (true/false) to enable or disable automatic synchronization. It is managed via the Auto Sync checkbox in Dashboard Mode and is excluded from manual editing in Config Mode.
 • Save Configuration (Button)
   - Saves all configured values to config.json and re-initializes Git and COM connections.
+• Edit Config.json (Button)
+  - Opens the config.json file directly in Notepad for manual editing without going through the GUI form.
 
 ----------------------------------------------------------
 6. SYSTEM LOG & PROCESS TERMINATION
