@@ -2385,6 +2385,7 @@ class GIT4SWApp(tk.Tk):
                     self.refresh_history()
                     old_display = current if current else "Detached HEAD"
                     self.write_log(f"🔄 BRANCH SWITCHED: [{old_display}] ➡️ [{selected_branch}]", "success")
+                    self.trigger_auto_sync_if_enabled()
                     
                 self.task_queue.put(('sw_status', None, on_done))
             except Exception as e:
