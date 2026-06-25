@@ -453,9 +453,34 @@ class GitService:
             return stdout.rstrip()
         except subprocess.CalledProcessError as e:
             err_msg = e.stderr.strip() if e.stderr else str(e)
+            # Recover from Git LFS lock cache corruption (parallel lfs commands can corrupt lockcache.db)
+            if 'lockcache' in err_msg.lower():
+                lockcache_path = os.path.join(self.repo_path, '.git', 'lfs', 'lockcache.db')
+                if os.path.exists(lockcache_path):
+                    try:
+                        os.remove(lockcache_path)
+                    except Exception:
+                        pass
+                try:
+                    _, stdout, stderr = run_git_subprocess(cmd_args, self.repo_path, check=check)
+                    return stdout.rstrip()
+                except subprocess.CalledProcessError as e2:
+                    err_msg2 = e2.stderr.strip() if e2.stderr else str(e2)
+                    raise RuntimeError(f"Git CLI command {' '.join(cmd_args)} failed: {err_msg2}")
+                except FileNotFoundError:
+                    raise RuntimeError("Git CLI is not installed or not found on system PATH.")
             raise RuntimeError(f"Git CLI command {' '.join(cmd_args)} failed: {err_msg}")
         except FileNotFoundError:
             raise RuntimeError("Git CLI is not installed or not found on system PATH.")
+
+    def _clear_lock_cache(self):
+        """Remove the Git LFS lock cache to prevent corruption errors from concurrent lfs operations."""
+        lockcache_path = os.path.join(self.repo_path, '.git', 'lfs', 'lockcache.db')
+        if os.path.exists(lockcache_path):
+            try:
+                os.remove(lockcache_path)
+            except Exception:
+                pass
 
     def is_git_repo(self):
         """Checks if the directory is a valid git repository."""
@@ -851,11 +876,13 @@ class GitService:
 
     def lock_file(self, file_path):
         """Locks a file using git lfs lock."""
+        self._clear_lock_cache()
         rel_path = self.get_correct_filepath_casing(file_path)
         return self._run_lfs_cmd(["git", "lfs", "lock", rel_path])
 
     def unlock_file(self, file_path, force=False):
         """Unlocks a file using git lfs unlock."""
+        self._clear_lock_cache()
         rel_path = self.get_correct_filepath_casing(file_path)
         args = ["git", "lfs", "unlock", rel_path]
         if force:
@@ -864,6 +891,8 @@ class GitService:
 
     def _batch_lfs_operation(self, file_paths, action, max_workers=10, force=False):
         """Process multiple LFS lock/unlock operations in parallel using ThreadPoolExecutor."""
+        # Clear lock cache before batch operations to prevent corruption from concurrent git lfs processes
+        self._clear_lock_cache()
         rel_paths = [self.get_correct_filepath_casing(fp) for fp in file_paths]
 
         def _process_single(rel_path):

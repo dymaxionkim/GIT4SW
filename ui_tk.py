@@ -6353,17 +6353,12 @@ finally:
                 file_open_settings = {}
                 import stat
 
-                # [Bug 1 fix] Opening a .sldasm causes SolidWorks to auto-load its components (.sldprt/.slddrw).
-                # These component files are not in the files list, but if SolidWorks encounters a file already
-                # open without write permission, it opens it read-only.
-                # → When an assembly is selected, check lock status in advance for all SW files (including
-                #   components) and grant write permission if ours.
+                # Pre-process assembly component permissions based on existing lock data
                 has_asm = any(os.path.splitext(f)[1].lower() == '.sldasm' for f in files)
                 if has_asm and self.git_service.is_git_repo():
                     try:
                         repo_root = os.path.abspath(self.git_service.repo_path)
                         for dirpath, _dirs, filenames in os.walk(repo_root):
-                            # Skip .git and .backup directories
                             _dirs[:] = [d for d in _dirs if d not in ('.git', '.backup')]
                             for fname in filenames:
                                 if os.path.splitext(fname)[1].lower() not in ('.sldprt', '.sldasm', '.slddrw'):
@@ -6375,26 +6370,12 @@ finally:
                                 comp_is_ours = False
                                 if comp_rel in locks_lower:
                                     comp_is_ours = locks_lower[comp_rel].get('is_ours', False)
-                                else:
-                                    # No lock found, try to lock it (component not in selected file list)
-                                    comp_abs_orig = os.path.join(dirpath, fname)
-                                    if comp_abs_orig not in [os.path.abspath(f) for f in files]:
-                                        try:
-                                            self.git_service.lock_file(comp_abs_orig)
-                                            comp_is_ours = True
-                                            locks_lower[comp_rel] = {'is_ours': True, 'owner': 'me'}
-                                            self.write_log(f"Auto-locked component '{fname}'.", "info")
-                                        except Exception:
-                                            # Ignore lock failure — may already be locked
-                                            pass
-                                    if comp_rel in locks_lower:
-                                        comp_is_ours = locks_lower[comp_rel].get('is_ours', False)
                                 try:
                                     mode = os.stat(comp_abs).st_mode
                                     if comp_is_ours:
                                         if not (mode & stat.S_IWRITE):
                                             os.chmod(comp_abs, mode | stat.S_IWRITE)
-                                    else:
+                                    elif comp_rel in locks_lower:
                                         if mode & stat.S_IWRITE:
                                             os.chmod(comp_abs, mode & ~stat.S_IWRITE)
                                 except Exception:
@@ -6433,9 +6414,8 @@ finally:
                         except Exception as chmod_e:
                             print(f"Failed to clear read-only on '{abs_file_path}': {chmod_e}")
                         file_open_settings[abs_file_path] = {
-                            # 1 = swOpenDocOptions_Silent (read-write)
-                            # 64 = swOpenDocOptions_IgnoreActivationAndSuppression (suppress parent assembly auto-loading)
-                            'options': 1 | 64,
+                            # 1 = swOpenDocOptions_Silent
+                            'options': 1,
                             'is_ours': True
                         }
                     else:
@@ -6447,8 +6427,7 @@ finally:
                             print(f"Failed to set read-only on '{abs_file_path}': {chmod_e}")
                         file_open_settings[abs_file_path] = {
                             # 1 = swOpenDocOptions_Silent, 2 = swOpenDocOptions_ReadOnly
-                            # 64 = swOpenDocOptions_IgnoreActivationAndSuppression (suppress parent assembly auto-loading)
-                            'options': 1 | 2 | 64,
+                            'options': 1 | 2,
                             'is_ours': False
                         }
 
@@ -6499,49 +6478,108 @@ finally:
                                 self.task_queue.put(('error', f"Failed to open '{os.path.basename(file)}' in running SolidWorks. (OpenDoc6 returned NULL)", None))
                         except Exception as e:
                             self.task_queue.put(('error', f"Failed to open '{os.path.basename(file)}' in running SolidWorks: {e}", None))
-                    return
                 
-                # 2. SolidWorks is not running, launch a new instance
-                path = self.load_solidworks_path()
-                if os.path.exists(path):
-                    errors = []
-                    import subprocess
-                    for file in files:
-                        abs_file_path = os.path.abspath(file)
-                        settings = file_open_settings.get(abs_file_path, {'options': 1, 'is_ours': True})
-                        is_ours_lock = settings['is_ours']
-                        
+                    # Component auto-lock via COM: query SW for all open documents
+                    if has_asm:
+                        import time
+                        time.sleep(1)
                         try:
-                            subprocess.Popen([path, abs_file_path])
-                            if is_ours_lock:
-                                # [Bug 2 fix] Store as relative path (lowercase)
-                                _rel = os.path.relpath(abs_file_path, self.git_service.repo_path).replace('\\', '/').lower()
-                                self.files_locked_by_us.add(_rel)
-                        except Exception as e:
-                            errors.append(f"Failed to open {os.path.basename(file)} in SolidWorks: {e}")
-                    if errors:
-                        self.task_queue.put(('error', "\n".join(errors), None))
+                            open_docs = self.sw_service.get_all_open_documents()
+                            repo_root = os.path.abspath(self.git_service.repo_path).replace("\\", "/")
+                            selected_abs = set(os.path.abspath(f) for f in files)
+                            comp_paths = []
+                            for sw_doc in open_docs:
+                                sw_path = sw_doc['path'].replace("\\", "/")
+                                if sw_path.lower().startswith(repo_root.lower()):
+                                    sw_abs = os.path.abspath(sw_path)
+                                    if sw_abs not in selected_abs:
+                                        comp_paths.append(sw_abs)
+                            if comp_paths:
+                                self.write_log(f"Auto-locking {len(comp_paths)} assembly components detected in SolidWorks...", "info")
+                                results = self.git_service.batch_lock_files(comp_paths, max_workers=10)
+                                for p, success, _msg in results:
+                                    if success:
+                                        _rel = p.replace('\\', '/').lower()
+                                        self.files_locked_by_us.add(_rel)
+                                        self.write_log(f"Auto-locked component '{os.path.basename(p)}'.", "info")
+                                self.refresh_file_list()
+                        except Exception as ce:
+                            print(f"Component auto-lock error: {ce}")
                 else:
-                    errors = []
-                    for file in files:
-                        abs_file_path = os.path.abspath(file)
-                        settings = file_open_settings.get(abs_file_path, {'options': 1, 'is_ours': True})
-                        is_ours_lock = settings['is_ours']
-                        
-                        try:
-                            os.startfile(abs_file_path)
-                            if is_ours_lock:
-                                # [Bug 2 fix] Store as relative path (lowercase)
-                                _rel = os.path.relpath(abs_file_path, self.git_service.repo_path).replace('\\', '/').lower()
-                                self.files_locked_by_us.add(_rel)
-                        except Exception as e:
-                            errors.append(f"Failed to open {os.path.basename(file)} in SolidWorks: {e}")
-                    if errors:
-                        err_msg = f"SolidWorks executable not found at path: {path}. Fallback failed:\n" + "\n".join(errors)
-                        self.task_queue.put(('error', err_msg, None))
+                    # 2. SolidWorks is not running, launch a new instance
+                    path = self.load_solidworks_path()
+                    if os.path.exists(path):
+                        errors = []
+                        import subprocess
+                        for file in files:
+                            abs_file_path = os.path.abspath(file)
+                            settings = file_open_settings.get(abs_file_path, {'options': 1, 'is_ours': True})
+                            is_ours_lock = settings['is_ours']
+                            
+                            try:
+                                subprocess.Popen([path, abs_file_path])
+                                if is_ours_lock:
+                                    _rel = os.path.relpath(abs_file_path, self.git_service.repo_path).replace('\\', '/').lower()
+                                    self.files_locked_by_us.add(_rel)
+                            except Exception as e:
+                                errors.append(f"Failed to open {os.path.basename(file)} in SolidWorks: {e}")
+                        if errors:
+                            self.task_queue.put(('error', "\n".join(errors), None))
                     else:
-                        warn_msg = f"SolidWorks executable not found at '{path}'. Opened using system default association."
-                        self.task_queue.put(('success', warn_msg, None))
+                        errors = []
+                        for file in files:
+                            abs_file_path = os.path.abspath(file)
+                            settings = file_open_settings.get(abs_file_path, {'options': 1, 'is_ours': True})
+                            is_ours_lock = settings['is_ours']
+                            
+                            try:
+                                os.startfile(abs_file_path)
+                                if is_ours_lock:
+                                    _rel = os.path.relpath(abs_file_path, self.git_service.repo_path).replace('\\', '/').lower()
+                                    self.files_locked_by_us.add(_rel)
+                            except Exception as e:
+                                errors.append(f"Failed to open {os.path.basename(file)} in SolidWorks: {e}")
+                        if errors:
+                            err_msg = f"SolidWorks executable not found at path: {path}. Fallback failed:\n" + "\n".join(errors)
+                            self.task_queue.put(('error', err_msg, None))
+                        else:
+                            warn_msg = f"SolidWorks executable not found at '{path}'. Opened using system default association."
+                            self.task_queue.put(('success', warn_msg, None))
+                    
+                    # Component auto-lock for new SW instance: delayed COM query
+                    if has_asm:
+                        def _delayed_component_lock():
+                            import time
+                            for _ in range(15):
+                                time.sleep(2)
+                                try:
+                                    sw = self.sw_service._get_sw_app()
+                                    if sw:
+                                        time.sleep(2)
+                                        open_docs = self.sw_service.get_all_open_documents()
+                                        repo_root = os.path.abspath(self.git_service.repo_path).replace("\\", "/")
+                                        selected_abs = set(os.path.abspath(f) for f in files)
+                                        comp_paths = []
+                                        for sw_doc in open_docs:
+                                            sw_path = sw_doc['path'].replace("\\", "/")
+                                            if sw_path.lower().startswith(repo_root.lower()):
+                                                sw_abs = os.path.abspath(sw_path)
+                                                if sw_abs not in selected_abs:
+                                                    comp_paths.append(sw_abs)
+                                        if comp_paths:
+                                            self.write_log(f"Auto-locking {len(comp_paths)} assembly components...", "info")
+                                            results = self.git_service.batch_lock_files(comp_paths, max_workers=10)
+                                            for p, success, _msg in results:
+                                                if success:
+                                                    _rel = p.replace('\\', '/').lower()
+                                                    self.files_locked_by_us.add(_rel)
+                                                    self.write_log(f"Auto-locked component '{os.path.basename(p)}'.", "info")
+                                            self.refresh_file_list()
+                                            break
+                                except Exception:
+                                    pass
+                        
+                        threading.Thread(target=_delayed_component_lock, daemon=True).start()
             finally:
                 self.decrement_tasks()
                 
