@@ -220,7 +220,7 @@ class MultiConflictResolutionDialog(tk.Toplevel):
         self.listbox.pack(side="left", fill="both", expand=True)
         scrollbar.config(command=self.listbox.yview)
         
-        # Bind Listbox selection changes to handle Diff button activation
+        # Bind Listbox selection changes to manage Choose button state
         self.listbox.bind("<<ListboxSelect>>", self.on_select_change)
         
         # Control Frame (Combo box + Action buttons)
@@ -239,13 +239,10 @@ class MultiConflictResolutionDialog(tk.Toplevel):
         self.cb_choice.pack(side="left", padx=(0, 8))
         self.cb_choice.set(self.options[0])
         
-        # Buttons aligned horizontally: Choose -> Diff -> Exit
-        btn_ok = ttk.Button(control_frm, text="Choose", style="Primary.TButton", command=self.on_ok)
-        btn_ok.pack(side="left")
-        
-        self.btn_diff = ttk.Button(control_frm, text="Diff", style="Diff.TButton", command=self.on_diff)
-        self.btn_diff.pack(side="left", padx=(8, 0))
-        self.btn_diff.state(["disabled"]) # Initially disabled until exactly 1 file is selected
+        # Buttons aligned horizontally: Choose -> Exit
+        self.btn_ok = ttk.Button(control_frm, text="Choose", style="Primary.TButton", command=self.on_ok)
+        self.btn_ok.pack(side="left")
+        self.btn_ok.state(["disabled"]) # Initially disabled until at least one file is selected
         
         btn_cancel = ttk.Button(control_frm, text="Exit", command=self.on_cancel)
         btn_cancel.pack(side="left", padx=(8, 0))
@@ -259,20 +256,10 @@ class MultiConflictResolutionDialog(tk.Toplevel):
         self.protocol("WM_DELETE_WINDOW", self.on_cancel)
         
     def on_select_change(self, event=None):
-        selected_indices = self.listbox.curselection()
-        if len(selected_indices) == 1:
-            self.btn_diff.state(["!disabled"])
+        if self.listbox.curselection():
+            self.btn_ok.state(["!disabled"])
         else:
-            self.btn_diff.state(["disabled"])
-            
-    def on_diff(self):
-        selected_indices = self.listbox.curselection()
-        if len(selected_indices) == 1:
-            selected_file = self.listbox.get(selected_indices[0])
-            messagebox.showinfo(
-                "Compare Version (Diff)", 
-                f"Compare versions for:\n{selected_file}\n\n(Visual comparison tool or git diff will be executed.)"
-            )
+            self.btn_ok.state(["disabled"])
         
     def on_ok(self):
         selected_indices = self.listbox.curselection()
@@ -3776,61 +3763,97 @@ class GIT4SWApp(tk.Tk):
         else:
             shutil.copy2(src, dest)
 
-    def backup_conflicted_files(self, conflicted_files):
-        import datetime
+    def backup_conflicted_files(self, conflicted_files, theirs_ref=None):
+        """Backup both ours/theirs versions of conflicted files to .backup/ directory.
+
+        Saves git stage 2 (ours) and stage 3 (theirs) to _OURS, _THEIRS suffix files.
+        When no stages exist because the merge hasn't started yet, falls back to the
+        committed versions from HEAD (ours) and theirs_ref (theirs).
+        """
         import shutil
-        workspace_path = getattr(self.git_service, 'workspace_path', None)
+        import subprocess as _sp
+
+        # workspace_path는 GitService가 아닌 앱 윈도우(self)의 속성에서 가져온다.
+        # GitService는 repo_path만 갖고 있어 workspace_path가 없으면 백업 경로를 찾지 못한다.
+        workspace_path = getattr(self, 'workspace_path', None)
         if not workspace_path:
+            # 폴백: git_service.repo_path 사용
+            workspace_path = getattr(self.git_service, 'repo_path', None)
+        if not workspace_path:
+            self.write_log("⚠️ Cannot backup: workspace path is unknown.", "warning")
             return
-            
+
         backup_root = os.path.join(workspace_path, ".backup")
         try:
             os.makedirs(backup_root, exist_ok=True)
         except Exception as e:
             self.write_log(f"⚠️ Failed to create backup directory: {e}", "warning")
             return
-            
-        timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
-        
+
+        # git 실행 파일 경로
+        git_exe = getattr(self.git_service, 'git_path', None) or "git"
+
+        def _git_show(ref, git_rel, cwd):
+            """git show <ref>:<git_rel>을 실행하고, LFS smudge를 적용한 데이터를 반환한다."""
+            res = _sp.run(
+                [git_exe, "show", f"{ref}:{git_rel}"],
+                stdout=_sp.PIPE, stderr=_sp.PIPE,
+                cwd=cwd
+            )
+            if res.returncode != 0 or not res.stdout:
+                return None
+            data = res.stdout
+            if data.startswith(b"version https://git-lfs"):
+                smudge = _sp.run(
+                    [git_exe, "lfs", "smudge"],
+                    input=data, stdout=_sp.PIPE, stderr=_sp.PIPE,
+                    cwd=cwd
+                )
+                if smudge.returncode == 0:
+                    data = smudge.stdout
+            return data
+
         for f_rel in conflicted_files:
             src_path = os.path.normpath(os.path.join(workspace_path, f_rel))
-            if not os.path.exists(src_path):
-                continue
-                
-            # backup filename format: base_filename_YYYYMMDD_HHMMSS.ext
+            git_rel = f_rel.replace("\\", "/")
             base_name, ext = os.path.splitext(os.path.basename(f_rel))
-            backup_name = f"{base_name}_{timestamp}{ext}"
-            dest_path = os.path.join(backup_root, backup_name)
-            
-            try:
-                shutil.copy2(src_path, dest_path)
-                self.write_log(f"💾 Auto-saved conflict backup: {f_rel} -> .backup/{backup_name}", "info")
-            except Exception as copy_e:
-                self.write_log(f"⚠️ Failed to backup {f_rel}: {copy_e}", "warning")
 
-    def _prompt_resolve_conflict(self, filename, branch_name):
-        self.backup_conflicted_files([filename])
-        res_queue = queue.Queue()
-        def ask():
-            from tkinter import messagebox
-            ans = messagebox.askyesnocancel(
-                "Resolve Merge Conflict",
-                f"Conflict detected in file: {filename}\n\n"
-                f"Yes: Keep 'main' branch version (Ours)\n"
-                f"No: Choose '{branch_name}' branch version (Theirs)\n"
-                f"Cancel: Keep 'main' branch version"
-            )
-            if ans is True:
-                res_queue.put('ours')
-            elif ans is False:
-                res_queue.put('theirs')
-            else:
-                res_queue.put('ours')
-        self.after(0, ask)
-        return res_queue.get()
+            # 1) OURS 버전 백업
+            ours_backup = os.path.join(backup_root, f"{base_name}_OURS{ext}")
+            try:
+                data = _git_show(":2", git_rel, workspace_path) or _git_show("HEAD", git_rel, workspace_path)
+                if data:
+                    with open(ours_backup, "wb") as fh:
+                        fh.write(data)
+                    self.write_log(f"💾 Backup OURS:   {f_rel} -> .backup/{os.path.basename(ours_backup)}", "info")
+                else:
+                    if os.path.exists(src_path):
+                        shutil.copy2(src_path, ours_backup)
+                        self.write_log(f"💾 Backup OURS (worktree): {f_rel} -> .backup/{os.path.basename(ours_backup)}", "info")
+            except Exception as e_ours:
+                self.write_log(f"⚠️ Failed to backup OURS for {f_rel}: {e_ours}", "warning")
+
+            # 2) THEIRS 버전 백업
+            theirs_backup = os.path.join(backup_root, f"{base_name}_THEIRS{ext}")
+            try:
+                data = _git_show(":3", git_rel, workspace_path)
+                if not data and theirs_ref:
+                    data = _git_show(theirs_ref, git_rel, workspace_path)
+                if data:
+                    with open(theirs_backup, "wb") as fh:
+                        fh.write(data)
+                    self.write_log(f"💾 Backup THEIRS: {f_rel} -> .backup/{os.path.basename(theirs_backup)}", "info")
+                else:
+                    if os.path.exists(src_path):
+                        shutil.copy2(src_path, theirs_backup)
+                        self.write_log(f"💾 Backup THEIRS (worktree): {f_rel} -> .backup/{os.path.basename(theirs_backup)}", "info")
+                    else:
+                        self.write_log(f"ℹ️ No THEIRS stage for {f_rel} (may be pre-merge state).", "info")
+            except Exception as e_theirs:
+                self.write_log(f"⚠️ Failed to backup THEIRS for {f_rel}: {e_theirs}", "warning")
 
     def prompt_multi_conflict_resolution(self, conflicted_files, ours_branch=None, theirs_branch=None, is_pull=False):
-        self.backup_conflicted_files(conflicted_files)
+        self.backup_conflicted_files(conflicted_files, theirs_ref=theirs_branch)
         res_queue = queue.Queue()
         def ask():
             dialog = MultiConflictResolutionDialog(self, conflicted_files, ours_branch, theirs_branch, is_pull)
@@ -6328,7 +6351,56 @@ finally:
                 # Determine open options and disk attribute for each file
                 file_open_settings = {}
                 import stat
-                
+
+                # [버그 1 수정] .sldasm 파일을 열면 SolidWorks가 포함된 컴포넌트(.sldprt/.slddrw)를
+                # 자동으로 함께 로드한다. 이 컴포넌트 파일들은 files 리스트에 없지만
+                # SolidWorks가 이미 쓰기 권한 없이 열려있는 파일을 만나면 읽기 전용으로 처리한다.
+                # → 어셈블리가 선택된 경우, 저장소 내 모든 SW 파일(컴포넌트 포함)에 대해
+                #   미리 lock 상태를 확인하고 ours이면 쓰기 권한을 부여한다.
+                has_asm = any(os.path.splitext(f)[1].lower() == '.sldasm' for f in files)
+                if has_asm and self.git_service.is_git_repo():
+                    try:
+                        repo_root = os.path.abspath(self.git_service.repo_path)
+                        for dirpath, _dirs, filenames in os.walk(repo_root):
+                            # .git 및 .backup 디렉토리는 건너뜀
+                            _dirs[:] = [d for d in _dirs if d not in ('.git', '.backup')]
+                            for fname in filenames:
+                                if os.path.splitext(fname)[1].lower() not in ('.sldprt', '.sldasm', '.slddrw'):
+                                    continue
+                                comp_abs = os.path.abspath(os.path.join(dirpath, fname))
+                                comp_rel = os.path.relpath(comp_abs, repo_root).replace('\\', '/').lower()
+                                if not os.path.exists(comp_abs):
+                                    continue
+                                comp_is_ours = False
+                                if comp_rel in locks_lower:
+                                    comp_is_ours = locks_lower[comp_rel].get('is_ours', False)
+                                else:
+                                    # lock이 없으면 lock 시도 (선택한 파일 목록에 없는 컴포넌트)
+                                    comp_abs_orig = os.path.join(dirpath, fname)
+                                    if comp_abs_orig not in [os.path.abspath(f) for f in files]:
+                                        try:
+                                            self.git_service.lock_file(comp_abs_orig)
+                                            comp_is_ours = True
+                                            locks_lower[comp_rel] = {'is_ours': True, 'owner': 'me'}
+                                            self.write_log(f"Auto-locked component '{fname}'.", "info")
+                                        except Exception:
+                                            # 잠금 실패해도 무시 — 이미 잠겨있을 수 있음
+                                            pass
+                                    if comp_rel in locks_lower:
+                                        comp_is_ours = locks_lower[comp_rel].get('is_ours', False)
+                                try:
+                                    mode = os.stat(comp_abs).st_mode
+                                    if comp_is_ours:
+                                        if not (mode & stat.S_IWRITE):
+                                            os.chmod(comp_abs, mode | stat.S_IWRITE)
+                                    else:
+                                        if mode & stat.S_IWRITE:
+                                            os.chmod(comp_abs, mode & ~stat.S_IWRITE)
+                                except Exception:
+                                    pass
+                    except Exception as asm_e:
+                        self.write_log(f"Warning: Failed to pre-process component permissions for assembly: {asm_e}", "warning")
+
                 for file in files:
                     abs_file_path = os.path.abspath(file)
                     file_rel = os.path.relpath(abs_file_path, self.git_service.repo_path).replace('\\', '/').lower()
@@ -6414,8 +6486,11 @@ finally:
                                     # Option: 2 = swUserDecision
                                     self.sw_service._call_com_method(sw_app, 'ActivateDoc3', title, True, 2, errors_ref)
                                     if is_ours_lock:
-                                        # Add to active locked files set in UI to track local status
-                                        self.files_locked_by_us.add(abs_file_path.lower())
+                                        # [버그 2 수정] files_locked_by_us에 절대경로가 아닌
+                                        # repo 기준 상대경로(소문자)를 저장해야 _monitor_sw_loop와
+                                        # 경로 비교가 일치하여 자동 unlock이 정상 동작한다.
+                                        _rel = os.path.relpath(abs_file_path, self.git_service.repo_path).replace('\\', '/').lower()
+                                        self.files_locked_by_us.add(_rel)
                                 except Exception as ae:
                                     print(f"Failed to activate document: {ae}")
                                 self.task_queue.put(('success', f"Opened '{os.path.basename(file)}' in the running SolidWorks.", None))
@@ -6438,7 +6513,9 @@ finally:
                         try:
                             subprocess.Popen([path, abs_file_path])
                             if is_ours_lock:
-                                self.files_locked_by_us.add(abs_file_path.lower())
+                                # [버그 2 수정] 상대경로(소문자)로 저장
+                                _rel = os.path.relpath(abs_file_path, self.git_service.repo_path).replace('\\', '/').lower()
+                                self.files_locked_by_us.add(_rel)
                         except Exception as e:
                             errors.append(f"Failed to open {os.path.basename(file)} in SolidWorks: {e}")
                     if errors:
@@ -6453,7 +6530,9 @@ finally:
                         try:
                             os.startfile(abs_file_path)
                             if is_ours_lock:
-                                self.files_locked_by_us.add(abs_file_path.lower())
+                                # [버그 2 수정] 상대경로(소문자)로 저장
+                                _rel = os.path.relpath(abs_file_path, self.git_service.repo_path).replace('\\', '/').lower()
+                                self.files_locked_by_us.add(_rel)
                         except Exception as e:
                             errors.append(f"Failed to open {os.path.basename(file)} in SolidWorks: {e}")
                     if errors:
@@ -6690,158 +6769,6 @@ finally:
                         self.tree.treeview.item(item, tags=("default_ext",))
 
 
-    def _show_conflict_dialog(self, conflicted_files, source_branch, current_branch):
-        """Shows a modal dialog for merge conflict resolution.
-        
-        Lets the user pick:
-          - source (main) branch version  → git checkout --theirs
-          - current branch version         → git checkout --ours
-          - Abort merge                    → git merge --abort
-        """
-        dialog = tk.Toplevel(self)
-        dialog.title("⚠️ Merge Conflict Occurred")
-        dialog.resizable(False, False)
-        dialog.transient(self)
-        dialog.grab_set()
-
-        # --- Header ---
-        tk.Label(
-            dialog,
-            text="A merge conflict has occurred",
-            fg="#b91c1c",
-            bg="#fff7f7",
-            padx=20, pady=12
-        ).pack(fill="x")
-
-        tk.Label(
-            dialog,
-            text=f"  Conflict detected in the following files during merge from '{source_branch}' to '{current_branch}':\n"
-                 f"  Please select which version to adopt.",
-            fg="#374151",
-            bg="#ffffff",
-            justify="left",
-            padx=20, pady=6
-        ).pack(fill="x")
-
-        # --- Conflicted files list ---
-        list_frm = tk.Frame(dialog, bg="#f3f4f6", bd=1, relief="solid")
-        list_frm.pack(fill="both", padx=20, pady=(0, 12))
-
-        scrollbar = tk.Scrollbar(list_frm)
-        scrollbar.pack(side="right", fill="y")
-
-        listbox = tk.Listbox(
-            list_frm,
-            yscrollcommand=scrollbar.set,
-            bg="#f3f4f6",
-            fg="#1f2937",
-            selectbackground="#e5e7eb",
-            height=min(len(conflicted_files), 8),
-            bd=0,
-            highlightthickness=0
-        )
-        for f in conflicted_files:
-            listbox.insert("end", f"  ⚠  {f}")
-        listbox.pack(fill="both", expand=True)
-        scrollbar.config(command=listbox.yview)
-
-        # --- Choice buttons ---
-        choice = tk.StringVar(value="")
-
-        btn_frm = tk.Frame(dialog, bg="#ffffff", pady=12)
-        btn_frm.pack(fill="x", padx=20)
-
-        def choose(c):
-            choice.set(c)
-            dialog.destroy()
-
-        tk.Button(
-            btn_frm,
-            text=f"🔵  Adopt version from '{source_branch}'",
-            bg="#2563eb", fg="white",
-            activebackground="#1d4ed8", activeforeground="white",
-            padx=12, pady=6, bd=0, cursor="hand2",
-            command=lambda: choose("theirs")
-        ).pack(fill="x", pady=(0, 6))
-
-        tk.Button(
-            btn_frm,
-            text=f"🟢  Adopt version from current '{current_branch}'",
-            bg="#059669", fg="white",
-            activebackground="#047857", activeforeground="white",
-            padx=12, pady=6, bd=0, cursor="hand2",
-            command=lambda: choose("ours")
-        ).pack(fill="x", pady=(0, 6))
-
-        tk.Button(
-            btn_frm,
-            text="🔴  Abort Merge",
-            bg="#e5e7eb", fg="#374151",
-            activebackground="#d1d5db", activeforeground="#111827",
-            padx=12, pady=6, bd=0, cursor="hand2",
-            command=lambda: choose("abort")
-        ).pack(fill="x")
-
-        # Center dialog over parent
-        dialog.update_idletasks()
-        pw = self.winfo_rootx() + self.winfo_width() // 2 - dialog.winfo_width() // 2
-        ph = self.winfo_rooty() + self.winfo_height() // 2 - dialog.winfo_height() // 2
-        dialog.geometry(f"+{pw}+{ph}")
-
-        # Block until user responds
-        self.wait_window(dialog)
-
-        if not choice.get() or choice.get() == "abort":
-            # Abort merge in background
-            def do_abort():
-                self.increment_tasks()
-                try:
-                    try:
-                        self.git_service.abort_merge()
-                        self.task_queue.put(('success', "Merge aborted. Restored to pre-merge state.", self.refresh_dashboard))
-                    except Exception as e:
-                        self.task_queue.put(('error', f"Error while aborting merge:\n{e}", None))
-                finally:
-                    self.decrement_tasks()
-            threading.Thread(target=do_abort, daemon=True).start()
-        else:
-            strategy = choice.get()  # 'ours' or 'theirs'
-            label = f"'{source_branch}' (main)" if strategy == "theirs" else f"'{current_branch}' (current)"
-
-            def do_resolve():
-                self.increment_tasks()
-                try:
-                    try:
-                        result = self.git_service.resolve_merge_conflicts(strategy, conflicted_files)
-                        
-                        # 1. Push current branch to remote
-                        push_msg = ""
-                        remote_url = self.git_service.get_remote_url()
-                        if remote_url and current_branch:
-                            self.write_log(f"Pushing merged branch '{current_branch}' to remote...", "info")
-                            try:
-                                self.git_service._run_lfs_cmd(["git", "push", "-u", "origin", current_branch])
-                                push_msg = f"\n\nSuccessfully pushed branch '{current_branch}' to remote."
-                            except Exception as pe:
-                                push_msg = f"\n\nWarning: Push failed:\n{pe}"
-                                
-                        # 2. Return to the original branch state (ensure checkout)
-                        try:
-                            self.git_service.switch_branch(current_branch, force=False)
-                        except Exception as se:
-                            print(f"Failed to switch back to original branch '{current_branch}': {se}")
-
-                        self.task_queue.put((
-                            'success',
-                            f"Resolved conflicts using version from {label} and completed merge.\n\n{result}{push_msg}",
-                            self.refresh_dashboard
-                        ))
-                    except Exception as e:
-                        self.task_queue.put(('error', f"Error while resolving conflicts:\n{e}", None))
-                finally:
-                    self.decrement_tasks()
-            threading.Thread(target=do_resolve, daemon=True).start()
-
     def process_queue(self):
         """Processes signals from background threads to avoid freezing the UI thread."""
         try:
@@ -6915,12 +6842,6 @@ finally:
                 elif msg_type == 'log':
                     msg_content, log_type = content
                     self.write_log(msg_content, log_type)
-                elif msg_type == 'merge_conflict':
-                    self._show_conflict_dialog(
-                        content['files'],
-                        content['source'],
-                        content['current']
-                    )
                 elif msg_type == 'sw_status':
                     # SolidWorks live monitor state update
                     if content is not None:
