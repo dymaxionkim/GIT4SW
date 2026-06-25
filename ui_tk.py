@@ -3773,11 +3773,11 @@ class GIT4SWApp(tk.Tk):
         import shutil
         import subprocess as _sp
 
-        # workspace_path는 GitService가 아닌 앱 윈도우(self)의 속성에서 가져온다.
-        # GitService는 repo_path만 갖고 있어 workspace_path가 없으면 백업 경로를 찾지 못한다.
+        # workspace_path is taken from the app window (self), not from GitService.
+        # GitService only has repo_path; without workspace_path the backup path cannot be found.
         workspace_path = getattr(self, 'workspace_path', None)
         if not workspace_path:
-            # 폴백: git_service.repo_path 사용
+            # Fallback: use git_service.repo_path
             workspace_path = getattr(self.git_service, 'repo_path', None)
         if not workspace_path:
             self.write_log("⚠️ Cannot backup: workspace path is unknown.", "warning")
@@ -3790,11 +3790,11 @@ class GIT4SWApp(tk.Tk):
             self.write_log(f"⚠️ Failed to create backup directory: {e}", "warning")
             return
 
-        # git 실행 파일 경로
+        # Git executable path
         git_exe = getattr(self.git_service, 'git_path', None) or "git"
 
         def _git_show(ref, git_rel, cwd):
-            """git show <ref>:<git_rel>을 실행하고, LFS smudge를 적용한 데이터를 반환한다."""
+            """Run git show <ref>:<git_rel> and return data with LFS smudge applied."""
             res = _sp.run(
                 [git_exe, "show", f"{ref}:{git_rel}"],
                 stdout=_sp.PIPE, stderr=_sp.PIPE,
@@ -3818,7 +3818,7 @@ class GIT4SWApp(tk.Tk):
             git_rel = f_rel.replace("\\", "/")
             base_name, ext = os.path.splitext(os.path.basename(f_rel))
 
-            # 1) OURS 버전 백업
+            # 1) Backup OURS version
             ours_backup = os.path.join(backup_root, f"{base_name}_OURS{ext}")
             try:
                 data = _git_show(":2", git_rel, workspace_path) or _git_show("HEAD", git_rel, workspace_path)
@@ -3833,7 +3833,7 @@ class GIT4SWApp(tk.Tk):
             except Exception as e_ours:
                 self.write_log(f"⚠️ Failed to backup OURS for {f_rel}: {e_ours}", "warning")
 
-            # 2) THEIRS 버전 백업
+            # 2) Backup THEIRS version
             theirs_backup = os.path.join(backup_root, f"{base_name}_THEIRS{ext}")
             try:
                 data = _git_show(":3", git_rel, workspace_path)
@@ -6352,17 +6352,17 @@ finally:
                 file_open_settings = {}
                 import stat
 
-                # [버그 1 수정] .sldasm 파일을 열면 SolidWorks가 포함된 컴포넌트(.sldprt/.slddrw)를
-                # 자동으로 함께 로드한다. 이 컴포넌트 파일들은 files 리스트에 없지만
-                # SolidWorks가 이미 쓰기 권한 없이 열려있는 파일을 만나면 읽기 전용으로 처리한다.
-                # → 어셈블리가 선택된 경우, 저장소 내 모든 SW 파일(컴포넌트 포함)에 대해
-                #   미리 lock 상태를 확인하고 ours이면 쓰기 권한을 부여한다.
+                # [Bug 1 fix] Opening a .sldasm causes SolidWorks to auto-load its components (.sldprt/.slddrw).
+                # These component files are not in the files list, but if SolidWorks encounters a file already
+                # open without write permission, it opens it read-only.
+                # → When an assembly is selected, check lock status in advance for all SW files (including
+                #   components) and grant write permission if ours.
                 has_asm = any(os.path.splitext(f)[1].lower() == '.sldasm' for f in files)
                 if has_asm and self.git_service.is_git_repo():
                     try:
                         repo_root = os.path.abspath(self.git_service.repo_path)
                         for dirpath, _dirs, filenames in os.walk(repo_root):
-                            # .git 및 .backup 디렉토리는 건너뜀
+                            # Skip .git and .backup directories
                             _dirs[:] = [d for d in _dirs if d not in ('.git', '.backup')]
                             for fname in filenames:
                                 if os.path.splitext(fname)[1].lower() not in ('.sldprt', '.sldasm', '.slddrw'):
@@ -6375,7 +6375,7 @@ finally:
                                 if comp_rel in locks_lower:
                                     comp_is_ours = locks_lower[comp_rel].get('is_ours', False)
                                 else:
-                                    # lock이 없으면 lock 시도 (선택한 파일 목록에 없는 컴포넌트)
+                                    # No lock found, try to lock it (component not in selected file list)
                                     comp_abs_orig = os.path.join(dirpath, fname)
                                     if comp_abs_orig not in [os.path.abspath(f) for f in files]:
                                         try:
@@ -6384,7 +6384,7 @@ finally:
                                             locks_lower[comp_rel] = {'is_ours': True, 'owner': 'me'}
                                             self.write_log(f"Auto-locked component '{fname}'.", "info")
                                         except Exception:
-                                            # 잠금 실패해도 무시 — 이미 잠겨있을 수 있음
+                                            # Ignore lock failure — may already be locked
                                             pass
                                     if comp_rel in locks_lower:
                                         comp_is_ours = locks_lower[comp_rel].get('is_ours', False)
@@ -6486,9 +6486,9 @@ finally:
                                     # Option: 2 = swUserDecision
                                     self.sw_service._call_com_method(sw_app, 'ActivateDoc3', title, True, 2, errors_ref)
                                     if is_ours_lock:
-                                        # [버그 2 수정] files_locked_by_us에 절대경로가 아닌
-                                        # repo 기준 상대경로(소문자)를 저장해야 _monitor_sw_loop와
-                                        # 경로 비교가 일치하여 자동 unlock이 정상 동작한다.
+                                        # [Bug 2 fix] Store relative paths (lowercase) relative to the repo in
+                                        # files_locked_by_us, not absolute paths, so that path comparison
+                                        # with _monitor_sw_loop matches correctly and auto-unlock works.
                                         _rel = os.path.relpath(abs_file_path, self.git_service.repo_path).replace('\\', '/').lower()
                                         self.files_locked_by_us.add(_rel)
                                 except Exception as ae:
@@ -6513,7 +6513,7 @@ finally:
                         try:
                             subprocess.Popen([path, abs_file_path])
                             if is_ours_lock:
-                                # [버그 2 수정] 상대경로(소문자)로 저장
+                                # [Bug 2 fix] Store as relative path (lowercase)
                                 _rel = os.path.relpath(abs_file_path, self.git_service.repo_path).replace('\\', '/').lower()
                                 self.files_locked_by_us.add(_rel)
                         except Exception as e:
@@ -6530,7 +6530,7 @@ finally:
                         try:
                             os.startfile(abs_file_path)
                             if is_ours_lock:
-                                # [버그 2 수정] 상대경로(소문자)로 저장
+                                # [Bug 2 fix] Store as relative path (lowercase)
                                 _rel = os.path.relpath(abs_file_path, self.git_service.repo_path).replace('\\', '/').lower()
                                 self.files_locked_by_us.add(_rel)
                         except Exception as e:
