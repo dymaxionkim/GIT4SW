@@ -1,4 +1,4 @@
-# GIT4SW: SolidWorks Github Version Control Client
+# GIT4SW: SolidWorks Git Version Control Client
 
 [README_en.md](README.md)
 
@@ -29,10 +29,10 @@
 * **BOM 추출**: 어셈블리 재귀 탐색 → 계층 BOM Tree + 납작 Partlist를 Excel(`.xlsx`)로 저장. 억제/BOM 제외 부품 필터링. 다중 설정 선택 지원.
 * **Visual Diff (Diff 버튼)**: Git 커밋 이력 조회 후, 현재 버전(`_OURS`)과 선택한 커밋(`_THEIRS`)을 SolidWorks에서 나란히 열어 수동 비교 (파트: Geometry Compare, 도면: Draw Compare).
 * **버전 이력 및 그래프**: 커밋 더블클릭으로 워크스페이스 복원. ASCII 그래프(cmd) 또는 GitHub Network 브라우저.
-* **GitHub 전용**: PyGithub을 통한 github.com 원격 저장소 연동.
+* **멀티 서버 지원**: `github.com` 및 Gitea 기반 원격 저장소를 모두 지원합니다. config의 `git_server_type`으로 선택 가능. GitHub는 PyGithub API, Gitea는 REST API v1을 사용.
 * **Find Top (최상위 어셈블리 스캐너)**: `.sldasm` 의존성 그래프를 분석하여 최상위 어셈블리(다른 어셈블리에서 참조되지 않은 파일)를 식별. `GetDocumentDependencies2` COM API 사용—파일을 열지 않고 메타데이터만 읽어 `OpenDoc6` 방식보다 수배에서 수십 배 빠름.
 * **성능 최적화**: EXPORT/BOM 중 자동 Lock 억제 (ReadOnly 파일은 Lock 불필요). 모든 안정화 대기 시간 50% 단축.
-* **Config 편집기**: "Edit Config.json" 버튼으로 설정 파일을 메모장에서 직접 편집.
+* **Config 편집기**: "Edit" 버튼으로 현재 로드된 설정 파일을 메모장에서 직접 편집. `--config` CLI 인자로 설정 파일 경로 지정 가능 (예: `--config config_codeberg.json`).
 
 
 
@@ -61,9 +61,15 @@
 
 프로젝트 폴더 내에 준비된 **`GIT4SW.bat`** 배치 파일을 더블클릭하여 바로 실행하면 됩니다.
 
+터미널에서 사용자 설정 파일로 실행하려면:
+```bash
+uv run main.py --config config_codeberg.json
+```
+
 > [!NOTE]
-> `GIT4SW.bat`는 내부적으로 `uv run main.py`를 실행시킵니다.
-> 최초 실행 시 `uv`가 `pyproject.toml`에 기재된 스펙을 감지하여 가상환경(`.venv`)을 자동으로 빌드하고 필요한 의존성 라이브러리(`gitpython`, `pygithub`, `pywin32` 등)를 알아서 다운로드 및 설치한 뒤 프로그램을 안전하게 구동해 줍니다.
+> `GIT4SW.bat`는 내부적으로 `.venv\Scripts\pythonw.exe main.py --config config.json`을 실행합니다.
+> `--config config_name.json` 인자를 전달하여 다른 설정 파일을 사용할 수 있습니다.
+> 최초 실행 전 프로젝트 디렉토리에서 `uv sync`를 실행하여 가상환경(`.venv`)을 빌드하고 의존성을 설치하십시오.
 
 ---
 
@@ -73,7 +79,7 @@
 
 ![](GIT4SW_05.png)
 
-프로그램을 최초로 실행한 후, 좌측 사이드바 메뉴 맨 하단의 **Config** 버튼을 눌러 설정 화면(Configuration Manager)에서 필수 환경 설정을 먼저 진행해야 합니다. 각 입력 필드에 알맞은 경로와 값을 입력한 후 하단의 **[Save Configuration]** 버튼을 클릭하면 `config.json`에 저장되고 앱에 즉시 반영됩니다. 또한 **[Edit Config.json]** 버튼을 클릭하면 설정 파일을 메모장에서 직접 편집할 수 있습니다.
+프로그램을 최초로 실행한 후, 좌측 사이드바 메뉴 맨 하단의 **Config** 버튼을 눌러 설정 화면에서 필수 환경 설정을 먼저 진행해야 합니다. 각 입력 필드에 알맞은 경로와 값을 입력한 후 하단의 **[Save Configuration]** 버튼을 클릭하면 설정 파일에 저장되고 앱에 즉시 반영됩니다. 또한 **[Edit]** 버튼을 클릭하면 설정 파일을 메모장에서 직접 편집할 수 있습니다.
 
 각 설정 항목의 상세 내용 및 예시는 다음과 같습니다:
 
@@ -85,8 +91,12 @@
   - *예*: `C:\Program Files\SOLIDWORKS Corp\SOLIDWORKS\SLDWORKS.exe`
 * **eDrawings Path**: 외부 eDrawings 도면 미리보기 실행 파일(`eDrawings.exe`)의 절대 경로입니다. 파일 매니저에서 eDrawings 버튼 클릭 시 사용됩니다.
   - *예*: `C:\Program Files\SOLIDWORKS Corp\eDrawings\eDrawings.exe`
-* **Github Token**: 사용자의 개인 개발용 원격 브랜치를 생성하거나, Maintainer 모드에서 원격 비공개(Private) 저장소를 자동 퍼블리싱할 때 인증용으로 사용할 GitHub 개인 액세스 토큰(Personal Access Token)입니다.
+* **Git Token**: 개인 개발용 원격 브랜치 생성 또는 Maintainer 모드에서 원격 비공개 저장소 자동 퍼블리싱 시 인증에 사용할 Personal Access Token입니다. GitHub와 Gitea 모두에서 사용됩니다.
   - *예*: `ghp_**********************************`
+* **Git Server Type**: 원격 서버 유형 선택 (`github` 또는 `gitea`). `gitea` 선택 시 아래 **Git Server URL** 필드가 활성화됩니다.
+  - *예*: `github`, `gitea`
+* **Git Server URL**: Gitea 서버의 기본 URL (`git_server_type`이 `gitea`일 때만 사용). `github` 선택 시 필드는 비활성화되고 `https://github.com`이 자동 입력됩니다.
+  - *예*: `https://codeberg.org`
 * **Default Local Path**: 신규 저장소 생성 및 원격 클론 작업 시 기본으로 사용할 로컬 부모 디렉터리 경로입니다.
   - *예*: `C:\Users\dhkima\github`
 * **Organization Name**: 관리자 모드에서 신규 비공개 저장소를 자동 개설할 대상 GitHub 조직(Organization)의 이름입니다.
@@ -154,11 +164,12 @@
 
 #### 4.4.1 GitHub 토큰을 이용한 Git 인증
 
-* Git 원격 작업(push, pull, locks 등)은 `config.json`에 설정된 `github_token`을 사용하여 자동으로 인증이 완료됩니다.
+* Git 원격 작업(push, pull, locks 등)은 `config.json`에 설정된 `git_token`을 사용하여 자동으로 인증이 완료됩니다. (하위 호환: `github_token`도 대체 필드로 읽힙니다.)
+* `git_server_type` 필드(`github` 또는 `gitea`)에 따라 사용할 API 제공자가 결정됩니다. `gitea` 선택 시 `gitea_url`이 Gitea 인스턴스 주소(예: `https://codeberg.org`)여야 합니다.
 * 프로그램은 실행 시 동적 인라인 헬퍼 주입 방식을 사용하여 윈도우 시스템 자격증명관리자(GCM)를 완전히 무시하고 자체적으로 처리하므로, 작업 중 복잡한 로그인 팝업 창이 전혀 뜨지 않습니다.
 * 만약 자격증명 오류나 권한 문제가 발생한다면:
-  - `config.json` 파일의 `github_token` 항목에 적절한 리포지토리 제어 권한(특히 `repo` 또는 `write` 권한)을 가진 올바른 GitHub 개인 액세스 토큰(PAT)이 설정되어 있는지 확인하십시오.
-  - 네트워크 연결 상태 또는 GitHub 저장소에 대한 접근 권한을 확인하십시오. 로컬/전역 Git의 credential helper를 수동으로 수정할 필요가 전혀 없습니다.
+  - 설정 파일의 `git_token` 항목에 적절한 권한을 가진 올바른 Personal Access Token(PAT)이 설정되어 있는지 확인하십시오 (GitHub: `repo`/`write` 권한, Gitea: API 접근 권한).
+  - 네트워크 연결 상태 또는 저장소에 대한 접근 권한을 확인하십시오. 로컬/전역 Git의 credential helper를 수동으로 수정할 필요가 전혀 없습니다.
 
 #### 4.4.2 덮어씌워진 로컬 작업 파일의 복구
 * 충돌 해결 단계에서 실수로 "Theirs"(원격 서버 버전)를 선택하여 작업 내용을 덮어썼더라도, 워크스페이스 루트의 `.backup/` 폴더에서 이전의 원본 작업 데이터를 찾을 수 있습니다.

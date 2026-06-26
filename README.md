@@ -1,4 +1,4 @@
-# GIT4SW: SolidWorks Github Version Control Client
+# GIT4SW: SolidWorks Git Version Control Client
 
 [README_ko.md](README_ko.md)
 
@@ -29,10 +29,10 @@
 * **BOM Extraction**: Recursively traverse assemblies to generate hierarchical BOM Tree and flat Partlist as Excel (`.xlsx`). Excludes suppressed and BOM-excluded components. Configuration selector for multi-config assemblies.
 * **Visual Diff (Diff button)**: Browse Git commit history for a file, then open the current version (`_OURS`) and selected commit (`_THEIRS`) in SolidWorks side-by-side for manual comparison (Geometry Compare for parts, Draw Compare for drawings).
 * **Version History & Graph**: Double-click any commit to restore workspace to that state. ASCII commit graph (via cmd) or interactive GitHub Network browser.
-* **GitHub Exclusive**: Tightly integrated with `github.com` via PyGithub for remote branch management and repository creation.
+* **Multi-Server Support**: Supports both `github.com` and Gitea-based remote repositories. Configure via `git_server_type` in config. GitHub uses PyGithub API; Gitea uses its REST API v1.
 * **Find Top (Top-Level Assembly Scanner)**: Scans `.sldasm` dependency graph to identify top-level assemblies (not referenced by any other assembly). Uses `GetDocumentDependencies2` COM API—reads metadata only, never opens files—making it orders of magnitude faster than `OpenDoc6`.
 * **Performance Optimized**: Auto-lock suppressed during EXPORT/BOM (ReadOnly files need no lock). All stabilization delays reduced by 50%.
-* **Config Editor**: "Edit Config.json" button opens the configuration file directly in Notepad.
+* **Config Editor**: "Edit" button opens the currently loaded configuration file directly in Notepad. Custom config path is set via `--config` CLI argument (e.g., `--config config_codeberg.json`).
 
 ---
 
@@ -59,9 +59,15 @@ Since this project is based on the high-speed Python package manager `uv`, no se
 
 Simply double-click the **`GIT4SW.bat`** batch file prepared in the project folder to run it immediately.
 
+Alternatively, launch from the terminal with a custom config file:
+```bash
+uv run main.py --config config_codeberg.json
+```
+
 > [!NOTE]
-> `GIT4SW.bat` internally executes `uv run main.py`.
-> On the first run, `uv` detects the specifications listed in `pyproject.toml`, automatically builds the virtual environment (`.venv`), and downloads/installs necessary dependency libraries (`gitpython`, `pygithub`, `pywin32`, etc.) before safely launching the program.
+> `GIT4SW.bat` internally executes `.venv\Scripts\pythonw.exe main.py --config config.json`.
+> You can pass a different config file using `--config config_name.json` from the command line.
+> Before the first run, execute `uv sync` in the project directory to build the virtual environment (`.venv`) and install dependencies.
 
 ---
 
@@ -71,7 +77,7 @@ Simply double-click the **`GIT4SW.bat`** batch file prepared in the project fold
 
 ![](GIT4SW_05.png)
 
-After running the program for the first time, you must first perform essential environment settings in the Configuration Manager by clicking the **Config** button at the bottom of the left sidebar menu. After entering the appropriate paths and values in each input field, click the **[Save Configuration]** button at the bottom to save it to `config.json`, which is immediately reflected in the app. You can also click **[Edit Config.json]** to open the configuration file directly in Notepad for manual editing.
+After running the program for the first time, you must first perform essential environment settings by clicking the **Config** button at the bottom of the left sidebar menu. After entering the appropriate paths and values in each input field, click the **[Save Configuration]** button at the bottom to save it to the configuration file, which is immediately reflected in the app. You can also click **[Edit]** to open the configuration file directly in Notepad for manual editing.
 
 Details and examples for each configuration item are as follows:
 
@@ -83,8 +89,12 @@ Details and examples for each configuration item are as follows:
   - *Example*: `C:\Program Files\SOLIDWORKS Corp\SOLIDWORKS\SLDWORKS.exe`
 * **eDrawings Path**: The absolute path of the external eDrawings drawing preview executable (`eDrawings.exe`). It is used when clicking the eDrawings button in the File Manager.
   - *Example*: `C:\Program Files\SOLIDWORKS Corp\eDrawings\eDrawings.exe`
-* **Github Token**: The GitHub Personal Access Token used for authenticating when creating personal development remote branches or automatically publishing new private repositories in Maintainer mode.
+* **Git Token**: The Personal Access Token used for authenticating when creating personal development remote branches or automatically publishing new private repositories in Maintainer mode. Works for both GitHub and Gitea.
   - *Example*: `ghp_**********************************`
+* **Git Server Type**: Select your remote server type (`github` or `gitea`). When set to `gitea`, the **Git Server URL** field below becomes enabled.
+  - *Example*: `github`, `gitea`
+* **Git Server URL**: The base URL of your Gitea server (only used when `git_server_type` is `gitea`). When `github` is selected, this field is disabled and auto-filled with `https://github.com`.
+  - *Example*: `https://codeberg.org`
 * **Default Local Path**: The default local parent directory path to be used when creating new repositories or performing remote clone operations.
   - *Example*: `C:\Users\dhkima\github`
 * **Organization Name**: The name of the GitHub Organization target for automatically opening new private repositories in Administrator mode.
@@ -149,10 +159,11 @@ Details and examples for each configuration item are as follows:
 
 #### 4.4.1 Git Authentication with GitHub Token
 
-* Git remote operations (push, pull, locks, etc.) are authenticated seamlessly using the `github_token` configured in `config.json`.
+* Git remote operations (push, pull, locks, etc.) are authenticated seamlessly using the `git_token` configured in `config.json` (backward compatible: `github_token` is also read as a fallback).
+* The `git_server_type` field (`github` or `gitea`) determines which API provider is used. For `gitea`, the `gitea_url` must point to your Gitea instance (e.g., `https://codeberg.org`).
 * During execution, the program dynamically unsets local credential helpers and bypasses the Windows Credential Manager (GCM) using an inline temporary helper. This prevents any interactive browser/GCM login popup windows from interrupting your work.
 * If authentication fails:
-  - Verify that the `github_token` in `config.json` is a valid GitHub Personal Access Token (PAT) with appropriate scopes (especially `repo` or `write` access).
+  - Verify that the `git_token` in the config file is a valid Personal Access Token (PAT) with appropriate scopes (especially `repo` or `write` access for GitHub, or API access for Gitea).
   - Check your internet connection or repository permissions. Do not manually adjust your local/global Git credential helpers.
 
 #### 4.4.2 Restoring Overwritten Local Modifications

@@ -12,6 +12,10 @@ import subprocess
 import time
 
 from git_service import GitService, MergeConflictError, run_git_subprocess
+from git_provider import (
+    GitHubProvider, GiteaProvider, create_provider, detect_provider,
+    parse_remote_url, load_config_for_token
+)
 from sw_monitor import SolidWorksMonitorService
 
 # IShellItemImageFactory interface definition for CAD thumbnail extraction
@@ -1114,15 +1118,16 @@ def queue_during_bg_tasks(method):
 
 
 class GIT4SWApp(tk.Tk):
-    def __init__(self, workspace_path):
+    def __init__(self, workspace_path, config_path="config.json"):
         super().__init__()
         self.workspace_path = workspace_path
+        self.config_path = os.path.abspath(config_path)
         self.pending_button_tasks = []
         self.current_view_index = 0
         self.check_and_load_config()
         
         # Initialize Services
-        self.git_service = GitService(self.workspace_path)
+        self.git_service = GitService(self.workspace_path, self.config_path)
         self.sw_service = SolidWorksMonitorService()
         
         # Queue for thread communication
@@ -1653,8 +1658,9 @@ class GIT4SWApp(tk.Tk):
         self.on_file_selected_change()
 
     def check_and_load_config(self):
-        config_path = "config.json"
-        template_path = "config.json.template"
+        config_path = self.config_path
+        config_dir = os.path.dirname(config_path)
+        template_path = os.path.join(config_dir, "config.json.template")
         if not os.path.exists(config_path) and os.path.exists(template_path):
             try:
                 with open(template_path, "r", encoding="utf-8") as f:
@@ -1662,22 +1668,16 @@ class GIT4SWApp(tk.Tk):
                 with open(config_path, "w", encoding="utf-8") as f:
                     json.dump(config_data, f, indent=4, ensure_ascii=False)
                 
-                # If command line didn't pass a custom workspace, and template workspace path exists, update it
-                import sys
-                has_argv_override = False
-                if len(sys.argv) > 1 and os.path.isdir(sys.argv[1]):
-                    has_argv_override = True
-                
-                if not has_argv_override:
-                    template_ws = config_data.get("workspace_path", "")
-                    if template_ws and os.path.isdir(template_ws):
-                        self.workspace_path = template_ws
+                template_ws = config_data.get("workspace_path", "")
+                if template_ws and os.path.isdir(template_ws):
+                    self.workspace_path = template_ws
             except Exception as e:
-                print(f"Error copying template to config.json: {e}")
+                print(f"Error copying template to config: {e}")
 
     def load_config_data(self):
-        config_path = "config.json"
-        template_path = "config.json.template"
+        config_path = self.config_path
+        config_dir = os.path.dirname(config_path)
+        template_path = os.path.join(config_dir, "config.json.template")
         config_data = {}
         
         # 1. If config.json doesn't exist, read template
@@ -1689,17 +1689,17 @@ class GIT4SWApp(tk.Tk):
                     # Save it immediately as config.json
                     with open(config_path, "w", encoding="utf-8") as f:
                         json.dump(config_data, f, indent=4, ensure_ascii=False)
-                    self.write_log("config.json did not exist. Loaded from config.json.template and saved.", "info")
+                    self.write_log(f"Config file did not exist. Loaded from template and saved.", "info")
                 except Exception as e:
                     self.write_log(f"Failed to load/apply from template: {e}", "error")
             else:
-                self.write_log("Neither config.json nor config.json.template exists.", "error")
+                self.write_log("Neither config file nor template exists.", "error")
         else:
             try:
                 with open(config_path, "r", encoding="utf-8") as f:
                     config_data = json.load(f)
             except Exception as e:
-                self.write_log(f"Failed to read config.json: {e}", "error")
+                self.write_log(f"Failed to read config file: {e}", "error")
                 
         # Normalize string representations of lists back to actual lists
         # (handles legacy config.json where commit_messages/column_order were saved as strings)
@@ -1718,13 +1718,6 @@ class GIT4SWApp(tk.Tk):
     def create_config_view(self):
         view = ttk.Frame(self.content_frame)
         
-        # Header Row
-        header_frm = ttk.Frame(view)
-        header_frm.pack(fill="x", padx=16, pady=10)
-        lbl_title = ttk.Label(header_frm, text="Configuration Manager", style="Title.TLabel")
-        lbl_title.pack(side="left")
-        
-        # Config Card
         card = ttk.Frame(view, style="Card.TFrame")
         card.pack(fill="both", expand=True, padx=16, pady=4)
         
@@ -1743,7 +1736,7 @@ class GIT4SWApp(tk.Tk):
         self.btn_save_config = ttk.Button(btn_frm, text="Save Configuration", style="Primary.TButton", command=self.save_config_from_view)
         self.btn_save_config.pack(side="left")
         
-        self.btn_edit_config = ttk.Button(btn_frm, text="Edit Config.json", command=self.edit_config_file)
+        self.btn_edit_config = ttk.Button(btn_frm, text="Edit", command=self.edit_config_file)
         self.btn_edit_config.pack(side="left", padx=(8, 0))
         
         self.config_entries = {}
@@ -1751,7 +1744,6 @@ class GIT4SWApp(tk.Tk):
         return view
 
     def refresh_config_view(self):
-        # Clear existing widgets in self.config_fields_frame
         for widget in self.config_fields_frame.winfo_children():
             widget.destroy()
             
@@ -1763,29 +1755,30 @@ class GIT4SWApp(tk.Tk):
         if not config_data:
             return
             
-        # Place label and entry widgets
         self.config_fields_frame.columnconfigure(0, weight=0)
         self.config_fields_frame.columnconfigure(1, weight=1)
         self.config_fields_frame.columnconfigure(2, weight=0)
         
-        # Predefined display names
         display_names = {
             "git_path": "Git Path",
             "git-lfs_path": "Git-Lfs Path",
             "solidworks_path": "Solidworks Path",
             "edrawings_path": "eDrawings Path",
-            "github_token": "Github Token",
+            "git_server_type": "Git Server Type",
+            "gitea_url": "Git Server URL",
+            "git_token": "Git Token",
             "default_local_path": "Default Local Path",
-            "organization_name": "Organization Name",
+            "organization_name": "Organization / Namespace",
         }
         
-        # Predefined order for keys (workspace_path, auto_sync, imagemagick_path excluded)
         keys_order = [
             "git_path",
             "git-lfs_path",
             "solidworks_path",
             "edrawings_path",
-            "github_token",
+            "git_server_type",
+            "gitea_url",
+            "git_token",
             "default_local_path",
             "organization_name"
         ]
@@ -1794,7 +1787,6 @@ class GIT4SWApp(tk.Tk):
             if k not in ("workspace_path", "auto_sync", "imagemagick_path") and k not in keys_order:
                 keys_order.append(k)
         
-        # Keys eligible for Find button + combobox (no entry widget)
         find_targets = {
             "git_path": "git.exe",
             "git-lfs_path": "git-lfs.exe",
@@ -1802,6 +1794,11 @@ class GIT4SWApp(tk.Tk):
             "edrawings_path": "eDrawings.exe",
         }
         
+        if "github_token" in config_data and "git_token" not in config_data:
+            config_data["git_token"] = config_data["github_token"]
+
+        self._gitea_url_entry = None
+
         for row_idx, key in enumerate(keys_order):
             if key not in config_data:
                 continue
@@ -1811,24 +1808,20 @@ class GIT4SWApp(tk.Tk):
             val = config_data[key]
             display_name = display_names.get(key, key.replace("_", " ").title())
             
-            # Label
             lbl = ttk.Label(self.config_fields_frame, text=f"{display_name}:", font=("TkDefaultFont", 10, "bold"), anchor="w", background="#ffffff")
-            lbl.grid(row=row_idx, column=0, padx=(0, 10), pady=3, sticky="w")
+            lbl.grid(row=row_idx, column=0, padx=(0, 10), pady=1, sticky="w")
             
             if key in find_targets:
-                # Path key: use combobox (expanded) instead of entry
                 cb = ttk.Combobox(self.config_fields_frame, state="readonly", width=60)
                 cb.set(str(val))
-                cb.grid(row=row_idx, column=1, padx=0, pady=3, sticky="ew")
+                cb.grid(row=row_idx, column=1, padx=0, pady=1, sticky="ew")
                 self.config_entries[key] = cb
                 self.config_combos[key] = cb
 
-                # Validate file existence: red text if missing
                 if val and not os.path.exists(str(val)):
                     cb.configure(foreground="#ef4444")
                 else:
                     cb.configure(foreground="#1f2937")
-                # Re-validate on selection change
                 def _on_select(_e, c=cb):
                     if c.get() and os.path.exists(c.get()):
                         c.configure(foreground="#1f2937")
@@ -1836,17 +1829,66 @@ class GIT4SWApp(tk.Tk):
                         c.configure(foreground="#ef4444")
                 cb.bind("<<ComboboxSelected>>", _on_select)
                 
-                # Find button
                 btn = ttk.Button(self.config_fields_frame, text="Find", width=6,
                                  command=lambda k=key, t=find_targets[key]: self.find_executable(k, t))
-                btn.grid(row=row_idx, column=2, padx=(8, 0), pady=3, sticky="w")
+                btn.grid(row=row_idx, column=2, padx=(8, 0), pady=1, sticky="w")
                 self.config_find_btns[key] = btn
-            else:
-                # Non-path key: use entry widget
+            elif key == "git_server_type":
+                cb = ttk.Combobox(self.config_fields_frame, state="readonly", width=20)
+                cb['values'] = ["github", "gitea"]
+                cb.set(str(val) if str(val) in ("github", "gitea") else "github")
+                cb.grid(row=row_idx, column=1, padx=0, pady=1, sticky="w")
+                self.config_entries[key] = cb
+                cb.bind("<<ComboboxSelected>>", self._on_git_server_type_changed)
+            elif key == "gitea_url":
+                ent = ttk.Entry(self.config_fields_frame)
+                server_type = config_data.get("git_server_type", "github")
+                if server_type == "github":
+                    ent.insert(0, "https://github.com")
+                    ent.config(state="disabled", foreground="#9ca3af")
+                else:
+                    ent.insert(0, str(val) if val else "")
+                ent.grid(row=row_idx, column=1, padx=0, pady=1, sticky="ew")
+                self.config_entries[key] = ent
+                self._gitea_url_entry = ent
+            elif key == "default_local_path":
                 ent = ttk.Entry(self.config_fields_frame)
                 ent.insert(0, str(val))
-                ent.grid(row=row_idx, column=1, padx=0, pady=3, sticky="ew")
+                ent.grid(row=row_idx, column=1, padx=0, pady=1, sticky="ew")
                 self.config_entries[key] = ent
+                btn = ttk.Button(self.config_fields_frame, text="Find", width=6,
+                                 command=lambda: self._browse_directory("default_local_path"))
+                btn.grid(row=row_idx, column=2, padx=(8, 0), pady=1, sticky="w")
+                self.config_find_btns[key] = btn
+            else:
+                ent = ttk.Entry(self.config_fields_frame)
+                ent.insert(0, str(val))
+                ent.grid(row=row_idx, column=1, padx=0, pady=1, sticky="ew")
+                self.config_entries[key] = ent
+
+    def _on_git_server_type_changed(self, event=None):
+        cb = self.config_entries.get("git_server_type")
+        ent = self._gitea_url_entry
+        if not cb or not ent:
+            return
+        selected = cb.get()
+        if selected == "github":
+            ent.config(state="normal")
+            ent.delete(0, tk.END)
+            ent.insert(0, "https://github.com")
+            ent.config(state="disabled", foreground="#9ca3af")
+        else:
+            ent.config(state="normal", foreground="#1f2937")
+            if ent.get() in ("", "https://github.com"):
+                ent.delete(0, tk.END)
+
+    def _browse_directory(self, key):
+        directory = filedialog.askdirectory(title="Select Directory")
+        if directory:
+            ent = self.config_entries.get(key)
+            if ent:
+                ent.delete(0, tk.END)
+                ent.insert(0, directory)
 
     def find_executable(self, key, target_filename):
         btn = self.config_find_btns.get(key)
@@ -1900,7 +1942,7 @@ class GIT4SWApp(tk.Tk):
 
     @queue_during_bg_tasks
     def save_config_from_view(self):
-        config_path = "config.json"
+        config_path = self.config_path
         
         # Read existing config to preserve any other keys
         config_data = {}
@@ -1911,12 +1953,22 @@ class GIT4SWApp(tk.Tk):
             except Exception:
                 pass
                 
-        # Update keys from entry fields, preserving original type when possible
+        server_type_ent = self.config_entries.get("git_server_type")
+        current_server_type = server_type_ent.get() if server_type_ent else "github"
+
         for key, ent in self.config_entries.items():
-            val = ent.get().strip()
+            if key == "gitea_url":
+                if current_server_type == "github":
+                    config_data[key] = ""
+                    continue
+                val = ent.get().strip()
+                if val == "https://github.com":
+                    config_data[key] = ""
+                    continue
+            else:
+                val = ent.get().strip()
             original = config_data.get(key)
             if isinstance(original, list) and val.startswith('['):
-                # Try to parse the text back to a list (handles both JSON and Python repr)
                 try:
                     parsed = ast.literal_eval(val)
                     if isinstance(parsed, list):
@@ -1925,8 +1977,10 @@ class GIT4SWApp(tk.Tk):
                 except Exception:
                     pass
             config_data[key] = val
+        
+        config_data.pop("github_token", None)
             
-        # Write to file
+
         try:
             with open(config_path, "w", encoding="utf-8") as f:
                 json.dump(config_data, f, indent=4, ensure_ascii=False)
@@ -1940,9 +1994,9 @@ class GIT4SWApp(tk.Tk):
                         self.write_log(f"Switched project workspace to: {ws}", "info")
             
             # Re-initialize GitService to apply git_path and git-lfs_path changes immediately
-            self.git_service = GitService(self.workspace_path)
+            self.git_service = GitService(self.workspace_path, self.config_path)
                     
-            self.write_log("Configuration saved successfully to config.json", "success")
+            self.write_log("Configuration saved successfully", "success")
             
             # Refresh all views to show the new config
             self.refresh_dashboard()
@@ -1955,16 +2009,16 @@ class GIT4SWApp(tk.Tk):
 
     @queue_during_bg_tasks
     def edit_config_file(self):
-        config_path = "config.json"
+        config_path = self.config_path
         if not os.path.exists(config_path):
-            self.write_log("config.json does not exist.", "warning")
+            self.write_log(f"Config file not found: {config_path}", "warning")
             return
         try:
             abs_config_path = os.path.abspath(config_path)
             subprocess.Popen(["notepad.exe", abs_config_path])
-            self.write_log(f"Opened {abs_config_path} in Notepad.", "info")
+            self.write_log(f"Opened {os.path.basename(abs_config_path)} in Notepad.", "info")
         except Exception as e:
-            self.write_log(f"Failed to open config.json in Notepad: {e}", "error")
+            self.write_log(f"Failed to open config file: {e}", "error")
 
     def create_help_view(self):
         view = ttk.Frame(self.content_frame)
@@ -2293,26 +2347,24 @@ class GIT4SWApp(tk.Tk):
                 # Get username to determine if "Make my branch" button should be green or gray
                 username = getattr(self, 'resolved_username', None)
                 if not username:
-                    config_path = "config.json"
+                    config_path = self.config_path
+                    config = {}
                     token = ""
                     if os.path.exists(config_path):
                         try:
                             with open(config_path, "r", encoding="utf-8") as f:
                                 config = json.load(f)
-                                token = config.get("github_token", "")
+                                token = config.get("git_token", "") or config.get("github_token", "")
                         except Exception:
                             pass
                     if token:
                         try:
-                            from github import Github
-                            g = Github(token)
-                            user = g.get_user()
-                            username = user.login
+                            provider = create_provider(config)
+                            username = provider.get_username(token)
                         except Exception:
                             pass
                     if not username:
                         try:
-                            import subprocess
                             res = subprocess.run(["git", "config", "user.name"], capture_output=True, text=True, check=True)
                             username = res.stdout.strip()
                         except Exception:
@@ -2441,40 +2493,40 @@ class GIT4SWApp(tk.Tk):
         def run():
             self.increment_tasks()
             try:
-                # 1. Resolve username from GitHub config
-                username = None
-                config_path = "config.json"
+                config_path = self.config_path
+                config = {}
                 token = ""
                 if os.path.exists(config_path):
                     try:
                         with open(config_path, "r", encoding="utf-8") as f:
                             config = json.load(f)
-                            token = config.get("github_token", "")
+                            token = config.get("git_token", "") or config.get("github_token", "")
                     except Exception:
                         pass
                 
+                provider = create_provider(config) if config else GitHubProvider()
+                server_name = provider.get_name().capitalize()
+                
+                username = None
                 if token:
                     try:
-                        self.write_log("Resolving account name from GitHub...", "info")
-                        from github import Github
-                        g = Github(token)
-                        user = g.get_user()
-                        username = user.login
-                        self.write_log(f"GitHub account name resolved: {username}", "info")
+                        self.write_log(f"Resolving account name from {server_name}...", "info")
+                        username = provider.get_username(token)
+                        if username:
+                            self.write_log(f"Account name resolved: {username}", "info")
+                        else:
+                            raise Exception("Empty username response")
                     except Exception as e:
-                        self.write_log(f"GitHub resolution failed: {e}. Trying local Git config...", "warning")
+                        self.write_log(f"{server_name} resolution failed: {e}. Trying local Git config...", "warning")
                 
                 if not username:
-                    # Fallback to local Git config user.name
                     try:
-                        import subprocess
                         res = subprocess.run(["git", "config", "user.name"], capture_output=True, text=True, check=True)
                         username = res.stdout.strip()
                     except Exception:
                         pass
                         
                 if not username:
-                    # Fallback to os login name
                     try:
                         username = os.getlogin()
                     except Exception:
@@ -2483,13 +2535,11 @@ class GIT4SWApp(tk.Tk):
                 if not username:
                     username = "my-branch"
                 
-                # Sanitize branch name to a valid git branch name
                 username = username.strip().replace(" ", "-").lower()
                 self.resolved_username = username
                 if self.git_service:
                     self.git_service.optimize_credential_helper(username)
                 
-                # 2. Check if branch exists
                 repo = self.git_service.repo
                 local_branches = self.git_service.get_local_branches()
                 remote_branches = self.git_service.get_remote_branches()
@@ -2503,35 +2553,18 @@ class GIT4SWApp(tk.Tk):
                     repo.create_head(username)
                     self.write_log(f"Created new branch '{username}' locally.", "success")
                 
-                # 3. Checkout/switch to branch
                 self.git_service.switch_branch(username, force=False)
                 
-                # 4. Try to reflect branch to GitHub using github library and set upstream
                 remote_url = self.git_service.get_remote_url()
                 if remote_url and token:
                     try:
-                        self.write_log(f"Creating remote branch '{username}' via GitHub API...", "info")
-                        import re
-                        from github import Github, GithubException
-                        match = re.search(r"github\.com[:/]([^/]+)/([^/.]+)(?:\.git)?", remote_url)
-                        if match:
-                            owner = match.group(1)
-                            repo_name = match.group(2)
-                            g = Github(token)
-                            gh_repo = g.get_repo(f"{owner}/{repo_name}")
-                            head_commit_sha = repo.head.commit.hexsha
-                            try:
-                                gh_repo.create_git_ref(ref=f"refs/heads/{username}", sha=head_commit_sha)
-                                self.write_log(f"Successfully created remote branch '{username}' via GitHub API.", "success")
-                            except GithubException as ge:
-                                if ge.status == 422:
-                                    self.write_log(f"Remote branch '{username}' already exists on GitHub.", "info")
-                                else:
-                                    raise ge
+                        self.write_log(f"Creating remote branch '{username}' on {server_name}...", "info")
+                        head_commit_sha = repo.head.commit.hexsha
+                        provider.create_branch(token, remote_url, username, head_commit_sha)
+                        self.write_log(f"Successfully created remote branch '{username}'.", "success")
                     except Exception as ge_err:
-                        self.write_log(f"GitHub API branch creation failed: {ge_err}", "warning")
+                        self.write_log(f"Remote branch creation failed: {ge_err}", "warning")
                 
-                # 5. Set upstream tracking in local git config via CLI
                 if remote_url:
                     try:
                         self.write_log(f"Configuring local upstream tracking for '{username}'...", "info")
@@ -3880,21 +3913,22 @@ class GIT4SWApp(tk.Tk):
             
         original_branch = self.git_service.get_current_branch()
             
-        config_path = "config.json"
+        config_path = self.config_path
+        config = {}
         token = ""
         if os.path.exists(config_path):
             try:
                 with open(config_path, "r", encoding="utf-8") as f:
                     config = json.load(f)
-                    token = config.get("github_token", "")
+                    token = config.get("git_token", "") or config.get("github_token", "")
             except Exception:
                 pass
                 
         if not token:
-            self.write_log("Error: GitHub token is missing in config.json.", "error")
+            self.write_log("Error: git_token is missing in config.json.", "error")
             return
             
-        self.write_log("🚀 Starting Maintainer Merge All Branches...", "info")
+        self.write_log("Starting Maintainer Merge All Branches...", "info")
         self.increment_tasks()
         
         def run():
@@ -4086,8 +4120,7 @@ class GIT4SWApp(tk.Tk):
             self.write_log("Repository name cannot be empty.", "error")
             return
             
-        # Read settings from config.json
-        config_path = "config.json"
+        config_path = self.config_path
         if not os.path.exists(config_path):
             self.write_log("config.json file does not exist.", "error")
             return
@@ -4099,11 +4132,17 @@ class GIT4SWApp(tk.Tk):
             self.write_log(f"Failed to read config.json: {e}", "error")
             return
             
-        token = config.get("github_token", "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")
+        token = config.get("git_token", "") or config.get("github_token", "")
         default_local_path = config.get("default_local_path", "D:\\github")
-        organization_name = config.get("organization_name", "mech-higenmotor")
+        organization_name = config.get("organization_name", "")
         
-        # Verify local path is valid and create if not existing
+        provider = create_provider(config)
+        server_name = provider.get_name().capitalize()
+        
+        if not token:
+            self.write_log(f"No git token configured. Please set git_token in config.json.", "error")
+            return
+        
         if not os.path.exists(default_local_path):
             try:
                 os.makedirs(default_local_path, exist_ok=True)
@@ -4119,46 +4158,23 @@ class GIT4SWApp(tk.Tk):
         hooks_path = os.path.join(local_repo_path, ".git", "hooks")
         disabled_hooks_path = os.path.join(local_repo_path, ".git", "hooks.disabled")
             
-        self.write_log(f"🚀 Starting repository creation: {repo_name}", "info")
+        self.write_log(f"Starting repository creation: {repo_name}", "info")
         self.increment_tasks()
         
         def run():
             try:
-                # 3. Connect to GitHub via PyGithub
-                self.write_log("Connecting to GitHub...", "info")
-                from github import Github
-                g = Github(token)
+                self.write_log(f"Connecting to {server_name}...", "info")
+                username = provider.get_username(token)
+                if not username:
+                    raise RuntimeError(f"Authentication with {server_name} failed: could not resolve username")
+                self.write_log(f"Authenticated as user: {username}", "info")
                 
-                # Check user / connection
-                try:
-                    user = g.get_user()
-                    username = user.login
-                    self.write_log(f"Authenticated as user: {username}", "info")
-                except Exception as ex:
-                    raise RuntimeError(f"GitHub authentication failed: {ex}")
+                self.write_log(f"Creating repository on {server_name}...", "info")
+                clone_url, html_url = provider.create_repository(token, repo_name, organization_name, private=True)
+                self.write_log(f"Created repository on {server_name}.", "success")
                 
-                # 4. Create empty repository on GitHub
-                self.write_log("Creating repository on GitHub...", "info")
-                github_repo = None
-                if organization_name:
-                    try:
-                        org = g.get_organization(organization_name)
-                        github_repo = org.create_repo(repo_name, private=True)
-                        self.write_log(f"Created private repository under organization '{organization_name}'", "success")
-                    except Exception as ex:
-                        raise RuntimeError(f"Failed to create repository in organization '{organization_name}': {ex}")
-                else:
-                    try:
-                        github_repo = user.create_repo(repo_name, private=True)
-                        self.write_log(f"Created private repository under personal account '{username}'", "success")
-                    except Exception as ex:
-                        raise RuntimeError(f"Failed to create repository under personal account: {ex}")
-                        
-                # 5. Clone url setup
-                # Embed token for automatic auth
-                clone_url = github_repo.clone_url.replace("https://", f"https://x-access-token:{token}@")
+                clone_url = clone_url.replace("https://", f"https://x-access-token:{token}@")
                 
-                # 6. Clone repository via GitPython / CLI
                 self.write_log(f"Cloning repository to {local_repo_path}...", "info")
                 import git
                 repo = git.Repo.clone_from(clone_url, local_repo_path)
@@ -4245,7 +4261,7 @@ class GIT4SWApp(tk.Tk):
                 
                 # Optimize credential helper by cleaning remote URL and configuring credentials
                 try:
-                    temp_service = GitService(local_repo_path)
+                    temp_service = GitService(local_repo_path, self.config_path)
                     temp_service.optimize_credential_helper(username)
                     self.write_log("Configured Git Credential Manager for this repository.", "success")
                 except Exception as oe:
@@ -4258,7 +4274,7 @@ class GIT4SWApp(tk.Tk):
                 # 15. Reflect new repository in GUI Dashboard
                 def on_done():
                     self.workspace_path = local_repo_path
-                    self.git_service = GitService(local_repo_path)
+                    self.git_service = GitService(local_repo_path, self.config_path)
                     
                     # Update local path entry text
                     self.ent_local_dir.delete(0, tk.END)
@@ -4439,53 +4455,26 @@ class GIT4SWApp(tk.Tk):
             messagebox.showwarning("No Repository", "Current workspace is not a valid Git repository.")
             return
 
-        repo = self.git_service.repo
-        if not repo:
-            messagebox.showwarning("No Repository", "Failed to load Git repository.")
+        url = self.git_service.get_remote_url()
+        if not url:
+            url = self.ent_remote_url.get().strip() if hasattr(self, 'ent_remote_url') else ""
+
+        if not url:
+            messagebox.showwarning("Invalid Remote", "No remote URL configured.")
             return
 
-        # Try to get remote URL
-        url = ""
-        try:
-            if hasattr(repo, 'remotes') and hasattr(repo.remotes, 'origin'):
-                url = repo.remotes.origin.url
-            elif hasattr(repo, 'remotes') and len(repo.remotes) > 0:
-                url = repo.remotes[0].url
-        except Exception:
-            pass
+        provider = detect_provider(url, {})
+        graph_url = provider.get_network_graph_url(url)
 
-        # If not found from repo, try from entry
-        if not url and hasattr(self, 'ent_remote_url'):
-            url = self.ent_remote_url.get().strip()
-
-        owner = None
-        repo_name = None
-
-        if url:
-            clean_url = url.strip()
-            if clean_url.endswith(".git"):
-                clean_url = clean_url[:-4]
-            
-            # Convert SSH git@github.com:owner/repo format to standard / paths
-            if ":" in clean_url and not clean_url.startswith("http"):
-                parts = clean_url.split(":")
-                clean_url = "/".join(parts)
-                
-            path_parts = [p for p in clean_url.split("/") if p]
-            if len(path_parts) >= 2:
-                owner = path_parts[-2]
-                repo_name = path_parts[-1]
-
-        if not owner or not repo_name:
-            messagebox.showwarning("Invalid Remote", "Could not parse owner and repository name from the remote URL.")
+        if not graph_url:
+            messagebox.showwarning("Invalid Remote", "Could not generate network graph URL.")
             return
 
-        github_network_url = f"https://github.com/{owner}/{repo_name}/network"
-        
         import webbrowser
         try:
-            webbrowser.open(github_network_url)
-            self.write_log(f"Successfully opened GitHub Network graph: {github_network_url}", "success")
+            webbrowser.open(graph_url)
+            server_name = provider.get_name().capitalize()
+            self.write_log(f"Opened {server_name} Network graph: {graph_url}", "success")
         except Exception as e:
             self.write_log(f"Failed to open browser: {e}", "error")
 
@@ -4955,7 +4944,7 @@ class GIT4SWApp(tk.Tk):
 
     def on_auto_sync_changed(self):
         val = self.auto_sync_var.get()
-        config_path = "config.json"
+        config_path = self.config_path
         config_data = {}
         if os.path.exists(config_path):
             try:
@@ -5022,7 +5011,7 @@ class GIT4SWApp(tk.Tk):
         self.write_log(f"Set local clone path: {local_dir}", "info")
                 
         # Check if the repository already exists at the local path
-        temp_service = GitService(local_dir)
+        temp_service = GitService(local_dir, self.config_path)
         if temp_service.is_git_repo():
             messagebox.showerror(
                 "Repository Exists",
@@ -5043,13 +5032,16 @@ class GIT4SWApp(tk.Tk):
         self.btn_clone.state(["disabled"])
         self.write_log(f"Starting cloning process from {remote_url}...", "info")
         
-        github_token = config_data.get("github_token", "").strip()
+        github_token = config_data.get("git_token", "") or config_data.get("github_token", "")
+        github_token = github_token.strip()
+        
+        provider = detect_provider(remote_url, config_data)
+        
         authenticated_url = remote_url
-        if github_token and "github.com" in remote_url.lower():
-            match = re.match(r'^(https?://)(github\.com/.*)$', remote_url, re.IGNORECASE)
-            if match:
-                prefix, rest = match.groups()
-                authenticated_url = f"{prefix}{github_token}@{rest}"
+        cred_host = provider.get_credential_host(remote_url)
+        if github_token and cred_host:
+            if remote_url.startswith("https://"):
+                authenticated_url = remote_url.replace("https://", f"https://x-access-token:{github_token}@", 1)
                 
         def redact_token(text):
             if github_token and len(github_token) >= 8:
@@ -5066,16 +5058,14 @@ class GIT4SWApp(tk.Tk):
                     res = temp_service.clone_repository(authenticated_url)
                     clean_res = redact_token(res)
                     
-                    # Optimize credential helper by cleaning remote URL and configuring credentials
                     try:
                         username = getattr(self, 'resolved_username', None)
                         if not username and github_token:
                             try:
-                                from github import Github
-                                g = Github(github_token)
-                                user = g.get_user()
-                                username = user.login.strip().replace(" ", "-").lower()
-                                self.resolved_username = username
+                                username = provider.get_username(github_token)
+                                if username:
+                                    username = username.strip().replace(" ", "-").lower()
+                                    self.resolved_username = username
                             except Exception:
                                 pass
                         if username:
@@ -5381,7 +5371,7 @@ class GIT4SWApp(tk.Tk):
         dir_path = filedialog.askdirectory(initialdir=initial_dir, title="Select Project Folder")
         if dir_path:
             self.workspace_path = os.path.normpath(dir_path)
-            self.git_service = GitService(self.workspace_path)
+            self.git_service = GitService(self.workspace_path, self.config_path)
             
             # Save workspace path to config.json
             self.save_workspace_to_config(self.workspace_path)
@@ -5400,7 +5390,7 @@ class GIT4SWApp(tk.Tk):
             self.ent_local_dir.insert(0, os.path.normpath(self.workspace_path))
 
     def save_workspace_to_config(self, path):
-        config_path = "config.json"
+        config_path = self.config_path
         config = {}
         if os.path.exists(config_path):
             try:
@@ -5429,7 +5419,7 @@ class GIT4SWApp(tk.Tk):
         return file_abs_paths
 
     def load_edrawings_path(self):
-        config_path = "config.json"
+        config_path = self.config_path
         default_path = "C:\\Program Files\\SOLIDWORKS Corp\\eDrawings\\eDrawings.exe"
         if os.path.exists(config_path):
             try:
@@ -5441,7 +5431,7 @@ class GIT4SWApp(tk.Tk):
         return default_path
 
     def load_imagemagick_path(self):
-        config_path = "config.json"
+        config_path = self.config_path
         default_path = "C:\\Users\\dhkima\\scoop\\shims\\compare.exe"
         if os.path.exists(config_path):
             try:
@@ -5453,7 +5443,7 @@ class GIT4SWApp(tk.Tk):
         return default_path
 
     def load_solidworks_path(self):
-        config_path = "config.json"
+        config_path = self.config_path
         default_path = "C:\\Program Files\\SOLIDWORKS Corp\\SOLIDWORKS\\SLDWORKS.exe"
         if os.path.exists(config_path):
             try:

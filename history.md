@@ -1,6 +1,6 @@
 # GIT4SW 프로젝트 개발 역사 및 커밋 분석서 (Development History & Commit Analysis)
 
-**GIT4SW**는 SolidWorks CAD 파일의 특성(바이너리, 대용량, 다중 사용자 동시 수정 충돌 위험)을 고려하여 Git LFS 및 원격 저장소(GitHub, Codeberg) 환경에서 도면/모델 데이터의 협업을 안전하고 효율적으로 제어할 수 있도록 설계된 Python/Tkinter 기반의 GUI 형상 관리 보조 프로그램입니다.
+**GIT4SW**는 SolidWorks CAD 파일의 특성(바이너리, 대용량, 다중 사용자 동시 수정 충돌 위험)을 고려하여 Git LFS 및 원격 저장소(GitHub, Gitea/Codeberg 등) 환경에서 도면/모델 데이터의 협업을 안전하고 효율적으로 제어할 수 있도록 설계된 Python/Tkinter 기반의 GUI 형상 관리 보조 프로그램입니다.
 
 본 문서는 프로젝트의 최초 커밋(2026-06-10)부터 최신 릴리즈까지 전체 Git 커밋 그래프와 개발 이력을 종합적으로 분석하여, 프로젝트가 어떠한 단계를 거쳐 현재의 수준 높은 도구로 성장했는지 체계적으로 기술합니다.
 
@@ -38,6 +38,8 @@ gantt
     Sleep 반감, Lock 억제, Edit Config.json 버튼 추가 :active, milestone13, 2026-06-24, 2026-06-24
     section Find Top 스캐너
     GetDocumentDependencies2 기반 고속 최상위 어셈블리 탐색 :active, milestone14, 2026-06-24, 2026-06-24
+    section Git 서버 추상화
+    다중 Git 제공자 및 설정 파일 경로 지정 :active, milestone15, 2026-06-25, 2026-06-25
 ```
 
 ---
@@ -251,6 +253,34 @@ gantt
 
 ---
 
+### 15단계: 다중 Git 서버 제공자 추상화 및 설정 파일 경로 지정 (Milestone 15 - 2026-06-25)
+* **Git 제공자 추상화 계층 (`git_provider.py`)**:
+  - `GitProvider` 추상 베이스 클래스와 `GitHubProvider`, `GiteaProvider` 구현체를 신설하여 Git 서버별 원격 API 호출을 인터페이스로 분리했습니다.
+  - GitHub는 PyGithub을 통해 `github.com` API를 호출하고, Gitea는 자체 REST API v1 엔드포인트를 직접 호출합니다.
+  - `parse_remote_url()`, `detect_provider()`, `create_provider()` 팩토리 함수 제공.
+* **설정 파일 구조 변경**:
+  - `config.json`에 `git_server_type` (`github`/`gitea`) 필드 추가: 어떤 Git 서버 제공자를 사용할지 명시적으로 선택.
+  - `github_token`을 `git_token`으로 통일 (하위 호환성 유지: `github_token`도 대체 필드로 읽음).
+  - `gitea_url` 필드 추가: Gitea 서버의 기본 URL 지정 (`git_server_type`이 `github`일 때는 빈 문자열로 저장).
+* **설정 파일 경로 CLI 지정 (`--config`)**:
+  - `main.py`에 `--config` 인자를 추가하여 프로그램 시작 시 사용할 설정 파일 경로를 지정 가능 (예: `--config config_codeberg.json`).
+  - `GIT4SW.bat`는 기본값 `config.json`을 전달.
+  - `git_service.set_config_file_path()`를 통해 전역 함수에서도 설정 파일 경로를 사용.
+* **`git_service.py` 리팩토링**:
+  - `GitService`가 `GitProvider`를 통해 원격 API를 호출하도록 개선 (git_server_type에 따라 GitHubProvider 또는 GiteaProvider 사용).
+  - `run_git_subprocess()`에 `GIT4SW_GIT_HOSTS` 환경변수 전달을 위한 `git_helper.py` 연동 강화.
+* **`git_helper.py` 유연성 향상**:
+  - `GIT4SW_GIT_HOSTS` 환경변수로 허용 호스트 목록을 동적으로 설정. 기본값은 `github.com`.
+* **Config UI 개선 (`ui_tk.py`)**:
+  - "Edit Config.json" 버튼 → "Edit"으로 단축; "Configuration Manager" 제목 제거.
+  - "Git Server Type" 콤보 박스가 "Git Server URL" 입력 필드를 토글 (github→비활성화+`https://github.com` 자동입력, gitea→활성화).
+  - "Git Server URL" 행을 "Git Token" 위로 재배치.
+  - "Default Local Path"에 Find 버튼 추가하여 디렉토리 선택기 제공.
+  - 행 간격 축소 (pady 3→1) 및 UI 정리.
+* **실행 방법 변경**:
+  - `GIT4SW.bat`가 `uv run main.py` 대신 `.venv\Scripts\pythonw.exe main.py --config config.json`을 직접 실행하도록 변경.
+  - 이중 실행 방지를 위해 `cd /d "%~dp0"`로 작업 디렉토리 고정.
+
 | 비교 항목 | 초기 설계 (V01) | 현재 설계 (최신 헤드) | 개선 효과 및 핵심 가치 |
 | :--- | :--- | :--- | :--- |
 | **Git 인증** | 시스템 OS (GCM) 의존적 자격증명 처리 | 무상태(Stateless) 인라인 주입 자격증명 | 외부 환경 영향 차단, UI 멈춤 방지, Config 파일 청결성 |
@@ -272,6 +302,9 @@ gantt
 | **성능 최적화 (인위적 대기 시간 단축)** | 안정화를 위한 고정 `time.sleep(2~3)` 대기, EXPORT/BOM 중에도 자동 Lock 모니터가 파일 Lock 시도 | 모든 `time.sleep()` 값을 50% 축소 (2s→1s, 3s→1.5s, 0.3s→0.15s 등) 및 EXPORT/BOM 서브프로세스 실행 중 자동 Lock 모니터의 Lock 시도 억제 (`suppress_auto_lock` 플래그) | 파일당 EXPORT 시간 약 50% 단축, 불필요한 LFS Lock 네트워크 호출 제거 |
 | **Config.json 직접 편집** | GUI 폼을 통해서만 설정 편집 가능 | "Edit Config.json" 버튼을 Config 뷰에 추가하여 메모장에서 직접 파일 편집 가능 | 빠른 설정 변경 및 디버깅 편의성 향상 |
 | **Find Top (최상위 어셈블리 스캔)** | `OpenDoc6` + `GetChildren` 방식 — 파일당 1~3초의 열기/안정화/닫기 오버헤드 | `GetDocumentDependencies2` COM API 사용 — 파일을 열지 않고 헤더 메타데이터만 읽음 | 파일 열기 오버헤드 완전 제거, 수백 개 어셈블리 스캔 시 수십 배 성능 향상, GUI Freeze 방지 |
+| **Git 서버 제공자 추상화** | GitHub 전용 (`github.com` + PyGithub 고정) | `git_provider.py` 도입: GitHubProvider / GiteaProvider 선택 가능, `git_server_type`으로 설정 | Codeberg 등 Gitea 기반 저장소 지원, GitHub/Gitea 간 전환 가능 |
+| **설정 파일 경로 지정** | `config.json` 고정 (`git_service.py`의 `__file__` 기준) | `--config` CLI 인자로 사용자 설정 파일 경로 지정 가능 | 다중 설정 파일 관리 (예: `config_github.json`, `config_codeberg.json`) |
+| **실행 방식** | `uv run main.py` (uv가 가상환경 자동 관리) | `.venv\Scripts\pythonw.exe main.py --config config.json` (직접 실행) | uv 의존성 제거, 이중 실행 방지, 콘솔 창 미표시 |
 
 ---
 

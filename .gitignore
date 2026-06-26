@@ -13,7 +13,8 @@ wheels/
 uv.lock
 
 # config.json
-config.json
+config*.json
+GIT4SW_*.bat
 README_files
 README.html
 .backup/

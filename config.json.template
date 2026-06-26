@@ -4,9 +4,11 @@
     "solidworks_path": "C:\\Program Files\\SOLIDWORKS Corp\\SOLIDWORKS\\SLDWORKS.exe",
     "edrawings_path": "C:\\Program Files\\SOLIDWORKS Corp\\eDrawings\\eDrawings.exe",
     "workspace_path": "D:\\github\\TEST",
-    "github_token": "",
+    "git_token": "",
+    "git_server_type": "github",
+    "gitea_url": "",
     "default_local_path": "D:\\github",
-    "organization_name": "mech-higenmotor",
+    "organization_name": "",
     "auto_sync": false,
     "commit_messages": "['사양설정 : ', '공학해석 : ', '대략설계 : ', '상세설계 : ', '설계리뷰 : ', '도면작성 : ', '프로토타입 : ', '시험평가 : ', '생산이관 : ']",
     "column_order": ["Depth", "Type", "PartNumber", "Partname", "Qty", "Material", "Treatment", "Weight", "Description", "File Name", "Configuration", "File Path"]
