@@ -25,7 +25,7 @@ except ImportError:
 
 # Import helpers from sw_export_runner
 try:
-    from sw_export_runner import load_sw_typelib, get_dynamic_sw_app, get_component_model, get_custom_property_value
+    from sw_export_runner import load_sw_typelib, get_dynamic_sw_app, get_component_model, get_custom_property_value, get_builtin_material, get_builtin_weight
 except ImportError:
     # Inline fallback definitions if import fails
     def load_sw_typelib():
@@ -46,6 +46,10 @@ except ImportError:
         except:
             pass
         return ""
+    def get_builtin_material(model, config_name):
+        return ""
+    def get_builtin_weight(model):
+        return None
 
 def connect_to_solidworks():
     swApp = None
@@ -92,8 +96,15 @@ def save_dataframe_to_excel_with_autowidth(df, filepath):
     with pd.ExcelWriter(filepath, engine='openpyxl') as writer:
         df.to_excel(writer, index=False, sheet_name='Sheet1')
         
-        # Auto-adjust columns width
         worksheet = writer.sheets['Sheet1']
+        # Build column letter map from DataFrame columns (1-indexed in Excel)
+        from openpyxl.utils import get_column_letter
+        col_map = {}
+        for i, col_name in enumerate(df.columns):
+            letter = get_column_letter(i + 1)
+            col_map[col_name] = letter
+
+        # Auto-adjust columns width
         for col in worksheet.columns:
             max_len = 0
             col_letter = col[0].column_letter
@@ -101,8 +112,21 @@ def save_dataframe_to_excel_with_autowidth(df, filepath):
                 val = str(cell.value or '')
                 if len(val) > max_len:
                     max_len = len(val)
-            # Set column width with padding
             worksheet.column_dimensions[col_letter].width = max(max_len + 3, 10)
+
+        # Hide specified columns
+        hidden_cols = ["Depth", "Type", "PartNumber", "File Name", "Configuration", "File Path"]
+        for col_name in hidden_cols:
+            if col_name in col_map:
+                worksheet.column_dimensions[col_map[col_name]].hidden = True
+
+        # Set Weight column number format to 6 decimal places
+        if "Weight" in col_map:
+            weight_letter = col_map["Weight"]
+            for row in worksheet.iter_rows(min_col=worksheet[weight_letter][0].column,
+                                            max_col=worksheet[weight_letter][0].column):
+                for cell in row:
+                    cell.number_format = '0.000000'
         
 def lookup_property(props, key_name, aliases=None):
     if not props:
@@ -345,6 +369,30 @@ def main():
                     except:
                         pass
 
+                    # 3. Fallback: if Material is still missing/empty, try built-in material
+                    has_material = any(
+                        k.lower() == "material" and v and str(v).strip()
+                        for k, v in props.items()
+                    )
+                    if not has_material:
+                        mat_source_path = path
+                        builtin_mat = get_builtin_material(child_model, config_name)
+                        if builtin_mat:
+                            props["Material"] = builtin_mat
+                            all_custom_prop_names.add("Material")
+
+                    # 4. Fallback: if Weight is missing/empty and file is sldprt/sldasm, try built-in mass
+                    if path and (path.lower().endswith('.sldprt') or path.lower().endswith('.sldasm')):
+                        has_weight = any(
+                            k.lower() in ("weight", "weight(g)", "mass", "weight(kg)") and v and str(v).strip()
+                            for k, v in props.items()
+                        )
+                        if not has_weight:
+                            builtin_wt = get_builtin_weight(child_model)
+                            if builtin_wt is not None and builtin_wt >= 0:
+                                props["Weight"] = f"{builtin_wt:.6f}"
+                                all_custom_prop_names.add("Weight")
+
                     child_model = None
 
                 # Append to raw BOM rows
@@ -419,7 +467,18 @@ def main():
             material = lookup_property(props, "Material")
             treatment = lookup_property(props, "Treatment", ["SurfaceTreatment", "Surface Treatment", "Finish"])
             weight = lookup_property(props, "Weight", ["Weight(g)", "Mass", "Weight(kg)"])
+            # Normalize weight to 6 decimal places, no scientific notation
+            if weight and str(weight).strip():
+                try:
+                    w = float(str(weight).strip().replace(",", ""))
+                    weight = f"{w:.6f}"
+                except ValueError:
+                    pass
             description = lookup_property(props, "Description", ["Desc"])
+            # Fallback: if Description is empty and the part is from Toolbox (SOLIDWORKS Data),
+            # use the Configuration value as Description
+            if (not description or str(description).strip() == "") and file_path and "SOLIDWORKS Data" in file_path:
+                description = configuration
 
             known = {
                 "Depth": depth,
@@ -490,6 +549,14 @@ def main():
         df_pl = pd.DataFrame(pl_data, columns=column_order)
         if df_pl.empty:
             df_pl = pd.DataFrame(columns=column_order)
+
+        # BOM: clear Weight for assembly (.sldasm) rows
+        if not df_bom.empty and "Type" in df_bom.columns and "Weight" in df_bom.columns:
+            df_bom.loc[df_bom["Type"] == "ASM", "Weight"] = ""
+
+        # PL: exclude rows where Type is ASM
+        if not df_pl.empty and "Type" in df_pl.columns:
+            df_pl = df_pl[df_pl["Type"] != "ASM"].reset_index(drop=True)
 
         # 3. Create target directory: 2D/BOM relative to assembly path
         target_dir = os.path.dirname(assembly_file_path)

@@ -157,6 +157,124 @@ def get_custom_property_value(prop_mgr, name):
         pass
     return ""
 
+def _clean_material_name(raw):
+    if not raw:
+        return ""
+    s = str(raw).strip()
+    if not s:
+        return ""
+    # Reject color/appearance tuples: "(1.0, 0.94, ...)" or "(0.5, 0.5, ...)"
+    if s.startswith("(") and s.endswith(")"):
+        inner = s[1:-1]
+        parts = [p.strip() for p in inner.split(",")]
+        if parts and all(_is_float_like(p) for p in parts):
+            return ""
+    # Parse "solidworks materials|보통 탄소강|9" → extract middle part
+    if "|" in s:
+        segments = s.split("|")
+        if len(segments) >= 2:
+            idx = 1 if len(segments) >= 2 else 0
+            candidate = segments[idx].strip()
+            if candidate:
+                return candidate
+    return s
+
+def _is_float_like(s):
+    try:
+        float(s)
+        return True
+    except ValueError:
+        return False
+
+def get_builtin_material(model, config_name):
+    if model is None:
+        return ""
+    candidates = []
+    # 1. IModelDoc2.MaterialUserName — user-facing material name (SW 2024+)
+    try:
+        mat_raw = model.MaterialUserName
+        mat_name = mat_raw() if callable(mat_raw) else mat_raw
+        if mat_name:
+            cleaned = _clean_material_name(str(mat_name))
+            if cleaned:
+                candidates.append(cleaned)
+    except Exception:
+        pass
+    # 2. IModelDoc2.MaterialIdName — internal material ID (SW 2024+)
+    try:
+        mat_raw = model.MaterialIdName
+        mat_name = mat_raw() if callable(mat_raw) else mat_raw
+        if mat_name:
+            cleaned = _clean_material_name(str(mat_name))
+            if cleaned:
+                candidates.append(cleaned)
+    except Exception:
+        pass
+    # 3. IModelDocExtension.GetMaterial — method that may return material
+    try:
+        ext_val = model.Extension
+        ext = ext_val() if callable(ext_val) else ext_val
+        if ext:
+            mat_raw = ext.GetMaterial
+            mat_name = mat_raw() if callable(mat_raw) else mat_raw
+            if mat_name:
+                cleaned = _clean_material_name(str(mat_name))
+                if cleaned:
+                    candidates.append(cleaned)
+    except Exception:
+        pass
+    # 4. IModelDoc2.MaterialPropertyValues — might contain name
+    try:
+        mat_raw = model.MaterialPropertyValues
+        mat_name = mat_raw() if callable(mat_raw) else mat_raw
+        if mat_name:
+            cleaned = _clean_material_name(str(mat_name))
+            if cleaned:
+                candidates.append(cleaned)
+    except Exception:
+        pass
+    # Return the first non-empty, valid candidate
+    for c in candidates:
+        return c
+    return ""
+
+def get_builtin_weight(model):
+    if model is None:
+        return None
+    try:
+        ext_val = model.Extension
+        ext = ext_val() if callable(ext_val) else ext_val
+        if ext is None:
+            return None
+        mp_raw = ext.CreateMassProperty2
+        mp = mp_raw() if callable(mp_raw) else mp_raw
+        if mp is None:
+            mp_raw = ext.CreateMassProperty
+            mp = mp_raw() if callable(mp_raw) else mp_raw
+        if mp is None:
+            return None
+        mass_raw = mp.Mass
+        mass = mass_raw() if callable(mass_raw) else mass_raw
+        if mass is None:
+            return None
+        mass_kg = float(mass)
+        # Convert to kg based on document unit system
+        try:
+            unit_raw = model.GetUnits
+            unit_val = unit_raw() if callable(unit_raw) else unit_raw
+            unit_int = int(unit_val) if unit_val is not None else 0
+            # swMM=0(grams), swCM=1(grams), swMeters=2(kg), swInches=3(pounds), swFeet=4(pounds)
+            if unit_int in (0, 1):
+                mass_kg = mass_kg / 1000.0
+            elif unit_int in (3, 4):
+                mass_kg = mass_kg * 0.45359237
+        except Exception:
+            pass
+        return mass_kg
+    except Exception:
+        pass
+    return None
+
 def force_visible(swApp):
     if not swApp:
         return
