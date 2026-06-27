@@ -128,7 +128,7 @@ class CustomFileTable(tk.Frame):
 
 
 class BranchSelectionDialog(tk.Toplevel):
-    def __init__(self, parent, branches):
+    def __init__(self, parent, branches, default_branch="main"):
         super().__init__(parent)
         self.title("Select Branch")
         self.geometry("380x160")
@@ -139,12 +139,12 @@ class BranchSelectionDialog(tk.Toplevel):
         
         self.selected_branch = None
         
-        # Sort branches: put "main" first, then alphabetical
+        # Sort branches: put default branch first, then alphabetical
         sorted_branches = []
-        if "main" in branches:
-            sorted_branches.append("main")
+        if default_branch in branches:
+            sorted_branches.append(default_branch)
         for b in sorted(branches):
-            if b != "main":
+            if b != default_branch:
                 sorted_branches.append(b)
                 
         lbl = ttk.Label(self, text="The selected version is not contained in the current branch.\nPlease select one of the branches below that contains this version:", 
@@ -2211,7 +2211,7 @@ class GIT4SWApp(tk.Tk):
         self.btn_sync = ttk.Button(sync_btn_frm, text="Get Latest Version (Sync)", style="Primary.TButton", command=self.sync_repository)
         self.btn_sync.pack(side="left", padx=(0, 8))
 
-        self.btn_merge = ttk.Button(sync_btn_frm, text="Merge main branch into current branch", style="Primary.TButton", command=self.merge_main_branch)
+        self.btn_merge = ttk.Button(sync_btn_frm, text=f"Merge {self.git_service.detect_default_branch()} branch into current branch", style="Primary.TButton", command=self.merge_main_branch)
         self.btn_merge.pack(side="left")
         
         self.chk_auto_sync = tk.Checkbutton(
@@ -2277,6 +2277,13 @@ class GIT4SWApp(tk.Tk):
         # Reset cached first-commit info so it's re-fetched for the new repository
         self._cached_repo_start = None
         
+        # Update button labels to reflect the detected default branch
+        default_branch = self.git_service.detect_default_branch()
+        if hasattr(self, 'btn_merge'):
+            self.btn_merge.config(text=f"Merge {default_branch} branch into current branch")
+        if hasattr(self, 'btn_merge_all'):
+            self.btn_merge_all.config(text=f"Merge all branches into {default_branch}")
+        
         if not self.git_service.is_git_repo():
             self.lbl_local_status.config(text="⚠️ Not a Git Repo", foreground="#ef4444")
             self.btn_sync.state(["disabled"])
@@ -2331,10 +2338,12 @@ class GIT4SWApp(tk.Tk):
                         if containing_branches:
                             if old_val in containing_branches:
                                 current = old_val
-                            elif "main" in containing_branches:
-                                current = "main"
                             else:
-                                current = sorted(containing_branches)[0]
+                                default = self.git_service.detect_default_branch()
+                                if default in containing_branches:
+                                    current = default
+                                else:
+                                    current = sorted(containing_branches)[0]
                         else:
                             current = old_val
                     except Exception:
@@ -3779,8 +3788,8 @@ class GIT4SWApp(tk.Tk):
         maintain_frm = tk.Frame(maintain_card, bg="#ffffff")
         maintain_frm.pack(fill="x", padx=12, pady=(2, 8))
         
-        btn_merge_all = ttk.Button(maintain_frm, text="Merge all branches into main", style="Primary.TButton", command=self.on_merge_all_branches_clicked)
-        btn_merge_all.pack(side="left")
+        self.btn_merge_all = ttk.Button(maintain_frm, text=f"Merge all branches into {self.git_service.detect_default_branch()}", style="Primary.TButton", command=self.on_merge_all_branches_clicked)
+        self.btn_merge_all.pack(side="left")
         
         return view
 
@@ -3901,8 +3910,8 @@ class GIT4SWApp(tk.Tk):
         from tkinter import messagebox
         ans = messagebox.askyesno(
             "Confirm Merge All",
-            "Are you sure you want to merge all branches into the 'main' branch?\n\n"
-            "⚠️ Caution: This will fetch all remote branch data, pull them locally, merge everything into 'main', and push the result back to origin."
+            f"Are you sure you want to merge all branches into the '{self.git_service.detect_default_branch()}' branch?\n\n"
+            "⚠️ Caution: This will fetch all remote branch data, pull them locally, merge everything into the default branch, and push the result back to origin."
         )
         if not ans:
             return
@@ -3971,7 +3980,8 @@ class GIT4SWApp(tk.Tk):
                     except Exception as be:
                         self.write_log(f"Warning: could not reset branch '{b}' to origin/{b}: {be}", "warning")
                         
-                other_branches = [b for b in remote_branches if b != 'main']
+                main_branch = self.git_service.detect_default_branch()
+                other_branches = [b for b in remote_branches if b != main_branch]
                 
                 # Sequentially checkout other branches and fetch+merge origin/b
                 for b in other_branches:
@@ -4002,15 +4012,15 @@ class GIT4SWApp(tk.Tk):
                         else:
                             raise pull_err
                 
-                # Switch to main and fetch+merge origin/main
-                self.write_log("Switching to main branch and updating from origin/main...", "info")
-                repo.git.checkout("main")
+                # Switch to default branch and fetch+merge origin/<main_branch>
+                self.write_log(f"Switching to {main_branch} branch and updating from origin/{main_branch}...", "info")
+                repo.git.checkout(main_branch)
                 try:
-                    self.git_service._run_lfs_cmd(["git", "fetch", "origin", "main"])
-                    self.git_service._run_lfs_cmd(["git", "merge", "origin/main", "--no-edit", "-Xtheirs"])
-                    self.write_log("main branch is up to date / merged remote updates.", "success")
+                    self.git_service._run_lfs_cmd(["git", "fetch", "origin", main_branch])
+                    self.git_service._run_lfs_cmd(["git", "merge", f"origin/{main_branch}", "--no-edit", "-Xtheirs"])
+                    self.write_log(f"{main_branch} branch is up to date / merged remote updates.", "success")
                 except Exception as pull_err:
-                    self.write_log(f"Warning: merge for main failed, attempting auto-resolution: {pull_err}", "warning")
+                    self.write_log(f"Warning: merge for {main_branch} failed, attempting auto-resolution: {pull_err}", "warning")
                     conflicted_paths = self.git_service.get_merge_conflicts()
                     if conflicted_paths:
                         for f in conflicted_paths:
@@ -4020,31 +4030,31 @@ class GIT4SWApp(tk.Tk):
                             except Exception:
                                 pass
                         try:
-                            self.git_service._run_lfs_cmd(["git", "commit", "-m", "Merge remote branch origin/main (resolved using remote)"])
-                            self.write_log("Resolved conflicts for main (kept remote version).", "success")
+                            self.git_service._run_lfs_cmd(["git", "commit", "-m", f"Merge remote branch origin/{main_branch} (resolved using remote)"])
+                            self.write_log(f"Resolved conflicts for {main_branch} (kept remote version).", "success")
                         except Exception as commit_err:
-                            raise RuntimeError(f"Failed to merge remote main branch: {commit_err}")
+                            raise RuntimeError(f"Failed to merge remote {main_branch} branch: {commit_err}")
                     else:
                         raise pull_err
                         
-                # Merge other local branches into main one by one
+                # Merge other local branches into default branch one by one
                 for b in other_branches:
                     try:
-                        main_commit = repo.commit("main")
+                        main_commit = repo.commit(main_branch)
                         b_commit = repo.commit(b)
                         if repo.is_ancestor(b_commit, main_commit):
-                            self.write_log(f"Branch '{b}' is already identical or merged into main. Skipping merge.", "info")
+                            self.write_log(f"Branch '{b}' is already identical or merged into {main_branch}. Skipping merge.", "info")
                             continue
                     except Exception as e_sha:
-                        self.write_log(f"Warning: Could not compare commits for '{b}' and 'main': {e_sha}", "warning")
+                        self.write_log(f"Warning: Could not compare commits for '{b}' and '{main_branch}': {e_sha}", "warning")
 
-                    self.write_log(f"Merging local branch '{b}' into main...", "info")
+                    self.write_log(f"Merging local branch '{b}' into {main_branch}...", "info")
                     conflicted_files = self.git_service.check_merge_conflicts(b)
                     if conflicted_files:
-                        self.write_log(f"Conflicts pre-detected while merging '{b}' into main! Showing resolution dialog...", "warning")
+                        self.write_log(f"Conflicts pre-detected while merging '{b}' into {main_branch}! Showing resolution dialog...", "warning")
                         resolutions = self.prompt_multi_conflict_resolution(
                             conflicted_files,
-                            ours_branch="main",
+                            ours_branch=main_branch,
                             theirs_branch=b,
                             is_pull=False
                         )
@@ -4054,17 +4064,17 @@ class GIT4SWApp(tk.Tk):
                             
                         self.write_log(f"Merging branch '{b}' with resolutions...", "info")
                         self.git_service.merge_branch_with_resolutions(b, resolutions)
-                        self.write_log(f"Branch '{b}' merged into main successfully with resolutions.", "success")
+                        self.write_log(f"Branch '{b}' merged into {main_branch} successfully with resolutions.", "success")
                     else:
                         self.write_log(f"No conflicts detected. Performing standard merge for branch '{b}'...", "info")
                         try:
                             self.git_service.merge_branch(b)
-                            self.write_log(f"Branch '{b}' merged into main successfully.", "success")
+                            self.write_log(f"Branch '{b}' merged into {main_branch} successfully.", "success")
                         except MergeConflictError as mce:
-                            self.write_log(f"Merge conflict occurred while merging '{b}' into main. Showing resolution dialog...", "warning")
+                            self.write_log(f"Merge conflict occurred while merging '{b}' into {main_branch}. Showing resolution dialog...", "warning")
                             resolutions = self.prompt_multi_conflict_resolution(
                                 mce.conflicted_files,
-                                ours_branch="main",
+                                ours_branch=main_branch,
                                 theirs_branch=b,
                                 is_pull=False
                             )
@@ -4075,12 +4085,12 @@ class GIT4SWApp(tk.Tk):
                                 
                             self.write_log("Applying resolutions to complete merge...", "info")
                             self.git_service.resolve_conflicts_and_commit(b, resolutions)
-                            self.write_log(f"Branch '{b}' merged into main successfully with resolutions.", "success")
+                            self.write_log(f"Branch '{b}' merged into {main_branch} successfully with resolutions.", "success")
                         
-                # git push -u origin main
-                self.write_log("Pushing main branch to origin...", "info")
-                self.git_service._run_lfs_cmd(["git", "push", "-u", "origin", "main"])
-                self.write_log("Successfully pushed main branch to origin.", "success")
+                # git push -u origin <main_branch>
+                self.write_log(f"Pushing {main_branch} branch to origin...", "info")
+                self.git_service._run_lfs_cmd(["git", "push", "-u", "origin", main_branch])
+                self.write_log(f"Successfully pushed {main_branch} branch to origin.", "success")
                 
                 # Return to the original branch state (ensure checkout)
                 if original_branch:
@@ -4095,7 +4105,7 @@ class GIT4SWApp(tk.Tk):
                     self.refresh_file_list()
                     self.refresh_history()
                     self.load_branches_in_combo()
-                    self.write_log("🎉 Merge all branches into main complete!", "success")
+                    self.write_log(f"🎉 Merge all branches into {main_branch} complete!", "success")
                     
                 self.task_queue.put(('success', "All branches merged and pushed successfully!", on_done))
                 
@@ -4219,7 +4229,7 @@ class GIT4SWApp(tk.Tk):
                 repo.index.commit("Initial commit", author=author, committer=author)
                 self.write_log("Initial commit created successfully.", "success")
                 
-                # 11. Push main branch
+                # 11. Push main branch (new repos always use main)
                 try:
                     if repo.active_branch.name != "main":
                         repo.git.branch("-M", "main")
@@ -4370,7 +4380,7 @@ class GIT4SWApp(tk.Tk):
             if old_branch in containing_branches:
                 target_branch = old_branch
             else:
-                dialog = BranchSelectionDialog(self, containing_branches)
+                dialog = BranchSelectionDialog(self, containing_branches, self.git_service.detect_default_branch())
                 self.wait_window(dialog)
                 target_branch = dialog.selected_branch
                 if not target_branch:
@@ -5106,21 +5116,22 @@ class GIT4SWApp(tk.Tk):
 
     @queue_during_bg_tasks
     def merge_main_branch(self, confirm=True):
-        """Merges the main branch into the current branch."""
+        """Merges the default branch into the current branch."""
         current = self.git_service.get_current_branch()
         if not current:
             self.write_log("Cannot determine the current branch.", "warning")
             return
-        if current in ("main", "master"):
-            self.write_log(f"The current branch is '{current}'. Cannot merge main branch into itself.", "info")
+        default = self.git_service.detect_default_branch()
+        if current == default:
+            self.write_log(f"The current branch is '{current}'. Cannot merge default branch into itself.", "info")
             return
 
-        # Determine the actual source branch name (main or master)
+        # Verify the detected default branch actually exists locally
         try:
             branches = [b.name for b in self.git_service.repo.branches]
         except Exception:
             branches = []
-        source = "main" if "main" in branches else ("master" if "master" in branches else None)
+        source = default if default in branches else None
         if not source:
             self.write_log("Local 'main' or 'master' branch does not exist.", "error")
             return
@@ -5197,7 +5208,7 @@ class GIT4SWApp(tk.Tk):
                             self.write_log("Merge cancelled by user.", "warning")
                             return
                         
-                        self.write_log("Merging main branch with resolutions...", "info")
+                        self.write_log(f"Merging {source} branch with resolutions...", "info")
                         self.git_service.merge_branch_with_resolutions(source, resolutions)
                         result = "Merge completed with resolutions."
                     else:

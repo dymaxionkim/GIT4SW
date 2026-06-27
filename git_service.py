@@ -398,6 +398,7 @@ class GitService:
         self._load_config_paths()
         self._apply_git_paths()
         self.repo = None
+        self._default_branch_cached = None
         self._load_repo()
     
     def _load_config_paths(self):
@@ -473,6 +474,31 @@ class GitService:
                 os.remove(lockcache_path)
             except Exception:
                 pass
+
+    def detect_default_branch(self):
+        """Detects the default branch name for this repository.
+
+        Checks local branches for 'main' or 'master' in order of preference.
+        Falls back to 'main' if neither exists.
+        Result is cached per GitService instance.
+        """
+        if self._default_branch_cached:
+            return self._default_branch_cached
+
+        try:
+            if self.repo:
+                branches = [b.name for b in self.repo.branches]
+                if "main" in branches:
+                    self._default_branch_cached = "main"
+                    return "main"
+                if "master" in branches:
+                    self._default_branch_cached = "master"
+                    return "master"
+        except Exception:
+            pass
+
+        self._default_branch_cached = "main"
+        return "main"
 
     def is_git_repo(self):
         """Checks if the directory is a valid git repository."""
@@ -973,7 +999,7 @@ class GitService:
             try:
                 branch = self._run_lfs_cmd(["git", "branch", "--show-current"])
                 if not branch:
-                    branch = "main"
+                    branch = self.detect_default_branch()
                 self._run_lfs_cmd(["git", "push", "origin", branch])
             except Exception as e:
                 raise RuntimeError(f"Successfully saved locally, but server upload failed: {e}")
@@ -1052,17 +1078,17 @@ class GitService:
             if not target_branch:
                 target_branch = self._run_lfs_cmd(["git", "branch", "--show-current"])
             if not target_branch:
-                target_branch = "main"
+                target_branch = self.detect_default_branch()
             
             local_branches = self.get_local_branches()
             if target_branch not in local_branches:
-                target_branch = "main"
+                target_branch = self.detect_default_branch()
                 
             self._run_lfs_cmd(["git", "checkout", target_branch])
             self._load_repo()
         except Exception as e:
             try:
-                self._run_lfs_cmd(["git", "checkout", "main"])
+                self._run_lfs_cmd(["git", "checkout", self.detect_default_branch()])
                 self._load_repo()
             except Exception:
                 raise RuntimeError(f"Failed to restore latest: {e}")
@@ -1079,14 +1105,14 @@ class GitService:
                 match = re.search(r"refs/heads/(.+)$", line)
                 if match:
                     branches.append(match.group(1))
-            return branches if branches else ["main"]
+            return branches if branches else [self.detect_default_branch()]
         except Exception:
             return self.get_local_branches()
 
     def get_local_branches(self):
         """Gets list of local branches in the repository."""
         if not self.is_git_repo():
-            return ["main"]
+            return [self.detect_default_branch()]
         try:
             return [b.name for b in self.repo.branches]
         except Exception:
@@ -1099,7 +1125,7 @@ class GitService:
                         branches.append(name)
                 return branches
             except Exception:
-                return ["main"]
+                return [self.detect_default_branch()]
 
     def get_branch_tip_commit(self, branch_name):
         """Returns the commit hash (hex string) of the tip of the specified branch."""
