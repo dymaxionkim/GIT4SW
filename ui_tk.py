@@ -2029,6 +2029,10 @@ class GIT4SWApp(tk.Tk):
         lbl_title = ttk.Label(header_frm, text="Help & Documentation", style="Title.TLabel")
         lbl_title.pack(side="left")
         
+        help_lang = tk.StringVar(value="help_en.txt")
+        cb_lang = ttk.Combobox(header_frm, textvariable=help_lang, values=["help_en.txt", "help_ko.txt"], state="readonly", width=15)
+        cb_lang.pack(side="right")
+        
         # Card
         card = ttk.Frame(view, style="Card.TFrame")
         card.pack(fill="both", expand=True, padx=16, pady=4)
@@ -2038,27 +2042,34 @@ class GIT4SWApp(tk.Tk):
         container.pack(fill="both", expand=True, padx=16, pady=(0, 16))
         container.pack_propagate(False)
         
-        # Load help text from file
-        script_dir = os.path.dirname(os.path.abspath(__file__))
-        help_path = os.path.join(script_dir, "help.txt")
-        help_text = ""
-        if os.path.exists(help_path):
-            try:
-                with open(help_path, "r", encoding="utf-8") as f:
-                    help_text = f.read()
-            except Exception as e:
-                help_text = f"Error loading help.txt:\n{e}"
-        else:
-            help_text = "help.txt file not found."
-            
         txt_help = tk.Text(container, bg="#ffffff", fg="#1f2937", font="TkDefaultFont", wrap="word", relief="flat", height=15)
-        txt_help.insert("1.0", help_text)
         txt_help.config(state="disabled")
         
         scrollbar = ttk.Scrollbar(container, orient="vertical", command=txt_help.yview)
         txt_help.configure(yscrollcommand=scrollbar.set)
         scrollbar.pack(side="right", fill="y")
         txt_help.pack(side="left", fill="both", expand=True)
+        
+        def load_help_file(*args):
+            script_dir = os.path.dirname(os.path.abspath(__file__))
+            file_name = help_lang.get()
+            file_path = os.path.join(script_dir, file_name)
+            content = ""
+            if os.path.exists(file_path):
+                try:
+                    with open(file_path, "r", encoding="utf-8") as f:
+                        content = f.read()
+                except Exception as e:
+                    content = f"Error loading {file_name}:\n{e}"
+            else:
+                content = f"{file_name} file not found."
+            txt_help.config(state="normal")
+            txt_help.delete("1.0", "end")
+            txt_help.insert("1.0", content)
+            txt_help.config(state="disabled")
+        
+        help_lang.trace_add("write", load_help_file)
+        load_help_file()
         
         return view
 

@@ -33,6 +33,7 @@
 * **Find Top (Top-Level Assembly Scanner)**: Scans `.sldasm` dependency graph to identify top-level assemblies (not referenced by any other assembly). Uses `GetDocumentDependencies2` COM API—reads metadata only, never opens files—making it orders of magnitude faster than `OpenDoc6`.
 * **Performance Optimized**: Auto-lock suppressed during EXPORT/BOM (ReadOnly files need no lock). All stabilization delays reduced by 50%.
 * **Config Editor**: "Edit" button opens the currently loaded configuration file directly in Notepad. Custom config path is set via `--config` CLI argument (e.g., `--config config_codeberg.json`).
+* **Multilingual Help**: Language combo box in Help view to switch between English (`help_en.txt`) and Korean (`help_ko.txt`). All GUI terms include the original English in parentheses.
 
 ---
 

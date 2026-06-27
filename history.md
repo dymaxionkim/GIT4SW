@@ -305,6 +305,22 @@ gantt
 | **Git 서버 제공자 추상화** | GitHub 전용 (`github.com` + PyGithub 고정) | `git_provider.py` 도입: GitHubProvider / GiteaProvider 선택 가능, `git_server_type`으로 설정 | Codeberg 등 Gitea 기반 저장소 지원, GitHub/Gitea 간 전환 가능 |
 | **설정 파일 경로 지정** | `config.json` 고정 (`git_service.py`의 `__file__` 기준) | `--config` CLI 인자로 사용자 설정 파일 경로 지정 가능 | 다중 설정 파일 관리 (예: `config_github.json`, `config_codeberg.json`) |
 | **실행 방식** | `uv run main.py` (uv가 가상환경 자동 관리) | `.venv\Scripts\pythonw.exe main.py --config config.json` (직접 실행) | uv 의존성 제거, 이중 실행 방지, 콘솔 창 미표시 |
+| **Help 모드 다국어 지원** | help.txt 단일 파일 고정 | help_en.txt / help_ko.txt 선택 콤보박스, 영어 원문 병기 | 언어 전환 즉시 반영, 한국어 사용자 접근성 향상 |
+
+---
+
+### 16단계: Help 모드 다국어 지원 — 언어 선택 콤보박스 및 한국어 도움말 번역 (Milestone 16 - 2026-06-27)
+* **언어 선택 콤보박스 추가**:
+  - Help 뷰의 "Help & Documentation" 제목 오른쪽 끝에 `ttk.Combobox`를 추가하였습니다.
+  - 선택 옵션은 `help_en.txt`, `help_ko.txt`이며, 선택 시 아래 텍스트 위젯의 내용이 즉시 해당 파일 내용으로 전환됩니다.
+* **help.txt → help_en.txt 이름 변경**:
+  - 기존 영어 도움말 파일(`help.txt`)을 `help_en.txt`로 명시적인 파일명으로 변경하여 다국어 체계를 구축하였습니다.
+* **help_ko.txt (한국어 도움말) 생성**:
+  - `help_en.txt`의 전체 내용(165줄)을 한국어로 완전 번역한 `help_ko.txt` 파일을 신규 작성하였습니다.
+  - 대시보드, 파일 관리자, 히스토리 로그, 관리자, 설정, 시스템 로그 등 모든 모드의 설명이 한국어로 제공됩니다.
+* **한국어 도움말 내 영어 원문 병기**:
+  - `help_ko.txt`의 모든 버튼 이름, 위젯 이름, 모드 이름, GUI 용어에 대해 한국어 번역 옆에 괄호로 영어 원문을 함께 표기하여 사용자의 이해를 도왔습니다.
+  - 예: "최신 버전 가져오기 (Get Latest Version (Sync)) (버튼)", "자동 동기화 (Auto Sync) (체크박스)"
 
 ---
 

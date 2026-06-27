@@ -33,7 +33,7 @@
 * **Find Top (최상위 어셈블리 스캐너)**: `.sldasm` 의존성 그래프를 분석하여 최상위 어셈블리(다른 어셈블리에서 참조되지 않은 파일)를 식별. `GetDocumentDependencies2` COM API 사용—파일을 열지 않고 메타데이터만 읽어 `OpenDoc6` 방식보다 수배에서 수십 배 빠름.
 * **성능 최적화**: EXPORT/BOM 중 자동 Lock 억제 (ReadOnly 파일은 Lock 불필요). 모든 안정화 대기 시간 50% 단축.
 * **Config 편집기**: "Edit" 버튼으로 현재 로드된 설정 파일을 메모장에서 직접 편집. `--config` CLI 인자로 설정 파일 경로 지정 가능 (예: `--config config_codeberg.json`).
-
+* **다국어 Help**: Help 뷰에 언어 선택 콤보박스 추가로 영어(`help_en.txt`)와 한국어(`help_ko.txt`) 전환 가능. 모든 GUI 용어에 영어 원문 병기.
 
 
 ---
