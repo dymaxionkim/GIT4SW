@@ -5367,16 +5367,21 @@ class GIT4SWApp(tk.Tk):
 
     @queue_during_bg_tasks
     def open_workspace_in_explorer(self):
-        """Opens the current workspace path in Windows Explorer."""
-        if os.path.exists(self.workspace_path):
+        """Opens the selected path filter directory (or workspace root if 'All Files') in Windows Explorer."""
+        selected = self.cb_path_filter.get()
+        if selected and selected != "All Files":
+            target_path = os.path.join(self.workspace_path, selected)
+        else:
+            target_path = self.workspace_path
+        if os.path.exists(target_path):
             import subprocess
             try:
-                subprocess.Popen(["explorer", os.path.abspath(self.workspace_path)])
-                self.write_log(f"Opened workspace folder in Explorer: {self.workspace_path}", "success")
+                subprocess.Popen(["explorer", os.path.abspath(target_path)])
+                self.write_log(f"Opened folder in Explorer: {target_path}", "success")
             except Exception as e:
-                self.write_log(f"Failed to open workspace in Explorer: {e}", "error")
+                self.write_log(f"Failed to open folder in Explorer: {e}", "error")
         else:
-            self.write_log(f"Workspace path does not exist: {self.workspace_path}", "error")
+            self.write_log(f"Path does not exist: {target_path}", "error")
 
     @queue_during_bg_tasks
     def change_workspace(self):
