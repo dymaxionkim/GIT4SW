@@ -1553,7 +1553,16 @@ class GIT4SWApp(tk.Tk):
         else:
             self.write_log("ℹ️ No active Git processes found to terminate.", "info")
             
-        # 5. Reset the background task counter and status indicator
+        # 5. Clean up leftover .git/ temporary files (lock files, merge state, etc.)
+        try:
+            from git_service import cleanup_git_temp_files
+            if hasattr(self, 'git_service') and self.git_service:
+                cleanup_git_temp_files(self.git_service.repo_path)
+                self.write_log("🧹 Cleaned up leftover .git/ temporary files from interrupted operations.", "success")
+        except Exception as e:
+            print(f"Error cleaning up .git/ temp files: {e}")
+
+        # 6. Reset the background task counter and status indicator
         self.pending_button_tasks.clear()
         self.bg_tasks_count = 0
         self.lbl_status_indicator.config(text="● Idle", fg="#10b981")
@@ -2048,8 +2057,9 @@ class GIT4SWApp(tk.Tk):
         card.pack(fill="both", expand=True, padx=16, pady=4)
         
         # Markdown Container
-        container = tk.Frame(card, bg="#ffffff")
-        container.pack(fill="both", expand=True, padx=16, pady=(0, 16))
+        container = tk.Frame(card, bg="#ffffff", height=380)
+        container.pack(fill="both", expand=True, pady=(0, 16))
+        container.pack_propagate(False)
         
         md_frame = HtmlFrame(container, messages_enabled=False)
         md_frame.pack(fill="both", expand=True)

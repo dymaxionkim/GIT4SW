@@ -6,6 +6,7 @@ import datetime
 import json
 import git
 import threading
+import shutil
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from git_provider import (
     GitHubProvider, GiteaProvider, create_provider, detect_provider,
@@ -67,6 +68,70 @@ def terminate_all_processes():
             except Exception:
                 pass
     return terminated
+
+
+def cleanup_git_temp_files(repo_path):
+    git_dir = os.path.join(repo_path, '.git')
+    if not os.path.isdir(git_dir):
+        return
+
+    temp_dirs = [
+        'rebase-apply',
+        'rebase-merge',
+        'sequencer',
+    ]
+    temp_files = [
+        'INDEX_LOCK',
+        'HEAD.lock',
+        'config.lock',
+        'MERGE_HEAD',
+        'MERGE_MSG',
+        'MERGE_MODE',
+        'CHERRY_PICK_HEAD',
+        'REVERT_HEAD',
+        'REVERT_MSG',
+        'SQUASH_MSG',
+        'ORIG_HEAD',
+        'AUTO_MERGE',
+        'COMMIT_EDITMSG',
+        'FETCH_HEAD',
+        'TAG_EDITMSG',
+        'BISECT_HEAD',
+        'BISECT_START',
+        'BISECT_LOG',
+        'BISECT_RUN',
+        'PACKDISPATCH',
+        'SERVER_HEAD',
+        'gc.log',
+        'gc.pid',
+    ]
+
+    # Remove known temporary directories
+    for d in temp_dirs:
+        dpath = os.path.join(git_dir, d)
+        if os.path.isdir(dpath):
+            try:
+                shutil.rmtree(dpath)
+            except Exception:
+                pass
+
+    # Remove known temporary files
+    for f in temp_files:
+        fpath = os.path.join(git_dir, f)
+        if os.path.isfile(fpath):
+            try:
+                os.remove(fpath)
+            except Exception:
+                pass
+
+    # Remove ALL .lock files recursively anywhere under .git/
+    for root, dirs, files in os.walk(git_dir):
+        for f in files:
+            if f.endswith('.lock'):
+                try:
+                    os.remove(os.path.join(root, f))
+                except Exception:
+                    pass
 
 
 def check_token_access(token, remote_url):
