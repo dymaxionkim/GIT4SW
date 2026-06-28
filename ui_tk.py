@@ -6,10 +6,13 @@ import tkinter.font as tkfont
 import threading
 import queue
 import json
+import glob
 import ast
 import webbrowser
 import subprocess
 import time
+import markdown
+from tkinterweb import HtmlFrame
 
 from git_service import GitService, MergeConflictError, run_git_subprocess
 from git_provider import (
@@ -1651,6 +1654,8 @@ class GIT4SWApp(tk.Tk):
                     self.refresh_history()
                 elif idx == 4:
                     self.refresh_config_view()
+                elif idx == 5:
+                    self.refresh_help_view()
             else:
                 view.pack_forget()
 
@@ -2029,49 +2034,78 @@ class GIT4SWApp(tk.Tk):
         lbl_title = ttk.Label(header_frm, text="Help & Documentation", style="Title.TLabel")
         lbl_title.pack(side="left")
         
-        help_lang = tk.StringVar(value="help_en.txt")
-        cb_lang = ttk.Combobox(header_frm, textvariable=help_lang, values=["help_en.txt", "help_ko.txt"], state="readonly", width=15)
-        cb_lang.pack(side="right")
+        script_dir = os.path.dirname(os.path.abspath(__file__))
+        help_files = sorted(glob.glob(os.path.join(script_dir, "help_*.md")))
+        help_filenames = [os.path.basename(f) for f in help_files]
+        if "help_en.md" not in help_filenames:
+            help_filenames.append("help_en.md")
+        self.help_lang = tk.StringVar(value="help_en.md")
+        self.help_cb_lang = ttk.Combobox(header_frm, textvariable=self.help_lang, values=help_filenames, state="readonly", width=15)
+        self.help_cb_lang.pack(side="right")
         
         # Card
         card = ttk.Frame(view, style="Card.TFrame")
         card.pack(fill="both", expand=True, padx=16, pady=4)
         
-        # Text/Instructions Container
-        container = tk.Frame(card, bg="#ffffff", height=380)
+        # Markdown Container
+        container = tk.Frame(card, bg="#ffffff")
         container.pack(fill="both", expand=True, padx=16, pady=(0, 16))
-        container.pack_propagate(False)
         
-        txt_help = tk.Text(container, bg="#ffffff", fg="#1f2937", font="TkDefaultFont", wrap="word", relief="flat", height=15)
-        txt_help.config(state="disabled")
+        md_frame = HtmlFrame(container, messages_enabled=False)
+        md_frame.pack(fill="both", expand=True)
         
-        scrollbar = ttk.Scrollbar(container, orient="vertical", command=txt_help.yview)
-        txt_help.configure(yscrollcommand=scrollbar.set)
-        scrollbar.pack(side="right", fill="y")
-        txt_help.pack(side="left", fill="both", expand=True)
+        MD_EXTENSIONS = ["extra", "codehilite", "toc", "sane_lists", "pymdownx.magiclink", "pymdownx.betterem"]
         
         def load_help_file(*args):
-            script_dir = os.path.dirname(os.path.abspath(__file__))
-            file_name = help_lang.get()
+            file_name = self.help_lang.get()
             file_path = os.path.join(script_dir, file_name)
-            content = ""
+            body = ""
             if os.path.exists(file_path):
                 try:
                     with open(file_path, "r", encoding="utf-8") as f:
-                        content = f.read()
+                        body = f.read()
                 except Exception as e:
-                    content = f"Error loading {file_name}:\n{e}"
+                    body = f"Error loading {file_name}:\n{e}"
             else:
-                content = f"{file_name} file not found."
-            txt_help.config(state="normal")
-            txt_help.delete("1.0", "end")
-            txt_help.insert("1.0", content)
-            txt_help.config(state="disabled")
+                body = f"{file_name} file not found."
+            html = markdown.markdown(body, extensions=MD_EXTENSIONS)
+            styled_html = f"""<!DOCTYPE html><html><head><meta charset="utf-8"><style>
+body {{ font-family: system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif; font-size: 11pt; color: #1f2937; line-height: 1.6; padding: 8px; }}
+h1 {{ font-size: 18pt; color: #059669; border-bottom: 2px solid #059669; padding-bottom: 4px; margin-top: 20px; }}
+h2 {{ font-size: 14pt; color: #047857; margin-top: 16px; }}
+h3 {{ font-size: 12pt; color: #065f46; margin-top: 12px; }}
+h4 {{ font-size: 11pt; color: #065f46; }}
+code {{ background: #f3f4f6; padding: 1px 4px; border-radius: 3px; font-size: 10pt; }}
+pre {{ background: #f3f4f6; padding: 8px; border-radius: 4px; overflow-x: auto; }}
+pre code {{ background: none; padding: 0; }}
+blockquote {{ border-left: 4px solid #059669; padding: 4px 12px; margin: 8px 0; color: #4b5563; background: #f0fdfa; }}
+table {{ border-collapse: collapse; width: 100%; margin: 8px 0; }}
+th, td {{ border: 1px solid #d1d5db; padding: 4px 8px; text-align: left; }}
+th {{ background: #e5e7eb; font-weight: bold; color: #1f2937; }}
+tr:nth-child(even) {{ background: #f9fafb; }}
+ul, ol {{ margin: 4px 0; padding-left: 24px; }}
+li {{ margin: 2px 0; }}
+strong {{ color: #111827; }}
+a {{ color: #059669; text-decoration: none; }}
+a:hover {{ text-decoration: underline; }}
+</style></head><body>{html}</body></html>"""
+            md_frame.load_html(styled_html)
         
-        help_lang.trace_add("write", load_help_file)
+        self.help_lang.trace_add("write", load_help_file)
         load_help_file()
         
         return view
+
+    def refresh_help_view(self):
+        script_dir = os.path.dirname(os.path.abspath(__file__))
+        help_files = sorted(glob.glob(os.path.join(script_dir, "help_*.md")))
+        help_filenames = [os.path.basename(f) for f in help_files]
+        if "help_en.md" not in help_filenames:
+            help_filenames.append("help_en.md")
+        current = self.help_lang.get()
+        self.help_cb_lang.config(values=help_filenames)
+        if current not in help_filenames:
+            self.help_lang.set("help_en.md")
 
     def create_about_view(self):
         view = ttk.Frame(self.content_frame)

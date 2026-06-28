@@ -15,6 +15,7 @@ dependencies = [
     "openpyxl",
     "opencv-python",
     "numpy",
+    "tkintermd>=0.0.6",
 ]
 
 
