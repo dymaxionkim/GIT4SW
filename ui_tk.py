@@ -1120,6 +1120,53 @@ def queue_during_bg_tasks(method):
     return wrapper
 
 
+class ExitUploadDialog(tk.Toplevel):
+    """Dialog shown when closing the app with unsaved Modified files."""
+    def __init__(self, parent, modified_count):
+        super().__init__(parent)
+        self.title("Upload Changes")
+        self.geometry("440x190")
+        self.resizable(False, False)
+        self.configure(bg="#f3f4f6")
+        self.transient(parent)
+        self.grab_set()
+
+        self.result = None  # "upload" or "dont_upload"
+
+        lbl = ttk.Label(
+            self,
+            text=f"There are {modified_count} modified file(s) in the repository.\n\n"
+                 "Would you like to upload them before exiting?",
+            wraplength=400, justify="left", style="TLabel"
+        )
+        lbl.pack(padx=16, pady=16, fill="x")
+
+        btn_frm = ttk.Frame(self, style="TFrame")
+        btn_frm.pack(padx=16, pady=16, fill="x")
+
+        btn_upload = ttk.Button(btn_frm, text="Upload", style="Primary.TButton", command=self.on_upload)
+        btn_upload.pack(side="right", padx=(8, 0))
+
+        btn_dont = ttk.Button(btn_frm, text="Don't Upload", command=self.on_dont_upload)
+        btn_dont.pack(side="right")
+
+        # Center relative to parent
+        self.update_idletasks()
+        x = parent.winfo_rootx() + (parent.winfo_width() - self.winfo_width()) // 2
+        y = parent.winfo_rooty() + (parent.winfo_height() - self.winfo_height()) // 2
+        self.geometry(f"+{x}+{y}")
+
+        self.protocol("WM_DELETE_WINDOW", self.on_dont_upload)
+
+    def on_upload(self):
+        self.result = "upload"
+        self.destroy()
+
+    def on_dont_upload(self):
+        self.result = "dont_upload"
+        self.destroy()
+
+
 class GIT4SWApp(tk.Tk):
     def __init__(self, workspace_path, config_path="config.json"):
         super().__init__()
@@ -1168,6 +1215,10 @@ class GIT4SWApp(tk.Tk):
         # Track open files and locked files by us in SolidWorks for auto Lock/Unlock
         self.last_open_files = set()
         self.files_locked_by_us = set()
+        # Files locked via the "Lock" button (manual lock) are tracked separately so that
+        # the periodic monitor can distinguish them from phantom locks (auto-locks from a
+        # previous session or failed auto-unlocks) and avoid auto-unlocking them.
+        self.files_manually_locked_by_us = set()
         # While EXPORT/BOM subprocesses are running, suppress the background monitor's
         # automatic LFS Lock attempts.
         # (EXPORT/BOM runners open files in ReadOnly mode, so Lock is unnecessary, and
@@ -1185,6 +1236,10 @@ class GIT4SWApp(tk.Tk):
         
         # Trigger Auto Sync after UI load
         self.after(500, self.trigger_auto_sync_if_enabled)
+        
+        # Intercept window close (X button) to check for unsaved changes
+        self.is_closing = False
+        self.protocol("WM_DELETE_WINDOW", self.on_close)
         
     def setup_styles(self):
         style = ttk.Style(self)
@@ -3159,6 +3214,9 @@ a:hover {{ text-decoration: underline; }}
                             except Exception as chmod_e:
                                 print(f"Failed to clear read-only on locked file '{abs_path}': {chmod_e}")
                         success_count += 1
+                        # Track as manually locked so the periodic monitor does NOT
+                        # auto-unlock it when the file is closed in SolidWorks.
+                        self.files_manually_locked_by_us.add(file_rel_path.lower().replace("\\", "/"))
                     else:
                         errors.append(f"Failed to lock {file_rel_path}: {message}")
                 
@@ -3228,14 +3286,20 @@ a:hover {{ text-decoration: underline; }}
                                 except Exception as chmod_e:
                                     print(f"Failed to set read-only on unlocked file '{abs_path}': {chmod_e}")
                             success_count += 1
-                            # Clean up our tracking set
+                            # Clean up our tracking sets
+                            rel_path_lower = file_rel_path.lower().replace("\\", "/")
                             matched_path = None
                             for f in self.files_locked_by_us:
-                                if f.lower() == file_rel_path.lower():
+                                if f.lower() == rel_path_lower:
                                     matched_path = f
                                     break
                             if matched_path:
                                 self.files_locked_by_us.remove(matched_path)
+                            # Remove from manual lock tracking set as well
+                            for f in self.files_manually_locked_by_us:
+                                if f.lower() == rel_path_lower:
+                                    self.files_manually_locked_by_us.discard(f)
+                                    break
                         else:
                             errors.append(f"Failed to unlock {file_rel_path}: {message}")
                 
@@ -3295,6 +3359,19 @@ a:hover {{ text-decoration: underline; }}
                             except Exception as chmod_e:
                                 print(f"Failed to set read-only on force unlocked file '{abs_path}': {chmod_e}")
                         success_count += 1
+                        # Clean up both tracking sets
+                        rel_path_lower = file_rel_path.lower().replace("\\", "/")
+                        matched_path = None
+                        for f in self.files_locked_by_us:
+                            if f.lower() == rel_path_lower:
+                                matched_path = f
+                                break
+                        if matched_path:
+                            self.files_locked_by_us.remove(matched_path)
+                        for f in self.files_manually_locked_by_us:
+                            if f.lower() == rel_path_lower:
+                                self.files_manually_locked_by_us.discard(f)
+                                break
                     else:
                         errors.append(f"Failed to force unlock {file_rel_path}: {message}")
                 
@@ -3495,6 +3572,17 @@ a:hover {{ text-decoration: underline; }}
                                 break
                         if matched_lock_path and locks[matched_lock_path]['is_ours']:
                             self.git_service.unlock_file(matched_lock_path)
+                            # Clean up both tracking sets so the monitor does not
+                            # treat the file as still locked-by-us.
+                            rel_path_lower = file_rel_path.lower().replace("\\", "/")
+                            for f in list(self.files_locked_by_us):
+                                if f.lower() == rel_path_lower:
+                                    self.files_locked_by_us.discard(f)
+                                    break
+                            for f in list(self.files_manually_locked_by_us):
+                                if f.lower() == rel_path_lower:
+                                    self.files_manually_locked_by_us.discard(f)
+                                    break
                     except Exception:
                         pass
                         
@@ -3728,6 +3816,16 @@ a:hover {{ text-decoration: underline; }}
                                 break
                         if matched_lock_path and locks[matched_lock_path]['is_ours']:
                             self.git_service.unlock_file(matched_lock_path)
+                            # Clean up both tracking sets
+                            rel_path_lower = file_rel_path.lower().replace("\\", "/")
+                            for f in list(self.files_locked_by_us):
+                                if f.lower() == rel_path_lower:
+                                    self.files_locked_by_us.discard(f)
+                                    break
+                            for f in list(self.files_manually_locked_by_us):
+                                if f.lower() == rel_path_lower:
+                                    self.files_manually_locked_by_us.discard(f)
+                                    break
                     except Exception:
                         pass
                 
@@ -6687,18 +6785,23 @@ finally:
                 for file_rel_path in files_to_discard:
                     rel_path_lower = file_rel_path.lower().replace("\\", "/")
                     is_locked_by_us = any(f.lower() == rel_path_lower for f in self.files_locked_by_us)
-                    if is_locked_by_us:
+                    is_manually_locked = any(f.lower() == rel_path_lower for f in self.files_manually_locked_by_us)
+                    if is_locked_by_us or is_manually_locked:
                         try:
                             self.git_service.unlock_file(file_rel_path)
                             
-                            # Clean up tracking set
+                            # Clean up both tracking sets
                             matched = None
                             for f in self.files_locked_by_us:
                                 if f.lower() == rel_path_lower:
                                     matched = f
                                     break
                             if matched:
-                                self.files_locked_by_us.remove(matched)
+                                self.files_locked_by_us.discard(matched)
+                            for f in self.files_manually_locked_by_us:
+                                if f.lower() == rel_path_lower:
+                                    self.files_manually_locked_by_us.discard(f)
+                                    break
                             
                             # Set disk to read-only after unlock
                             abs_path = os.path.abspath(os.path.join(self.workspace_path, file_rel_path))
@@ -6965,6 +7068,9 @@ finally:
 
     def _monitor_sw_loop(self):
         """Runs in a background thread to poll SolidWorks active files without blocking UI thread."""
+        # Initialize counter so the very first cycle always fetches locks
+        # (cleans up phantom locks from a previous session immediately on startup).
+        lock_fetch_counter = 10
         while self.sw_monitor_active:
             try:
                 open_docs = self.sw_service.get_all_open_documents()
@@ -6985,15 +7091,44 @@ finally:
                 curr_open_lower = {f.lower() for f in current_open_files}
                 last_open_lower = {f.lower() for f in self.last_open_files}
 
-                # 2. Fetch locks only when the set of open files actually changes
+                # 2. Fetch locks:
+                #    - Always when the set of open files changes (for auto-lock/unlock decisions)
+                #    - Periodically (every ~30s) for reconciliation and phantom lock cleanup
+                lock_fetch_counter += 1
+                should_fetch_locks = (curr_open_lower != last_open_lower) or (lock_fetch_counter >= 10)
+                if should_fetch_locks:
+                    lock_fetch_counter = 0
                 locks = {}
-                if curr_open_lower != last_open_lower:
+                if should_fetch_locks:
                     try:
                         locks = self.git_service.get_lfs_locks()
                     except Exception as e:
                         print(f"Error fetching LFS locks: {e}")
                 
                 locks_lower = {k.lower().replace("\\", "/"): v for k, v in locks.items()}
+                
+                # 2a. Reconcile files_locked_by_us with server state:
+                #     Remove entries for locks that no longer exist on the server
+                #     (were unlocked from another machine, force-unlocked by another user, etc.)
+                if locks:
+                    stale_in_auto = []
+                    for f in self.files_locked_by_us:
+                        f_lower = f.lower().replace("\\", "/")
+                        if f_lower not in locks_lower:
+                            stale_in_auto.append(f)
+                        elif not locks_lower[f_lower].get('is_ours'):
+                            stale_in_auto.append(f)
+                    for f in stale_in_auto:
+                        self.files_locked_by_us.discard(f)
+                    stale_in_manual = []
+                    for f in self.files_manually_locked_by_us:
+                        f_lower = f.lower().replace("\\", "/")
+                        if f_lower not in locks_lower:
+                            stale_in_manual.append(f)
+                        elif not locks_lower[f_lower].get('is_ours'):
+                            stale_in_manual.append(f)
+                    for f in stale_in_manual:
+                        self.files_manually_locked_by_us.discard(f)
                 
                 # 3. Detect newly opened files -> collect for batch auto-lock
                 files_to_auto_lock = []
@@ -7062,6 +7197,54 @@ finally:
                             else:
                                 auto_unlock_map[rel_path] = matched_path
 
+                # 4b. Retry failed auto-unlocks and clean up phantom locks.
+                #     A "phantom lock" is a lock that is ours on the server but:
+                #       - the file is NOT currently open in SolidWorks, AND
+                #       - it is NOT in files_locked_by_us (auto-lock tracking set), AND
+                #       - it is NOT in files_manually_locked_by_us (manual lock tracking set)
+                #     This happens when:
+                #       - A previous auto-unlock failed silently
+                #       - The app was restarted (tracking sets are in-memory)
+                #       - SolidWorks crashed while files were open
+                #     We also retry auto-unlock for files in files_locked_by_us that are
+                #     no longer open but were not picked up by step 4 (e.g., they were
+                #     never in last_open_files because the app just started).
+                if locks:
+                    curr_open_lower_check = {f.lower().replace("\\", "/") for f in current_open_files}
+                    for lock_path_lower, lock_info in locks_lower.items():
+                        if not lock_info.get('is_ours'):
+                            continue
+                        # Skip files that are currently open in SolidWorks
+                        if lock_path_lower in curr_open_lower_check:
+                            continue
+                        # Skip files that were manually locked via the Lock button
+                        is_manual = any(f.lower().replace("\\", "/") == lock_path_lower for f in self.files_manually_locked_by_us)
+                        if is_manual:
+                            continue
+                        # Skip files already queued for unlock in step 4
+                        already_queued = any(k.lower() == lock_path_lower for k in auto_unlock_map)
+                        if already_queued:
+                            continue
+                        # Check if this file is in our auto-lock tracking set
+                        in_auto_set = any(f.lower().replace("\\", "/") == lock_path_lower for f in self.files_locked_by_us)
+                        if in_auto_set:
+                            # Auto-locked file that is no longer open but wasn't caught by
+                            # step 4 (e.g., app just started, last_open_files was empty).
+                            # Retry the unlock.
+                            matched = None
+                            for f in self.files_locked_by_us:
+                                if f.lower().replace("\\", "/") == lock_path_lower:
+                                    matched = f
+                                    break
+                            if matched:
+                                auto_unlock_map[lock_path_lower] = matched
+                        else:
+                            # Phantom lock: locked by us on server, not open, not in any
+                            # tracking set. Add to auto-unlock map and tracking set so it
+                            # gets removed after unlock.
+                            auto_unlock_map[lock_path_lower] = lock_path_lower
+                            self.files_locked_by_us.add(lock_path_lower)
+
                 # 5. Batch auto-lock in a single thread
                 if files_to_auto_lock:
                     def batch_auto_lock():
@@ -7090,10 +7273,19 @@ finally:
                             results = self.git_service.batch_unlock_files(list(auto_unlock_map.keys()), max_workers=5)
                             for path, success, msg in results:
                                 if success:
-                                    if path in auto_unlock_map:
-                                        remove_target = auto_unlock_map[path]
-                                        if remove_target in self.files_locked_by_us:
-                                            self.files_locked_by_us.remove(remove_target)
+                                    # Find matching entry in auto_unlock_map (case-insensitive,
+                                    # because phantom lock keys are lowercased but batch_unlock_files
+                                    # returns corrected-casing paths)
+                                    remove_target = None
+                                    for k, v in auto_unlock_map.items():
+                                        if k.lower() == path.lower():
+                                            remove_target = v
+                                            break
+                                    if remove_target:
+                                        for f in list(self.files_locked_by_us):
+                                            if f.lower() == remove_target.lower():
+                                                self.files_locked_by_us.discard(f)
+                                                break
                                     self.task_queue.put(('sw_status', f"Automatically unlocked {path}", None))
                                 else:
                                     self.task_queue.put(('silent_error', f"Auto-unlock failed for {path}: {msg}", None))
@@ -7157,8 +7349,10 @@ finally:
                 }
                 
                 # Update status label
-                # If the set of open files changed (comparing normalized sets case-insensitively), trigger refresh
-                if curr_open_lower != last_open_lower:
+                # Trigger refresh when:
+                #   - The set of open files changed (comparing normalized sets case-insensitively)
+                #   - Locks were fetched this cycle (periodic lock reconciliation may have changed lock state)
+                if curr_open_lower != last_open_lower or should_fetch_locks:
                     if self.bg_tasks_count == 0:
                         self.task_queue.put(('sw_status', status_data, self.refresh_file_list))
                     else:
@@ -7175,6 +7369,185 @@ finally:
             # Dynamic polling interval: 3.0 seconds if SolidWorks is running, 6.0 seconds if not.
             poll_interval = 3.0 if (self.sw_service._get_sw_app() is not None) else 6.0
             threading.Event().wait(poll_interval)
+
+    def on_close(self):
+        """Handle window close (X button) — offer to upload Modified files before exiting."""
+        if getattr(self, 'is_closing', False):
+            return
+        self.is_closing = True
+
+        # Check if this is a Git repository
+        if not self.git_service.is_git_repo():
+            self.destroy()
+            return
+
+        # Count Modified/New files from cached files_data
+        modified_count = 0
+        if getattr(self, 'files_data', None):
+            for f in self.files_data:
+                if f.get('status') in ('modified', 'untracked'):
+                    modified_count += 1
+
+        if modified_count == 0:
+            self.destroy()
+            return
+
+        # There are Modified files — show the upload confirmation dialog
+        self.is_closing = False
+        dialog = ExitUploadDialog(self, modified_count)
+        self.wait_window(dialog)
+
+        if dialog.result == "upload":
+            self.is_closing = True
+            self._force_upload_on_exit()
+        else:
+            self.is_closing = True
+            self.destroy()
+
+    def _force_upload_on_exit(self):
+        """Upload all changes with a forced commit message, then close the app."""
+        def run():
+            self.increment_tasks()
+            try:
+                # 1. Get all changed files via git status --porcelain
+                all_changed = []
+                try:
+                    status_out = self.git_service._run_lfs_cmd(["git", "-c", "core.quotepath=false", "status", "--porcelain", "-u"])
+                    for line in status_out.splitlines():
+                        if len(line) >= 3:
+                            filepath = line[3:].strip().replace("\\", "/")
+                            if "\t" in filepath:
+                                filepath = filepath.split("\t")[0].replace("\\", "/")
+                            if filepath.startswith('"') and filepath.endswith('"'):
+                                filepath = filepath[1:-1]
+                                try:
+                                    import codecs
+                                    b, _ = codecs.escape_decode(bytes(filepath, "utf-8"))
+                                    filepath = b.decode("utf-8").replace("\\", "/")
+                                except Exception:
+                                    pass
+                            all_changed.append(filepath)
+                except Exception as e:
+                    print(f"Failed to get repository status on exit: {e}")
+
+                if not all_changed:
+                    self.task_queue.put(('callback', None, self.destroy))
+                    return
+
+                # 2. Exclude files currently open in SolidWorks
+                try:
+                    open_docs = self.sw_service.get_all_open_documents()
+                except Exception:
+                    open_docs = []
+
+                repo_path_norm = os.path.abspath(self.workspace_path).replace("\\", "/")
+                current_open_files = set()
+                for doc in open_docs:
+                    filepath = doc['path']
+                    if filepath:
+                        filepath_norm = os.path.abspath(filepath).replace("\\", "/")
+                        if filepath_norm.lower().startswith(repo_path_norm.lower()):
+                            rel_path = filepath_norm[len(repo_path_norm):].strip("/")
+                            if rel_path:
+                                current_open_files.add(rel_path.lower())
+
+                files_to_stage = [f for f in all_changed if f.lower() not in current_open_files]
+                if not files_to_stage:
+                    print("All changed files are open in SolidWorks. Skipping upload on exit.")
+                    self.task_queue.put(('callback', None, self.destroy))
+                    return
+
+                # 3. Exclude files locked by others
+                try:
+                    locks = self.git_service.get_lfs_locks()
+                    locks_lower = {k.lower(): v for k, v in locks.items()}
+                    locked_by_others = [f for f in files_to_stage if f.lower() in locks_lower and not locks_lower[f.lower()]['is_ours']]
+                    if locked_by_others:
+                        files_to_stage = [f for f in files_to_stage if f not in locked_by_others]
+                except Exception:
+                    pass
+
+                if not files_to_stage:
+                    print("No files to upload on exit (all locked by others or open in SolidWorks).")
+                    self.task_queue.put(('callback', None, self.destroy))
+                    return
+
+                # 4. Stage files
+                for chunk in [files_to_stage[i:i+100] for i in range(0, len(files_to_stage), 100)]:
+                    self.git_service._run_lfs_cmd(["git", "add"] + chunk)
+
+                # 5. Commit with forced message
+                import git
+                name = "SolidWorks Designer"
+                email = "designer@example.com"
+                try:
+                    reader = self.git_service.repo.config_reader()
+                    name = reader.get_value("user", "name", default="SolidWorks Designer")
+                    email = reader.get_value("user", "email", default="designer@example.com")
+                except Exception:
+                    pass
+                author = git.Actor(name, email)
+
+                try:
+                    import git.exc
+                    try:
+                        self.git_service.repo.index.commit("Forced commit when GIT4SW exit", author=author, committer=author)
+                    except git.exc.HookExecutionError as e:
+                        if "post-commit" not in str(e):
+                            raise
+                except Exception as e:
+                    print(f"Failed to commit on exit: {e}")
+                    self.task_queue.put(('callback', None, self.destroy))
+                    return
+
+                # 6. Pull --rebase and push (best effort)
+                remote_url = self.git_service.get_remote_url()
+                branch = self.git_service.get_current_branch()
+
+                if remote_url and branch:
+                    try:
+                        self.git_service._run_lfs_cmd(["git", "pull", "origin", branch, "--rebase"])
+                        self.git_service._run_lfs_cmd(["git", "push", "origin", branch])
+                    except Exception as e:
+                        print(f"Failed to sync on exit: {e}")
+                        # Rollback the local commit so the repo is not left in a half-pushed state
+                        try:
+                            self.git_service._run_lfs_cmd(["git", "reset", "--soft", "HEAD~1"])
+                        except Exception:
+                            pass
+
+                # 7. Auto-unlock SW files that were ours
+                sw_committed = [f for f in files_to_stage if os.path.splitext(f)[1].lower() in ('.sldprt', '.sldasm', '.slddrw')]
+                for file_rel_path in sw_committed:
+                    try:
+                        locks = self.git_service.get_lfs_locks()
+                        matched_lock_path = None
+                        for l_path in locks:
+                            if l_path.lower() == file_rel_path.lower():
+                                matched_lock_path = l_path
+                                break
+                        if matched_lock_path and locks[matched_lock_path]['is_ours']:
+                            self.git_service.unlock_file(matched_lock_path)
+                            rel_path_lower = file_rel_path.lower().replace("\\", "/")
+                            for f in list(self.files_locked_by_us):
+                                if f.lower() == rel_path_lower:
+                                    self.files_locked_by_us.discard(f)
+                                    break
+                            for f in list(self.files_manually_locked_by_us):
+                                if f.lower() == rel_path_lower:
+                                    self.files_manually_locked_by_us.discard(f)
+                                    break
+                    except Exception:
+                        pass
+
+                self.task_queue.put(('callback', None, self.destroy))
+            except Exception as e:
+                print(f"Error during forced upload on exit: {e}")
+                self.task_queue.put(('callback', None, self.destroy))
+            finally:
+                self.decrement_tasks()
+
+        threading.Thread(target=run, daemon=True).start()
 
     def destroy(self):
         self.sw_monitor_active = False
