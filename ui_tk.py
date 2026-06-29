@@ -1236,11 +1236,158 @@ class GIT4SWApp(tk.Tk):
         
         # Trigger Auto Sync after UI load
         self.after(500, self.trigger_auto_sync_if_enabled)
-        
+
+        # Check for GIT4SW self-updates in the background (non-blocking)
+        self.update_check_done = False
+        self.after(1000, self._start_update_check)
+
         # Intercept window close (X button) to check for unsaved changes
         self.is_closing = False
         self.protocol("WM_DELETE_WINDOW", self.on_close)
-        
+
+    def _start_update_check(self):
+        """Start a background thread that checks the GIT4SW self-repository for updates."""
+        if self.update_check_done:
+            return
+        self.update_check_done = True
+        t = threading.Thread(target=self._update_check_worker, daemon=True)
+        t.start()
+
+    def _update_check_worker(self):
+        """Background worker: fetch from origin and compare HEAD vs upstream."""
+        try:
+            script_dir = os.path.dirname(os.path.abspath(__file__))
+
+            fetch = subprocess.run(
+                ["git", "fetch", "origin", "--quiet"],
+                cwd=script_dir, capture_output=True, timeout=30
+            )
+            if fetch.returncode != 0:
+                print(f"[Update check] git fetch failed (offline or network error).")
+                return
+
+            # Count commits that remote has but local doesn't (behind count)
+            behind = subprocess.run(
+                ["git", "rev-list", "--count", "HEAD..@{u}"],
+                cwd=script_dir, capture_output=True, text=True, timeout=10
+            )
+            if behind.returncode != 0:
+                print(f"[Update check] Could not determine local/remote HEAD.")
+                return
+
+            try:
+                behind_count = int(behind.stdout.strip())
+            except ValueError:
+                print(f"[Update check] Could not parse behind count.")
+                return
+
+            # Only prompt when local is behind remote (remote has newer commits)
+            if behind_count <= 0:
+                return
+
+            # Update available: show the dialog on the UI thread
+            self.task_queue.put(('callback', None, self._show_update_dialog))
+        except subprocess.TimeoutExpired:
+            print(f"[Update check] Timed out while contacting remote repository.")
+        except Exception as e:
+            print(f"[Update check] Error: {e}")
+
+    def _show_update_dialog(self):
+        """Show the update-available popup (runs on UI thread)."""
+        if self.is_closing:
+            return
+
+        dialog = tk.Toplevel(self)
+        dialog.title("Update Available")
+        dialog.geometry("420x170")
+        dialog.resizable(False, False)
+        dialog.transient(self)
+        dialog.update_idletasks()
+        x = (dialog.winfo_screenwidth() - 420) // 2
+        y = (dialog.winfo_screenheight() - 170) // 2
+        dialog.geometry(f"+{x}+{y}")
+
+        tk.Label(
+            dialog,
+            text="GIT4SW has been updated.\nWould you like to upgrade?",
+            font=("TkDefaultFont", 11),
+            pady=20
+        ).pack()
+
+        def on_upgrade():
+            dialog.destroy()
+            self._perform_upgrade()
+
+        def on_no():
+            dialog.destroy()
+
+        btn_frame = tk.Frame(dialog)
+        btn_frame.pack(pady=10)
+
+        tk.Button(
+            btn_frame, text="Upgrade", width=12,
+            command=on_upgrade,
+            bg="#059669", fg="white",
+            font=("TkDefaultFont", 10, "bold")
+        ).pack(side="left", padx=10)
+
+        tk.Button(
+            btn_frame, text="No", width=12,
+            command=on_no,
+            font=("TkDefaultFont", 10)
+        ).pack(side="left", padx=10)
+
+        dialog.protocol("WM_DELETE_WINDOW", on_no)
+        dialog.grab_set()
+
+    def _perform_upgrade(self):
+        """Run git pull in a background thread, then restart the app."""
+        script_dir = os.path.dirname(os.path.abspath(__file__))
+
+        def worker():
+            try:
+                pull = subprocess.run(
+                    ["git", "pull", "origin"],
+                    cwd=script_dir, capture_output=True, text=True, timeout=120
+                )
+                if pull.returncode != 0:
+                    err = (pull.stderr or pull.stdout or "").strip()
+                    print(f"[Update check] git pull failed:\n{err}")
+                    self.task_queue.put(('callback', None, lambda: messagebox.showerror(
+                        "Update Failed",
+                        f"Failed to update GIT4SW:\n{err}"
+                    )))
+                    return
+                print(f"[Update check] Upgrade successful. Restarting...")
+                self.task_queue.put(('callback', None, self._restart_app))
+            except subprocess.TimeoutExpired:
+                print(f"[Update check] git pull timed out.")
+                self.task_queue.put(('callback', None, lambda: messagebox.showerror(
+                    "Update Failed", "git pull timed out."
+                )))
+            except Exception as e:
+                print(f"[Update check] Upgrade error: {e}")
+                self.task_queue.put(('callback', None, lambda: messagebox.showerror(
+                    "Update Failed", f"Failed to update GIT4SW:\n{e}"
+                )))
+
+        t = threading.Thread(target=worker, daemon=True)
+        t.start()
+
+    def _restart_app(self):
+        """Restart the GIT4SW program with the same arguments."""
+        if self.is_closing:
+            return
+        script_dir = os.path.dirname(os.path.abspath(__file__))
+        main_py = os.path.join(script_dir, "main.py")
+        try:
+            subprocess.Popen([sys.executable, main_py] + sys.argv[1:], cwd=script_dir)
+        except Exception as e:
+            print(f"[Update check] Failed to restart: {e}")
+            return
+        self.is_closing = True
+        self.destroy()
+
     def setup_styles(self):
         style = ttk.Style(self)
         style.theme_use("clam")

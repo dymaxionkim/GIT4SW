@@ -28,5 +28,5 @@ GIT4SW is an agentic CAD version control desktop client developed specifically f
 
 ## Acknowledgement
 * Core Engine: GitPython, Git CLI & Git LFS, Solidworks & eDrawings
-* Developed using Google Antigravity-IDE.
+* Developed using Google Antigravity-IDE (Gemini 3.5 Flash), Opencode Go (GLM-5.2, Deepseek V4 Flash), My Personal Ollama (qwen3.6-27b, gemma4-26b, and etc.).
 * License: GNU GPLv3
