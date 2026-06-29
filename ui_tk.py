@@ -1310,7 +1310,6 @@ class GIT4SWApp(tk.Tk):
         tk.Label(
             dialog,
             text="GIT4SW has been updated.\nWould you like to upgrade?",
-            font=("TkDefaultFont", 11),
             pady=20
         ).pack()
 
@@ -1327,14 +1326,12 @@ class GIT4SWApp(tk.Tk):
         tk.Button(
             btn_frame, text="Upgrade", width=12,
             command=on_upgrade,
-            bg="#059669", fg="white",
-            font=("TkDefaultFont", 10, "bold")
+            bg="#059669", fg="white"
         ).pack(side="left", padx=10)
 
         tk.Button(
             btn_frame, text="No", width=12,
-            command=on_no,
-            font=("TkDefaultFont", 10)
+            command=on_no
         ).pack(side="left", padx=10)
 
         dialog.protocol("WM_DELETE_WINDOW", on_no)
