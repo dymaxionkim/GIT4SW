@@ -18,3 +18,4 @@ GIT4SW_*.bat
 README_files
 README.html
 .backup/
+.codegraph/
