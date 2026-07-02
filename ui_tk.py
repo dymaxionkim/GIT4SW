@@ -3241,6 +3241,7 @@ a:hover {{ text-decoration: underline; }}
         has_locked = False
         has_unlocked = False
         has_modified = False
+        has_new = False
 
         for item in self.tree.get_children():
             values = self.tree.item(item, 'values')
@@ -3254,10 +3255,12 @@ a:hover {{ text-decoration: underline; }}
             else:
                 has_unlocked = True
 
-            # Status column (index 1): if it contains "Modified" it is Modified
+            # Status column (index 1): "Modified" or "New File"
             status_val = values[1] if len(values) > 1 else ""
             if status_val and "Modified" in str(status_val):
                 has_modified = True
+            if status_val and "New File" in str(status_val):
+                has_new = True
 
         # Unlock / Force Unlock: enabled only when there are Locked files
         if has_locked:
@@ -3273,13 +3276,17 @@ a:hover {{ text-decoration: underline; }}
         else:
             self.btn_lock.state(["disabled"])
 
-        # Discard / Upload Selected / Upload Every: enabled only when there are Modified files
+        # Discard: enabled only when there are Modified files
         if has_modified:
             self.btn_discard.state(["!disabled"])
+        else:
+            self.btn_discard.state(["disabled"])
+
+        # Upload Selected / Upload Every: enabled when there are Modified or New files
+        if has_modified or has_new:
             self.btn_save_ver.state(["!disabled"])
             self.btn_save_all.state(["!disabled"])
         else:
-            self.btn_discard.state(["disabled"])
             self.btn_save_ver.state(["disabled"])
             self.btn_save_all.state(["disabled"])
 
@@ -4247,9 +4254,9 @@ a:hover {{ text-decoration: underline; }}
                 if not repo:
                     raise RuntimeError("Not a git repository.")
                 
-                # Fetch first
+                # Fetch first (via _run_lfs_cmd so credential injection / git_helper.py apply)
                 self.write_log("Fetching latest branches from remote origin...", "info")
-                repo.remotes.origin.fetch()
+                self.git_service._run_lfs_cmd(["git", "fetch", "origin"])
                 
                 # Collect all remote branch names
                 remote_branches = []
