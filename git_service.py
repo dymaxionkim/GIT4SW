@@ -287,7 +287,10 @@ def run_git_subprocess(cmd_args, cwd, check=True):
     config = {}
 
     if args and os.path.basename(args[0]).lower() in ("git", "git.exe"):
-        network_cmds = {"fetch", "pull", "push", "clone", "ls-remote", "lock", "unlock", "locks"}
+        network_cmds = {
+            "fetch", "pull", "push", "clone", "ls-remote", "lock", "unlock", "locks",
+            "checkout", "merge", "reset", "checkout-index", "switch", "restore"
+        }
         if any(cmd in args for cmd in network_cmds):
             try:
                 optimize_credentials_for_path(cwd)
@@ -387,7 +390,10 @@ if __name__ == '__main__':
             env["GIT4SW_GIT_HOSTS"] = ",".join(sorted(git_hosts))
             
             if args and os.path.basename(args[0]).lower() in ("git", "git.exe"):
-                network_cmds = {"fetch", "pull", "push", "clone", "ls-remote", "lock", "unlock", "locks"}
+                network_cmds = {
+                    "fetch", "pull", "push", "clone", "ls-remote", "lock", "unlock", "locks",
+                    "checkout", "merge", "reset", "checkout-index", "switch", "restore"
+                }
                 if any(cmd in args for cmd in network_cmds):
                     script_dir = os.path.dirname(os.path.abspath(__file__))
                     helper_path = os.path.join(script_dir, "git_helper.py").replace("\\", "/")

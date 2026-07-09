@@ -4290,7 +4290,7 @@ a:hover {{ text-decoration: underline; }}
                 # Sequentially checkout other branches and fetch+merge origin/b
                 for b in other_branches:
                     self.write_log(f"Checking out and updating branch '{b}'...", "info")
-                    repo.git.checkout(b)
+                    self.git_service._run_lfs_cmd(["git", "checkout", b])
                     
                     # Fetch remote then merge, always using merge strategy with -Xtheirs
                     try:
@@ -4318,7 +4318,7 @@ a:hover {{ text-decoration: underline; }}
                 
                 # Switch to default branch and fetch+merge origin/<main_branch>
                 self.write_log(f"Switching to {main_branch} branch and updating from origin/{main_branch}...", "info")
-                repo.git.checkout(main_branch)
+                self.git_service._run_lfs_cmd(["git", "checkout", main_branch])
                 try:
                     self.git_service._run_lfs_cmd(["git", "fetch", "origin", main_branch])
                     self.git_service._run_lfs_cmd(["git", "merge", f"origin/{main_branch}", "--no-edit", "-Xtheirs"])
