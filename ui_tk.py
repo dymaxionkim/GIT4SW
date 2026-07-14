@@ -3172,6 +3172,7 @@ a:hover {{ text-decoration: underline; }}
             status_weights = {
                 'untracked': 0,   # "New File"
                 'modified': 1,    # "Modified"
+                'deleted': 1.5,   # "Deleted"
                 'unmodified': 2   # "Unmodified"
             }
             filtered_files.sort(key=lambda f: (status_weights.get(f['status'], 9), f['file'].lower()))
@@ -3195,6 +3196,7 @@ a:hover {{ text-decoration: underline; }}
             status_map = {
                 'modified': '🟢 Modified',
                 'untracked': '🔵 New File',
+                'deleted': '🔴 Deleted',
                 'unmodified': '⚪ Unmodified'
             }
             status_text = status_map.get(file_info['status'], file_info['status'])
@@ -3219,15 +3221,15 @@ a:hover {{ text-decoration: underline; }}
             
             if file_info['file'] in selected_paths:
                 self.tree.selection_add(new_item)
-
+ 
         # Update the selected count label
         if hasattr(self, 'lbl_selected_count'):
             count = len(self.tree.selection())
             self.lbl_selected_count.config(text=f"Selected files: {count}")
-
+ 
         # Enable/disable buttons based on file list status
         self.update_button_states_by_file_list()
-
+ 
     def update_button_states_by_file_list(self):
         """Enable/disable buttons based on the Locked/Status column states in the table.
         Not called while background tasks are running or when not in a Git repository."""
@@ -3235,33 +3237,36 @@ a:hover {{ text-decoration: underline; }}
             return
         if not self.git_service.is_git_repo():
             return
-
+ 
         # Determine state by reading directly from table columns
         # Column order: 0=File Path, 1=Status, 2=SolidWorks, 3=Locked
         has_locked = False
         has_unlocked = False
         has_modified = False
         has_new = False
-
+        has_deleted = False
+ 
         for item in self.tree.get_children():
             values = self.tree.item(item, 'values')
             if not values:
                 continue
-
+ 
             # Locked column (index 3): "—" or empty means Unlocked; a value means Locked
             locked_val = values[3] if len(values) > 3 else ""
             if locked_val and str(locked_val).strip() not in ("", "—", "-"):
                 has_locked = True
             else:
                 has_unlocked = True
-
-            # Status column (index 1): "Modified" or "New File"
+ 
+            # Status column (index 1): "Modified", "New File" or "Deleted"
             status_val = values[1] if len(values) > 1 else ""
             if status_val and "Modified" in str(status_val):
                 has_modified = True
             if status_val and "New File" in str(status_val):
                 has_new = True
-
+            if status_val and "Deleted" in str(status_val):
+                has_deleted = True
+ 
         # Unlock / Force Unlock: enabled only when there are Locked files
         if has_locked:
             self.btn_unlock.state(["!disabled"])
@@ -3269,21 +3274,21 @@ a:hover {{ text-decoration: underline; }}
         else:
             self.btn_unlock.state(["disabled"])
             self.btn_force_unlock.state(["disabled"])
-
+ 
         # Lock: enabled only when there are Unlocked files
         if has_unlocked:
             self.btn_lock.state(["!disabled"])
         else:
             self.btn_lock.state(["disabled"])
-
+ 
         # Discard: enabled only when there are Modified files
         if has_modified:
             self.btn_discard.state(["!disabled"])
         else:
             self.btn_discard.state(["disabled"])
-
-        # Upload Selected / Upload Every: enabled when there are Modified or New files
-        if has_modified or has_new:
+ 
+        # Upload Selected / Upload Every: enabled when there are Modified, New or Deleted files
+        if has_modified or has_new or has_deleted:
             self.btn_save_ver.state(["!disabled"])
             self.btn_save_all.state(["!disabled"])
         else:
@@ -3633,9 +3638,21 @@ a:hover {{ text-decoration: underline; }}
                     rel_paths.append(rel_path)
                 
                 try:
-                    self.git_service._run_lfs_cmd(["git", "add"] + rel_paths)
+                    files_to_add = []
+                    files_to_rm = []
+                    for f in rel_paths:
+                        abs_f = os.path.join(self.workspace_path, f)
+                        if os.path.exists(abs_f):
+                            files_to_add.append(f)
+                        else:
+                            files_to_rm.append(f)
+                            
+                    if files_to_add:
+                        self.git_service._run_lfs_cmd(["git", "add"] + files_to_add)
+                    if files_to_rm:
+                        self.git_service._run_lfs_cmd(["git", "rm", "--ignore-unmatch"] + files_to_rm)
                 except Exception as e:
-                    raise RuntimeError(f"Failed to add files to index: {e}")
+                    raise RuntimeError(f"Failed to stage/remove files in index: {e}")
                 
                 # Commit locally first
                 name = "SolidWorks Designer"
@@ -3874,8 +3891,21 @@ a:hover {{ text-decoration: underline; }}
                 
                 # 1. Stage the files
                 self.write_log("Staging changes via Git CLI...", "info")
-                for chunk in [files_to_stage[i:i+100] for i in range(0, len(files_to_stage), 100)]:
-                    self.git_service._run_lfs_cmd(["git", "add"] + chunk)
+                files_to_add = []
+                files_to_rm = []
+                for f in files_to_stage:
+                    abs_f = os.path.join(self.workspace_path, f)
+                    if os.path.exists(abs_f):
+                        files_to_add.append(f)
+                    else:
+                        files_to_rm.append(f)
+                
+                if files_to_add:
+                    for chunk in [files_to_add[i:i+100] for i in range(0, len(files_to_add), 100)]:
+                        self.git_service._run_lfs_cmd(["git", "add"] + chunk)
+                if files_to_rm:
+                    for chunk in [files_to_rm[i:i+100] for i in range(0, len(files_to_rm), 100)]:
+                        self.git_service._run_lfs_cmd(["git", "rm", "--ignore-unmatch"] + chunk)
                 
                 # Get signature details from repo config or default
                 name = "SolidWorks Designer"
@@ -7532,11 +7562,11 @@ finally:
             self.destroy()
             return
 
-        # Count Modified/New files from cached files_data
+        # Count Modified/New/Deleted files from cached files_data
         modified_count = 0
         if getattr(self, 'files_data', None):
             for f in self.files_data:
-                if f.get('status') in ('modified', 'untracked'):
+                if f.get('status') in ('modified', 'untracked', 'deleted'):
                     modified_count += 1
 
         if modified_count == 0:
@@ -7624,8 +7654,21 @@ finally:
                     return
 
                 # 4. Stage files
-                for chunk in [files_to_stage[i:i+100] for i in range(0, len(files_to_stage), 100)]:
-                    self.git_service._run_lfs_cmd(["git", "add"] + chunk)
+                files_to_add = []
+                files_to_rm = []
+                for f in files_to_stage:
+                    abs_f = os.path.join(self.workspace_path, f)
+                    if os.path.exists(abs_f):
+                        files_to_add.append(f)
+                    else:
+                        files_to_rm.append(f)
+                
+                if files_to_add:
+                    for chunk in [files_to_add[i:i+100] for i in range(0, len(files_to_add), 100)]:
+                        self.git_service._run_lfs_cmd(["git", "add"] + chunk)
+                if files_to_rm:
+                    for chunk in [files_to_rm[i:i+100] for i in range(0, len(files_to_rm), 100)]:
+                        self.git_service._run_lfs_cmd(["git", "rm", "--ignore-unmatch"] + chunk)
 
                 # 5. Commit with forced message
                 import git

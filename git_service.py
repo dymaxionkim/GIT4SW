@@ -781,13 +781,17 @@ class GitService:
                     is_unmerged = status_code in {'DD', 'AA', 'UU', 'AU', 'UD', 'UA', 'DU'}
                     if is_unmerged:
                         is_new = False
+                        is_deleted = False
                         is_mod = True
                     else:
                         is_new = "?" in status_code or status_code.startswith("A")
-                        is_mod = any(c in status_code for c in "MDRTC") and not status_code.startswith("A")
+                        is_deleted = "D" in status_code
+                        is_mod = any(c in status_code for c in "MRTC") and not status_code.startswith("A") and not is_deleted
                     
                     if is_new:
                         changed_files[filepath] = "untracked"
+                    elif is_deleted:
+                        changed_files[filepath] = "deleted"
                     elif is_mod:
                         changed_files[filepath] = "modified"
         except Exception:
@@ -816,13 +820,14 @@ class GitService:
                     if rel_path.lower() in ignored_files:
                         continue
                     
+                    status_desc = 'unmodified'
+                    for c_path, c_status in changed_files.items():
+                        if c_path.lower() == rel_path.lower():
+                            status_desc = c_status
+                            break
+                            
                     full_path = os.path.join(self.repo_path, rel_path)
-                    if os.path.exists(full_path):
-                        status_desc = 'unmodified'
-                        for c_path, c_status in changed_files.items():
-                            if c_path.lower() == rel_path.lower():
-                                status_desc = c_status
-                                break
+                    if os.path.exists(full_path) or status_desc == 'deleted':
                         
                         # Case-insensitive lookup in locks
                         lock_info = None
@@ -1040,9 +1045,21 @@ class GitService:
             rel_paths.append(rel_path)
             
         try:
-            self._run_lfs_cmd(["git", "add"] + rel_paths)
+            files_to_add = []
+            files_to_rm = []
+            for fp in rel_paths:
+                abs_path = os.path.join(self.repo_path, fp)
+                if os.path.exists(abs_path):
+                    files_to_add.append(fp)
+                else:
+                    files_to_rm.append(fp)
+            
+            if files_to_add:
+                self._run_lfs_cmd(["git", "add"] + files_to_add)
+            if files_to_rm:
+                self._run_lfs_cmd(["git", "rm", "--ignore-unmatch"] + files_to_rm)
         except Exception as e:
-            raise RuntimeError(f"Failed to add files to index: {e}")
+            raise RuntimeError(f"Failed to stage/remove files: {e}")
             
         try:
             name = "SolidWorks Designer"
