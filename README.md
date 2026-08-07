@@ -24,6 +24,7 @@
 * **Branch Management**: "Make my branch" auto-creates a personal remote branch. "Merge all branches into main" bulk-merges with Ours/Theirs conflict resolution.
 * **Sequential Task Queue**: Background operations queue automatically; Terminate button force-kills stuck Git processes.
 * **Auto Sync**: Fetches and merges on startup/repo change; skips if already up-to-date.
+* **Auto Backup Conflicts**: On merge/pull conflicts, conflicted files are automatically copied to `.backup/` as `_OURS`/`_THEIRS` copies before the resolution dialog. Can be toggled ON/OFF via the Dashboard checkbox or the `auto_backup_conflicts` config key (default ON).
 * **Conflict Resolution**: Multi-file selection dialog with auto-backup to `.backup/`. Handles LFS pointer errors.
 * **EXPORT (Bulk Conversion)**: Convert `.sldprt`/`.sldasm`/`.slddrw` to PDF, DXF, STEP (AP214 color). Multiple formats per run. Watchdog (180s) kills and restarts hung SolidWorks automatically. Per-file progress counting, not per-configuration.
 * **BOM Extraction**: Recursively traverse assemblies to generate hierarchical BOM Tree and flat Partlist as Excel (`.xlsx`). Excludes suppressed and BOM-excluded components. Configuration selector for multi-config assemblies.
@@ -102,6 +103,8 @@ Details and examples for each configuration item are as follows:
   - *Example*: `mech-higenmotor`
 * **Auto Sync**: A Boolean setting variable that determines whether to sequentially execute "Get Latest Version (Sync)" and "Merge main branch" tasks upon program startup or upon completion of repository switching, cloning, or new creation. This is controlled by the Auto Sync checkbox on the Dashboard and is excluded from the manual editing list in the Config screen.
   - *Example*: `true` or `false`
+* **Auto Backup Conflicts**: A Boolean setting variable that determines whether, when a merge/pull conflict occurs, the conflicted files are automatically copied to the `.backup/` directory as `_OURS`/`_THEIRS` suffixed files before the conflict resolution dialog appears. This is controlled by the Auto Backup Conflicts checkbox on the Dashboard and is excluded from the manual editing list in the Config screen.
+  - *Example*: `true` or `false`
 
 ### 4.2 Basic Workflow
 
@@ -172,6 +175,9 @@ Details and examples for each configuration item are as follows:
 * If you accidentally chose to resolve a conflict by selecting "Theirs" (Remote Version) and lost your local changes, you can retrieve them from the `.backup/` folder in your workspace root.
 * All original conflicted local files are copied here before the conflict prompt is shown. The files are named using the pattern `[filename]_[YYYYMMDD_HHMMSS].[ext]`.
 * Simply copy the backup file back to its original location and rename it to restore your work.
+
+> [!NOTE]
+> This automatic backup is performed only while the **Auto Backup Conflicts** checkbox on the Dashboard (config key `auto_backup_conflicts`) is set to ON (default).
 
 #### 4.4.3 SOLIDWORKS CAM Add-in Popup Appearing During EXPORT
 

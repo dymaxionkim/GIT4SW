@@ -1208,6 +1208,7 @@ class GIT4SWApp(tk.Tk):
         # Stored auto sync configuration
         config_data = self.load_config_data()
         self.auto_sync_var = tk.BooleanVar(value=config_data.get("auto_sync", False))
+        self.auto_backup_conflicts_var = tk.BooleanVar(value=config_data.get("auto_backup_conflicts", True))
         
         self.setup_styles()
         self.init_ui()
@@ -1997,7 +1998,7 @@ class GIT4SWApp(tk.Tk):
         ]
         
         for k in config_data.keys():
-            if k not in ("workspace_path", "auto_sync", "imagemagick_path") and k not in keys_order:
+            if k not in ("workspace_path", "auto_sync", "auto_backup_conflicts", "imagemagick_path") and k not in keys_order:
                 keys_order.append(k)
         
         find_targets = {
@@ -2485,6 +2486,24 @@ a:hover {{ text-decoration: underline; }}
             padx=10
         )
         self.chk_auto_sync.pack(side="left", padx=(12, 0))
+
+        self.chk_auto_backup_conflicts = tk.Checkbutton(
+            sync_btn_frm,
+            text="Auto Backup Conflicts",
+            variable=self.auto_backup_conflicts_var,
+            command=self.on_auto_backup_conflicts_changed,
+            bg="#ffffff",
+            fg="#1f2937",
+            selectcolor="#ffffff",
+            activebackground="#ffffff",
+            activeforeground="#1f2937",
+            highlightbackground="#ffffff",
+            highlightcolor="#ffffff",
+            font=("TkDefaultFont", 9, "bold"),
+            bd=0,
+            padx=10
+        )
+        self.chk_auto_backup_conflicts.pack(side="left", padx=(12, 0))
 
         self.btn_cleanup_lfs = ttk.Button(sync_btn_frm, text="Cleanup LFS Cache", command=self.show_lfs_cleanup_wizard, width=18)
         self.btn_cleanup_lfs.pack(side="right")
@@ -4230,7 +4249,8 @@ a:hover {{ text-decoration: underline; }}
                 self.write_log(f"⚠️ Failed to backup THEIRS for {f_rel}: {e_theirs}", "warning")
 
     def prompt_multi_conflict_resolution(self, conflicted_files, ours_branch=None, theirs_branch=None, is_pull=False):
-        self.backup_conflicted_files(conflicted_files, theirs_ref=theirs_branch)
+        if self.auto_backup_conflicts_var.get():
+            self.backup_conflicted_files(conflicted_files, theirs_ref=theirs_branch)
         res_queue = queue.Queue()
         def ask():
             dialog = MultiConflictResolutionDialog(self, conflicted_files, ours_branch, theirs_branch, is_pull)
@@ -5303,6 +5323,24 @@ a:hover {{ text-decoration: underline; }}
             self.write_log(f"Auto Sync set to {'ON' if val else 'OFF'}", "info")
         except Exception as e:
             self.write_log(f"Failed to save auto sync state: {e}", "error")
+
+    def on_auto_backup_conflicts_changed(self):
+        val = self.auto_backup_conflicts_var.get()
+        config_path = self.config_path
+        config_data = {}
+        if os.path.exists(config_path):
+            try:
+                with open(config_path, "r", encoding="utf-8") as f:
+                    config_data = json.load(f)
+            except Exception:
+                pass
+        config_data["auto_backup_conflicts"] = val
+        try:
+            with open(config_path, "w", encoding="utf-8") as f:
+                json.dump(config_data, f, indent=4, ensure_ascii=False)
+            self.write_log(f"Auto Backup Conflicts set to {'ON' if val else 'OFF'}", "info")
+        except Exception as e:
+            self.write_log(f"Failed to save auto backup conflicts state: {e}", "error")
 
     def trigger_auto_sync_if_enabled(self):
         if not self.auto_sync_var.get():

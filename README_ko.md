@@ -24,6 +24,7 @@
 * **브랜치 관리**: "Make my branch"로 개인 원격 브랜치 자동 생성. "Merge all branches into main"으로 일괄 병합 및 충돌 해결(Ours/Theirs).
 * **순차 작업 큐**: 백그라운드 작업은 자동 큐잉; Terminate 버튼으로 멈춘 Git 프로세스 강제 종료.
 * **자동 동기화 (Auto Sync)**: 시작/저장소 변경 시 자동 fetch 및 병합; 이미 최신이면 생략.
+* **충돌 자동 백업 (Auto Backup Conflicts)**: 병합/풀 충돌 시 충돌 해결 팝업 전에 충돌 파일을 `.backup/`에 `_OURS`/`_THEIRS` 복사본으로 자동 백업합니다. 대시보드 체크박스 또는 `auto_backup_conflicts` 설정 키(기본 ON)로 On/Off 전환 가능.
 * **충돌 해결**: 다중 파일 선택 대화상자, 충돌 파일 자동 `.backup/` 백업. LFS 포인터 오류 처리.
 * **EXPORT (일괄 변환)**: `.sldprt`/`.sldasm`/`.slddrw` → PDF, DXF, STEP(AP214 컬러). 다중 포맷 동시 선택. Watchdog(180초)가 멈춘 SolidWorks 자동 재시작. 파일 기준(설정 기준 아님) 진행률.
 * **BOM 추출**: 어셈블리 재귀 탐색 → 계층 BOM Tree + 납작 Partlist를 Excel(`.xlsx`)로 저장. 억제/BOM 제외 부품 필터링. 다중 설정 선택 지원.
@@ -103,6 +104,8 @@ uv run main.py --config config_codeberg.json
   - *예*: `mech-higenmotor`
 * **Auto Sync**: 프로그램 구동 시 또는 저장소 스위칭/클론/신규 생성 작업 완료 시 자동으로 원격 동기화(Get Latest Version) 및 메인 브랜치 병합(Merge main branch)을 순차 실행할지 여부를 결정하는 Boolean 설정 변수입니다. 대시보드의 Auto Sync 체크박스로 제어되며 Config 화면의 수동 편집 목록에서는 제외됩니다.
   - *예*: `true` 또는 `false`
+* **Auto Backup Conflicts**: 병합(Merge)/풀(Pull) 중 충돌이 발생했을 때, 충돌 해결 다이얼로그가 표시되기 직전에 충돌 파일들을 `.backup/` 디렉토리에 `_OURS`/`_THEIRS` 접미사 파일로 자동 백업할지 여부를 결정하는 Boolean 설정 변수입니다. 대시보드의 Auto Backup Conflicts 체크박스로 제어되며 Config 화면의 수동 편집 목록에서는 제외됩니다.
+  - *예*: `true` 또는 `false`
 
 
 ### 4.2 기본 작업 워크플로우
@@ -175,6 +178,9 @@ uv run main.py --config config_codeberg.json
 * 충돌 해결 단계에서 실수로 "Theirs"(원격 서버 버전)를 선택하여 작업 내용을 덮어썼더라도, 워크스페이스 루트의 `.backup/` 폴더에서 이전의 원본 작업 데이터를 찾을 수 있습니다.
 * 충돌 팝업이 뜨기 직전에 충돌이 감지된 모든 파일이 `[파일명]_[YYYYMMDD_HHMMSS].[확장자]` 형태의 타임스탬프 파일명으로 복사 저장됩니다.
 * 복구하려면 해당 백업 파일을 원래 위치로 복사하고 파일명에서 타임스탬프 부분을 지워주면 됩니다.
+
+> [!NOTE]
+> 이 자동 백업은 대시보드의 **Auto Backup Conflicts** 체크박스(설정 키 `auto_backup_conflicts`)가 ON(기본값)일 때만 수행됩니다.
 
 #### 4.4.3 EXPORT 실행 중 SOLIDWORKS CAM 애드인 팝업이 나타나는 경우
 

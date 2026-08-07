@@ -40,6 +40,8 @@ gantt
     GetDocumentDependencies2 기반 고속 최상위 어셈블리 탐색 :active, milestone14, 2026-06-24, 2026-06-24
     section Git 서버 추상화
     다중 Git 제공자 및 설정 파일 경로 지정 :active, milestone15, 2026-06-25, 2026-06-25
+    section 충돌 백업 설정화
+    충돌 자동 백업 On/Off 설정 기능 추가 :active, milestone17, 2026-08-07, 2026-08-07
 ```
 
 ---
@@ -306,6 +308,7 @@ gantt
 | **설정 파일 경로 지정** | `config.json` 고정 (`git_service.py`의 `__file__` 기준) | `--config` CLI 인자로 사용자 설정 파일 경로 지정 가능 | 다중 설정 파일 관리 (예: `config_github.json`, `config_codeberg.json`) |
 | **실행 방식** | `uv run main.py` (uv가 가상환경 자동 관리) | `.venv\Scripts\pythonw.exe main.py --config config.json` (직접 실행) | uv 의존성 제거, 이중 실행 방지, 콘솔 창 미표시 |
 | **Help 모드 다국어 지원** | help.txt 단일 파일 고정 | help_en.txt / help_ko.txt 선택 콤보박스, 영어 원문 병기 | 언어 전환 즉시 반영, 한국어 사용자 접근성 향상 |
+| **충돌 자동 백업** | 병합/풀 중 충돌 발생 시 무조건 `.backup/`에 `_OURS`/`_THEIRS` 자동 백업 | `auto_backup_conflicts` 설정 키(기본 ON)와 대시보드 **Auto Backup Conflicts** 체크박스로 자동 백업 On/Off 제어 | 원치 않는 불필요한 백업 파일 생성을 방지, 사용자 선택에 따른 설정 영구 지속 |
 
 ---
 
@@ -324,6 +327,20 @@ gantt
 
 ---
 
+
+### 17단계: 충돌 자동 백업 설정화 — `auto_backup_conflicts` config 및 대시보드 토글 (Milestone 17 - 2026-08-07)
+* **충돌 자동 백업 On/Off 설정 도입**:
+  - 기존에는 병합(Merge) 및 풀(Pull) 중 충돌이 발생하면 `.backup/` 폴더에 `_OURS`/`_THEIRS` 접미사 파일로 무조건 자동 백업했으나, 이를 사용자 선택에 따라 켜고 끌 수 있도록 `auto_backup_conflicts` 설정 키를 신설했습니다.
+  - `config.json` 및 `config.json.template`에 `auto_backup_conflicts` 항목(기본값 `true`)을 추가하여, 설정 파일에서도 직접 On/Off 제어가 가능합니다.
+* **대시보드 토글 체크박스 추가**:
+  - 대시보드의 동기화(Synchronization) 카드에 **Auto Backup Conflicts** 체크박스를 추가했습니다.
+  - Auto Sync 체크박스와 동일한 패턴으로, 토글 시 `config.json`에 즉시 저장(영구 지속)되고 로그 패널에 ON/OFF 상태가 출력됩니다.
+  - Config 화면의 수동 편집 목록에서는 제외됩니다 (Auto Sync와 동일).
+* **백업 실행 조건부 처리**:
+  - `prompt_multi_conflict_resolution`에서 체크박스가 OFF일 경우 `backup_conflicted_files` 호출을 건너뛰고 충돌 해결 대화상자만 표시합니다.
+  - ON 상태에서만 기존과 동일하게 stage 2(ours)/stage 3(theirs) 기준 `_OURS`/`_THEIRS` 백업이 수행됩니다.
+
+---
 
 1. **동기화 시 충돌 파일 시각적 차이 비교 (CAD Diff)**: eDrawings 뷰어 등을 활용하여 충돌이 발생한 로컬 도면과 원격 도면의 썸네일을 좌우로 배치해 변경 이력을 한눈에 대조해 볼 수 있는 시각화 인터페이스 제공안 고려 권장.
 2. **다중 사용자 LFS Locks 시각화 고도화**: 현재 Locks 정보는 텍스트 리스트 형태로 표시되나, 네트워크 토폴로지 맵 또는 디자이너 프로필과 매칭하여 동시 협업 중인 파일 간의 종속성을 시각적으로 경고해 주는 협업 뷰 제공 검토 권장.
