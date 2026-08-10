@@ -6803,22 +6803,29 @@ finally:
                     file_rel = os.path.relpath(abs_file_path, self.git_service.repo_path).replace('\\', '/').lower()
                     
                     is_ours = False
+                    is_locked = False
                     if not self.git_service.is_git_repo():
                         is_ours = True
                     else:
                         if file_rel in locks_lower:
                             is_ours = locks_lower[file_rel].get('is_ours', False)
+                            is_locked = is_ours
                         else:
-                            # Try to lock it
-                            try:
-                                self.write_log(f"Attempting to lock '{os.path.basename(file)}'...", "info")
-                                self.git_service.lock_file(file)
+                            # Try to lock it (only when Auto Lock is enabled)
+                            if self.auto_lock_var.get():
+                                try:
+                                    self.write_log(f"Attempting to lock '{os.path.basename(file)}'...", "info")
+                                    self.git_service.lock_file(file)
+                                    is_ours = True
+                                    is_locked = True
+                                    locks_lower[file_rel] = {'is_ours': True, 'owner': 'me'}
+                                    self.write_log(f"Successfully locked '{os.path.basename(file)}'.", "success")
+                                except Exception as le:
+                                    self.write_log(f"Failed to lock '{os.path.basename(file)}' (will open as Read-Only): {le}", "warning")
+                                    is_ours = False
+                            else:
+                                # Auto Lock is OFF: open without acquiring an LFS lock
                                 is_ours = True
-                                locks_lower[file_rel] = {'is_ours': True, 'owner': 'me'}
-                                self.write_log(f"Successfully locked '{os.path.basename(file)}'.", "success")
-                            except Exception as le:
-                                self.write_log(f"Failed to lock '{os.path.basename(file)}' (will open as Read-Only): {le}", "warning")
-                                is_ours = False
                     
                     # Set appropriate permissions on disk and record target open options
                     if is_ours:
@@ -6831,7 +6838,8 @@ finally:
                         file_open_settings[abs_file_path] = {
                             # 1 = swOpenDocOptions_Silent
                             'options': 1,
-                            'is_ours': True
+                            'is_ours': True,
+                            'locked': is_locked
                         }
                     else:
                         try:
@@ -6843,7 +6851,8 @@ finally:
                         file_open_settings[abs_file_path] = {
                             # 1 = swOpenDocOptions_Silent, 2 = swOpenDocOptions_ReadOnly
                             'options': 1 | 2,
-                            'is_ours': False
+                            'is_ours': False,
+                            'locked': False
                         }
 
                 # 1. Try to connect to an existing SolidWorks instance
@@ -6869,9 +6878,10 @@ finally:
                             doc_type = 3
                             
                         try:
-                            settings = file_open_settings.get(abs_file_path, {'options': 1, 'is_ours': True})
+                            settings = file_open_settings.get(abs_file_path, {'options': 1, 'is_ours': True, 'locked': False})
                             open_opt = settings['options']
                             is_ours_lock = settings['is_ours']
+                            is_locked = settings.get('locked', False)
                             
                             # Open Doc
                             doc = sw_app.OpenDoc6(abs_file_path, doc_type, open_opt, "", errors_ref, warnings_ref)
@@ -6880,7 +6890,7 @@ finally:
                                     title = self.sw_service._call_com_method(doc, 'GetTitle')
                                     # Option: 2 = swUserDecision
                                     self.sw_service._call_com_method(sw_app, 'ActivateDoc3', title, True, 2, errors_ref)
-                                    if is_ours_lock:
+                                    if is_ours_lock and is_locked:
                                         # [Bug 2 fix] Store relative paths (lowercase) relative to the repo in
                                         # files_locked_by_us, not absolute paths, so that path comparison
                                         # with _monitor_sw_loop matches correctly and auto-unlock works.
@@ -6928,12 +6938,13 @@ finally:
                         import subprocess
                         for file in files:
                             abs_file_path = os.path.abspath(file)
-                            settings = file_open_settings.get(abs_file_path, {'options': 1, 'is_ours': True})
+                            settings = file_open_settings.get(abs_file_path, {'options': 1, 'is_ours': True, 'locked': False})
                             is_ours_lock = settings['is_ours']
+                            is_locked = settings.get('locked', False)
                             
                             try:
                                 subprocess.Popen([path, abs_file_path])
-                                if is_ours_lock:
+                                if is_ours_lock and is_locked:
                                     _rel = os.path.relpath(abs_file_path, self.git_service.repo_path).replace('\\', '/').lower()
                                     self.files_locked_by_us.add(_rel)
                             except Exception as e:
@@ -6944,12 +6955,13 @@ finally:
                         errors = []
                         for file in files:
                             abs_file_path = os.path.abspath(file)
-                            settings = file_open_settings.get(abs_file_path, {'options': 1, 'is_ours': True})
+                            settings = file_open_settings.get(abs_file_path, {'options': 1, 'is_ours': True, 'locked': False})
                             is_ours_lock = settings['is_ours']
+                            is_locked = settings.get('locked', False)
                             
                             try:
                                 os.startfile(abs_file_path)
-                                if is_ours_lock:
+                                if is_ours_lock and is_locked:
                                     _rel = os.path.relpath(abs_file_path, self.git_service.repo_path).replace('\\', '/').lower()
                                     self.files_locked_by_us.add(_rel)
                             except Exception as e:
