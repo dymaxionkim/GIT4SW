@@ -15,11 +15,12 @@ GitワークフローとGit LFSロックを統合し、3D CADモデルの同時�
 - **Active Branch** — 現在のブランチを表示するドロップダウン。別のブランチを選択するとチェックアウトします。
 - **Make my branch** — ユーザー名で個人開発者ブランチを作成・切り替え、`main`から分離して作業します。
 - **README.md** — README.mdをメモ帳で開きます。保存時に`git add`、`commit`、`push`が自動実行されます。ファイルがなければテンプレートから作成します。
-- **Get Latest Version (Sync)** — リモートの変更をpullします。競合検出時は（**Auto Backup Conflicts**がONの場合）`.backup/`に自動バックアップ後、解決します。最新状態の場合はスキップします。
-- **Merge main branch into current branch** — `main`を現在のブランチにマージ、コミット、プッシュ後、元のブランチに復帰します。マージ前に（**Auto Backup Conflicts**がONの場合）自動バックアップ。既存マージ済みの場合はスキップします。
+- **Get Latest Version (Sync)** — リモートの変更をpullします。競合検出時は（**Backup**がONの場合）`.backup/`に自動バックアップ後、解決します。最新状態の場合はスキップします。
+- **Merge main branch into current branch** — `main`を現在のブランチにマージ、コミット、プッシュ後、元のブランチに復帰します。マージ前に（**Backup**がONの場合）自動バックアップ。既存マージ済みの場合はスキップします。
 - **Cleanup LFS Cache** — 未使用の`.git/lfs/objects/`をスキャン・削除するウィザードを開き、ディスク容量を解放します。
-- **Auto Sync** — チェックボックス。ON時、起動またはワークスペース変更時に「同期」→「mainマージ」を自動実行します。
-- **Auto Backup Conflicts** — チェックボックス。ON時、マージ/pull中の競合発生時、競合解決ポップアップ表示前に競合ファイルを`.backup/`に`_OURS`/`_THEIRS`サフィックス付きコピーとして自動バックアップします。`config.json`の`auto_backup_conflicts`キーに保存されます。
+- **Sync** — チェックボックス。ON時、起動またはワークスペース変更時に「同期」→「mainマージ」を自動実行します。
+- **Backup** — チェックボックス。ON時、マージ/pull中の競合発生時、競合解決ポップアップ表示前に競合ファイルを`.backup/`に`_OURS`/`_THEIRS`サフィックス付きコピーとして自動バックアップします。`config.json`の`auto_backup_conflicts`キーに保存されます。
+- **Lock** — チェックボックス。ON時、SolidWorksでファイルが開かれると自動的にLFS Lockを取得し、閉じると解除します。アセンブリを開くとそのコンポーネントも自動ロックされます。手動のLock/Unlockボタンは常に機能します。`config.json`の`auto_lock`キーに保存されます。
 - **Live Monitor** — SolidWorks状態(Active/Inactive)、総ファイル数、開かれているファイル、ロック済みファイル、リポジトリサイズをリアルタイム表示します。
 
 ---
@@ -70,7 +71,7 @@ GitワークフローとGit LFSロックを統合し、3D CADモデルの同時�
 
 Git、SolidWorks、および統合に関するシステムパスを構成します。
 
-- **Path Configurations** — Git、Git LFS、SolidWorks、eDrawings、Git Token、サーバータイプ/URL、デフォルトディレクトリ、GitHub組織名のパス設定。各フィールドに「検索」ボタンがありCドライブをスキャン。`auto_sync`と`auto_backup_conflicts`はダッシュボードのチェックボックスで管理。
+- **Path Configurations** — Git、Git LFS、SolidWorks、eDrawings、Git Token、サーバータイプ/URL、デフォルトディレクトリ、GitHub組織名のパス設定。各フィールドに「検索」ボタンがありCドライブをスキャン。`auto_sync`と`auto_backup_conflicts`と`auto_lock`はダッシュボードのチェックボックスで管理。
 - **Save Configuration** — 設定を`config.json`に保存し、接続を再初期化します。
 - **Edit** — `config.json`をメモ帳で直接開き手動編集。
 

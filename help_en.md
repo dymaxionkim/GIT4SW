@@ -15,11 +15,12 @@ Central control panel for repository setup, sync, and real-time status.
 - **Active Branch** — Dropdown showing the current branch. Select another branch to check it out.
 - **Make my branch** — Creates & switches to a personal developer branch under your username, isolating work from `main`.
 - **README.md** — Opens the repo's README.md in Notepad. On save, auto runs `git add`, `commit`, `push`. Creates from template if missing.
-- **Get Latest Version (Sync)** — Pulls the latest remote changes. Detects merge conflicts and, if **Auto Backup Conflicts** is ON, auto-backups conflicted files to `.backup/` before resolving. Skips if already up-to-date.
-- **Merge main branch into current branch** — Merges `main` into your branch, commits, pushes, and switches back to your branch. Auto-backups local changes (if **Auto Backup Conflicts** is ON) before merging. Skips if already merged.
+- **Get Latest Version (Sync)** — Pulls the latest remote changes. Detects merge conflicts and, if **Backup** is ON, auto-backups conflicted files to `.backup/` before resolving. Skips if already up-to-date.
+- **Merge main branch into current branch** — Merges `main` into your branch, commits, pushes, and switches back to your branch. Auto-backups local changes (if **Backup** is ON) before merging. Skips if already merged.
 - **Cleanup LFS Cache** — Opens a wizard to scan & purge unused `.git/lfs/objects/` (excluding HEAD and HEAD~1), freeing disk space.
-- **Auto Sync** — Checkbox. When ON, auto-runs "Sync" then "Merge main" on startup or workspace change.
-- **Auto Backup Conflicts** — Checkbox. When ON, conflicted files are automatically copied to `.backup/` as `_OURS`/`_THEIRS` suffixed copies before the conflict resolution dialog appears (during merge/pull). Saved to the `auto_backup_conflicts` key in `config.json`.
+- **Sync** — Checkbox. When ON, auto-runs "Sync" then "Merge main" on startup or workspace change.
+- **Backup** — Checkbox. When ON, conflicted files are automatically copied to `.backup/` as `_OURS`/`_THEIRS` suffixed copies before the conflict resolution dialog appears (during merge/pull). Saved to the `auto_backup_conflicts` key in `config.json`.
+- **Lock** — Checkbox. When ON, files opened in SolidWorks are automatically LFS-locked on open and released on close, and assembly components are auto-locked when their parent assembly is opened. Manual Lock/Unlock buttons always work. Saved to the `auto_lock` key in `config.json`.
 - **Live Monitor** — Real-time panel showing: SolidWorks status (Active/Inactive), total tracked files, open files, locked files, and repository size.
 
 ---
@@ -70,7 +71,7 @@ For project administrators to oversee integration and initialize repositories.
 
 Configure system paths for Git, SolidWorks, and integrations.
 
-- **Path Configurations** — Set paths for Git, Git LFS, SolidWorks, eDrawings, Git Token, Git Server Type, Git Server URL, default local directory, and default GitHub org. Path fields have "Find" buttons to scan the C: drive. "Git Server Type" toggles the server URL field. `auto_sync` and `auto_backup_conflicts` are managed via the Dashboard checkboxes.
+- **Path Configurations** — Set paths for Git, Git LFS, SolidWorks, eDrawings, Git Token, Git Server Type, Git Server URL, default local directory, and default GitHub org. Path fields have "Find" buttons to scan the C: drive. "Git Server Type" toggles the server URL field. `auto_sync`, `auto_backup_conflicts`, and `auto_lock` are managed via the Dashboard checkboxes.
 - **Save Configuration** — Saves all values to `config.json` and re-initializes connections.
 - **Edit** — Opens `config.json` directly in Notepad for manual editing.
 

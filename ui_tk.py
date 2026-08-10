@@ -1209,6 +1209,7 @@ class GIT4SWApp(tk.Tk):
         config_data = self.load_config_data()
         self.auto_sync_var = tk.BooleanVar(value=config_data.get("auto_sync", False))
         self.auto_backup_conflicts_var = tk.BooleanVar(value=config_data.get("auto_backup_conflicts", True))
+        self.auto_lock_var = tk.BooleanVar(value=config_data.get("auto_lock", True))
         
         self.setup_styles()
         self.init_ui()
@@ -1998,7 +1999,7 @@ class GIT4SWApp(tk.Tk):
         ]
         
         for k in config_data.keys():
-            if k not in ("workspace_path", "auto_sync", "auto_backup_conflicts", "imagemagick_path") and k not in keys_order:
+            if k not in ("workspace_path", "auto_sync", "auto_backup_conflicts", "auto_lock", "imagemagick_path") and k not in keys_order:
                 keys_order.append(k)
         
         find_targets = {
@@ -2471,7 +2472,7 @@ a:hover {{ text-decoration: underline; }}
         
         self.chk_auto_sync = tk.Checkbutton(
             sync_btn_frm,
-            text="Auto Sync",
+            text="Sync",
             variable=self.auto_sync_var,
             command=self.on_auto_sync_changed,
             bg="#ffffff",
@@ -2489,7 +2490,7 @@ a:hover {{ text-decoration: underline; }}
 
         self.chk_auto_backup_conflicts = tk.Checkbutton(
             sync_btn_frm,
-            text="Auto Backup Conflicts",
+            text="Backup",
             variable=self.auto_backup_conflicts_var,
             command=self.on_auto_backup_conflicts_changed,
             bg="#ffffff",
@@ -2504,6 +2505,24 @@ a:hover {{ text-decoration: underline; }}
             padx=10
         )
         self.chk_auto_backup_conflicts.pack(side="left", padx=(12, 0))
+
+        self.chk_auto_lock = tk.Checkbutton(
+            sync_btn_frm,
+            text="Lock",
+            variable=self.auto_lock_var,
+            command=self.on_auto_lock_changed,
+            bg="#ffffff",
+            fg="#1f2937",
+            selectcolor="#ffffff",
+            activebackground="#ffffff",
+            activeforeground="#1f2937",
+            highlightbackground="#ffffff",
+            highlightcolor="#ffffff",
+            font=("TkDefaultFont", 9, "bold"),
+            bd=0,
+            padx=10
+        )
+        self.chk_auto_lock.pack(side="left", padx=(12, 0))
 
         self.btn_cleanup_lfs = ttk.Button(sync_btn_frm, text="Cleanup LFS Cache", command=self.show_lfs_cleanup_wizard, width=18)
         self.btn_cleanup_lfs.pack(side="right")
@@ -5342,6 +5361,24 @@ a:hover {{ text-decoration: underline; }}
         except Exception as e:
             self.write_log(f"Failed to save auto backup conflicts state: {e}", "error")
 
+    def on_auto_lock_changed(self):
+        val = self.auto_lock_var.get()
+        config_path = self.config_path
+        config_data = {}
+        if os.path.exists(config_path):
+            try:
+                with open(config_path, "r", encoding="utf-8") as f:
+                    config_data = json.load(f)
+            except Exception:
+                pass
+        config_data["auto_lock"] = val
+        try:
+            with open(config_path, "w", encoding="utf-8") as f:
+                json.dump(config_data, f, indent=4, ensure_ascii=False)
+            self.write_log(f"Auto Lock set to {'ON' if val else 'OFF'}", "info")
+        except Exception as e:
+            self.write_log(f"Failed to save auto lock state: {e}", "error")
+
     def trigger_auto_sync_if_enabled(self):
         if not self.auto_sync_var.get():
             return
@@ -6858,7 +6895,7 @@ finally:
                             self.task_queue.put(('error', f"Failed to open '{os.path.basename(file)}' in running SolidWorks: {e}", None))
                 
                     # Component auto-lock via COM: query SW for all open documents
-                    if has_asm:
+                    if has_asm and self.auto_lock_var.get():
                         import time
                         time.sleep(1)
                         try:
@@ -6925,7 +6962,7 @@ finally:
                             self.task_queue.put(('success', warn_msg, None))
                     
                     # Component auto-lock for new SW instance: delayed COM query
-                    if has_asm:
+                    if has_asm and self.auto_lock_var.get():
                         def _delayed_component_lock():
                             import time
                             for _ in range(15):
@@ -7378,7 +7415,7 @@ finally:
 
                         if not locked_by_others:
                             is_already_locked_by_us = any(x.lower() == rel_path_lower for x in self.files_locked_by_us)
-                            if not is_already_locked_by_us and not getattr(self, 'suppress_auto_lock', False):
+                            if not is_already_locked_by_us and not getattr(self, 'suppress_auto_lock', False) and self.auto_lock_var.get():
                                 files_to_auto_lock.append(rel_path)
 
                 # 4. Detect closed files -> collect for batch auto-unlock
@@ -7414,7 +7451,8 @@ finally:
                                 if matched_path in self.files_locked_by_us:
                                     self.files_locked_by_us.remove(matched_path)
                             else:
-                                auto_unlock_map[rel_path] = matched_path
+                                if self.auto_lock_var.get():
+                                    auto_unlock_map[rel_path] = matched_path
 
                 # 4b. Retry failed auto-unlocks and clean up phantom locks.
                 #     A "phantom lock" is a lock that is ours on the server but:
@@ -7428,7 +7466,7 @@ finally:
                 #     We also retry auto-unlock for files in files_locked_by_us that are
                 #     no longer open but were not picked up by step 4 (e.g., they were
                 #     never in last_open_files because the app just started).
-                if locks:
+                if locks and self.auto_lock_var.get():
                     curr_open_lower_check = {f.lower().replace("\\", "/") for f in current_open_files}
                     for lock_path_lower, lock_info in locks_lower.items():
                         if not lock_info.get('is_ours'):

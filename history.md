@@ -42,6 +42,8 @@ gantt
     다중 Git 제공자 및 설정 파일 경로 지정 :active, milestone15, 2026-06-25, 2026-06-25
     section 충돌 백업 설정화
     충돌 자동 백업 On/Off 설정 기능 추가 :active, milestone17, 2026-08-07, 2026-08-07
+    section 자동 Lock 설정화
+    자동 Lock On/Off 설정 기능 추가 :active, milestone18, 2026-08-10, 2026-08-10
 ```
 
 ---
@@ -309,6 +311,7 @@ gantt
 | **실행 방식** | `uv run main.py` (uv가 가상환경 자동 관리) | `.venv\Scripts\pythonw.exe main.py --config config.json` (직접 실행) | uv 의존성 제거, 이중 실행 방지, 콘솔 창 미표시 |
 | **Help 모드 다국어 지원** | help.txt 단일 파일 고정 | help_en.txt / help_ko.txt 선택 콤보박스, 영어 원문 병기 | 언어 전환 즉시 반영, 한국어 사용자 접근성 향상 |
 | **충돌 자동 백업** | 병합/풀 중 충돌 발생 시 무조건 `.backup/`에 `_OURS`/`_THEIRS` 자동 백업 | `auto_backup_conflicts` 설정 키(기본 ON)와 대시보드 **Auto Backup Conflicts** 체크박스로 자동 백업 On/Off 제어 | 원치 않는 불필요한 백업 파일 생성을 방지, 사용자 선택에 따른 설정 영구 지속 |
+| **자동 Lock 설정화** | SolidWorks 오픈/클로즈 및 어셈블리 컴포넌트에 대해 무조건 자동 Lock/Unlock 수행 | `auto_lock` 설정 키(기본 ON)와 대시보드 **Lock** 체크박스로 자동 Lock/Unlock On/Off 제어 | 자동 Lock이 불필요한 환경에서 불필요한 LFS Lock 네트워크 호출 방지, 사용자 선택에 따른 설정 영구 지속 |
 
 ---
 
@@ -339,6 +342,21 @@ gantt
 * **백업 실행 조건부 처리**:
   - `prompt_multi_conflict_resolution`에서 체크박스가 OFF일 경우 `backup_conflicted_files` 호출을 건너뛰고 충돌 해결 대화상자만 표시합니다.
   - ON 상태에서만 기존과 동일하게 stage 2(ours)/stage 3(theirs) 기준 `_OURS`/`_THEIRS` 백업이 수행됩니다.
+
+---
+
+### 18단계: 자동 Lock 설정화 — `auto_lock` config 및 대시보드 토글 (Milestone 18 - 2026-08-10)
+* **자동 Lock On/Off 설정 도입**:
+  - 기존에는 SolidWorks에서 파일이 열리면 자동으로 LFS Lock을 획득하고 닫으면 해제했으며, 어셈블리를 열면 해당 컴포넌트들도 자동으로 잠갔습니다. 이를 사용자 선택에 따라 켜고 끌 수 있도록 `auto_lock` 설정 키를 신설했습니다.
+  - `config.json`, `config.json.template` 및 `config_gitea.json`에 `auto_lock` 항목(기본값 `true`)을 추가하여, 설정 파일에서도 직접 On/Off 제어가 가능합니다.
+* **대시보드 토글 체크박스 추가**:
+  - 대시보드의 동기화(Synchronization) 카드에 **Lock** 체크박스를 추가했습니다.
+  - Sync/Backup 체크박스와 동일한 패턴으로, 토글 시 `config.json`에 즉시 저장(영구 지속)되고 로그 패널에 ON/OFF 상태가 출력됩니다.
+  - Config 화면의 수동 편집 목록에서는 제외됩니다 (Sync/Backup과 동일).
+* **자동 Lock/Unlock 조건부 처리**:
+  - SolidWorks 모니터의 자동 Lock(새로 열린 파일) 및 자동 Unlock(닫힌 파일 / phantom lock 정리)을 체크박스 OFF 시 모두 건너뜁니다.
+  - 어셈블리 열기 시 컴포넌트 자동 Lock도 체크박스 OFF 시 건너뜁니다.
+  - 수동 Lock/Unlock 버튼은 항상 동작합니다.
 
 ---
 

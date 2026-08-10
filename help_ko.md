@@ -15,11 +15,12 @@ Git 워크플로우와 Git LFS 잠금을 통합하여 3D CAD 모델의 동시 �
 - **Active Branch** — 현재 브랜치를 표시하는 드롭다운. 다른 브랜치를 선택하면 체크아웃합니다.
 - **Make my branch** — 사용자 이름으로 개인 개발자 브랜치를 생성 및 전환하여 `main`과 작업을 분리합니다.
 - **README.md** — README.md를 메모장으로 엽니다. 저장 시 `git add`, `commit`, `push`가 자동 실행됩니다. 파일이 없으면 템플릿으로 생성합니다.
-- **Get Latest Version (Sync)** — 원격 변경사항을 pull합니다. 충돌 시 (**Auto Backup Conflicts** ON일 때) `.backup/`에 자동 백업 후 해결합니다. 최신 상태면 건너뜁니다.
-- **Merge main branch into current branch** — `main`을 현재 브랜치에 병합, 커밋, 푸시 후 원래 브랜치로 복귀합니다. 병합 전 (**Auto Backup Conflicts** ON일 때) 자동 백업하며, 이미 병합된 경우 건너뜁니다.
+- **Get Latest Version (Sync)** — 원격 변경사항을 pull합니다. 충돌 시 (**Backup** ON일 때) `.backup/`에 자동 백업 후 해결합니다. 최신 상태면 건너뜁니다.
+- **Merge main branch into current branch** — `main`을 현재 브랜치에 병합, 커밋, 푸시 후 원래 브랜치로 복귀합니다. 병합 전 (**Backup** ON일 때) 자동 백업하며, 이미 병합된 경우 건너뜁니다.
 - **Cleanup LFS Cache** — 사용하지 않는 `.git/lfs/objects/`를 스캔 및 삭제하는 위저드를 열어 디스크 공간을 확보합니다.
-- **Auto Sync** — 체크박스. ON이면 시작 또는 작업공간 변경 시 "동기화" 후 "main 병합"을 자동 실행합니다.
-- **Auto Backup Conflicts** — 체크박스. ON이면 병합/풀 중 충돌 발생 시 충돌 해결 팝업 전에 충돌 파일을 `.backup/`에 `_OURS`/`_THEIRS` 접미사 복사본으로 자동 백업합니다. `config.json`의 `auto_backup_conflicts` 키에 저장됩니다.
+- **Sync** — 체크박스. ON이면 시작 또는 작업공간 변경 시 "동기화" 후 "main 병합"을 자동 실행합니다.
+- **Backup** — 체크박스. ON이면 병합/풀 중 충돌 발생 시 충돌 해결 팝업 전에 충돌 파일을 `.backup/`에 `_OURS`/`_THEIRS` 접미사 복사본으로 자동 백업합니다. `config.json`의 `auto_backup_conflicts` 키에 저장됩니다.
+- **Lock** — 체크박스. ON이면 SolidWorks에서 파일이 열리면 자동으로 LFS Lock을 획득하고 닫으면 해제하며, 어셈블리를 열면 해당 컴포넌트들도 자동으로 잠급니다. 수동 Lock/Unlock 버튼은 항상 동작합니다. `config.json`의 `auto_lock` 키에 저장됩니다.
 - **Live Monitor** — SolidWorks 상태(Active/Inactive), 총 파일 수, 열린 파일, 잠긴 파일, 저장소 크기를 실시간 표시합니다.
 
 ---
@@ -70,7 +71,7 @@ Git 워크플로우와 Git LFS 잠금을 통합하여 3D CAD 모델의 동시 �
 
 Git, SolidWorks 및 통합 관련 시스템 경로를 구성합니다.
 
-- **Path Configurations** — Git, Git LFS, SolidWorks, eDrawings, Git Token, 서버 타입/URL, 기본 디렉토리, GitHub 조직명 경로 설정. 각 필드에 "찾기" 버튼이 있어 C 드라이브를 스캔합니다. `auto_sync`와 `auto_backup_conflicts`는 대시보드 체크박스로 관리됩니다.
+- **Path Configurations** — Git, Git LFS, SolidWorks, eDrawings, Git Token, 서버 타입/URL, 기본 디렉토리, GitHub 조직명 경로 설정. 각 필드에 "찾기" 버튼이 있어 C 드라이브를 스캔합니다. `auto_sync`, `auto_backup_conflicts`, `auto_lock`은 대시보드 체크박스로 관리됩니다.
 - **Save Configuration** — 설정을 `config.json`에 저장하고 연결을 재초기화합니다.
 - **Edit** — `config.json`을 메모장으로 직접 열어 수동 편집합니다.
 

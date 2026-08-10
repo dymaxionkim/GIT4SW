@@ -25,6 +25,7 @@
 * **Sequential Task Queue**: Background operations queue automatically; Terminate button force-kills stuck Git processes.
 * **Auto Sync**: Fetches and merges on startup/repo change; skips if already up-to-date.
 * **Auto Backup Conflicts**: On merge/pull conflicts, conflicted files are automatically copied to `.backup/` as `_OURS`/`_THEIRS` copies before the resolution dialog. Can be toggled ON/OFF via the Dashboard checkbox or the `auto_backup_conflicts` config key (default ON).
+* **Auto Lock**: Files opened in SolidWorks are automatically LFS-locked on open and released on close; assembly components are also auto-locked when their parent assembly is opened. Can be toggled ON/OFF via the Dashboard checkbox or the `auto_lock` config key (default ON). The manual Lock/Unlock buttons always work.
 * **Conflict Resolution**: Multi-file selection dialog with auto-backup to `.backup/`. Handles LFS pointer errors.
 * **EXPORT (Bulk Conversion)**: Convert `.sldprt`/`.sldasm`/`.slddrw` to PDF, DXF, STEP (AP214 color). Multiple formats per run. Watchdog (180s) kills and restarts hung SolidWorks automatically. Per-file progress counting, not per-configuration.
 * **BOM Extraction**: Recursively traverse assemblies to generate hierarchical BOM Tree and flat Partlist as Excel (`.xlsx`). Excludes suppressed and BOM-excluded components. Configuration selector for multi-config assemblies.
@@ -101,9 +102,11 @@ Details and examples for each configuration item are as follows:
   - *Example*: `C:\Users\dhkima\github`
 * **Organization Name**: The name of the GitHub Organization target for automatically opening new private repositories in Administrator mode.
   - *Example*: `mech-higenmotor`
-* **Auto Sync**: A Boolean setting variable that determines whether to sequentially execute "Get Latest Version (Sync)" and "Merge main branch" tasks upon program startup or upon completion of repository switching, cloning, or new creation. This is controlled by the Auto Sync checkbox on the Dashboard and is excluded from the manual editing list in the Config screen.
+* **Auto Sync**: A Boolean setting variable that determines whether to sequentially execute "Get Latest Version (Sync)" and "Merge main branch" tasks upon program startup or upon completion of repository switching, cloning, or new creation. This is controlled by the Sync checkbox on the Dashboard and is excluded from the manual editing list in the Config screen.
   - *Example*: `true` or `false`
-* **Auto Backup Conflicts**: A Boolean setting variable that determines whether, when a merge/pull conflict occurs, the conflicted files are automatically copied to the `.backup/` directory as `_OURS`/`_THEIRS` suffixed files before the conflict resolution dialog appears. This is controlled by the Auto Backup Conflicts checkbox on the Dashboard and is excluded from the manual editing list in the Config screen.
+* **Auto Backup Conflicts**: A Boolean setting variable that determines whether, when a merge/pull conflict occurs, the conflicted files are automatically copied to the `.backup/` directory as `_OURS`/`_THEIRS` suffixed files before the conflict resolution dialog appears. This is controlled by the Backup checkbox on the Dashboard and is excluded from the manual editing list in the Config screen.
+  - *Example*: `true` or `false`
+* **Auto Lock**: A Boolean setting variable that determines whether files opened in SolidWorks are automatically LFS-locked (and released on close), and whether assembly components are auto-locked when their parent assembly is opened. This is controlled by the Lock checkbox on the Dashboard and is excluded from the manual editing list in the Config screen.
   - *Example*: `true` or `false`
 
 ### 4.2 Basic Workflow
@@ -123,6 +126,9 @@ Details and examples for each configuration item are as follows:
 
 4. **SolidWorks Part Design and Automatic Locking**:
    - As soon as you open a part or assembly file in SolidWorks and begin editing, `git lfs lock` is executed by the background monitor. When other collaborators refresh the remote status, that drawing will appear as "Locked," allowing for safe collaboration without fear of losing modifications.
+
+> [!NOTE]
+> Automatic locking is performed only while the **Lock** checkbox on the Dashboard (config key `auto_lock`) is set to ON (default). When OFF, automatic lock/unlock is disabled, but you can still lock/unlock files manually via the Lock/Unlock buttons.
 
 5. **Save and Upload Version (Check-in)**:
    - Once file modification is complete, go to the `File Manager` tab.
@@ -177,7 +183,7 @@ Details and examples for each configuration item are as follows:
 * Simply copy the backup file back to its original location and rename it to restore your work.
 
 > [!NOTE]
-> This automatic backup is performed only while the **Auto Backup Conflicts** checkbox on the Dashboard (config key `auto_backup_conflicts`) is set to ON (default).
+> This automatic backup is performed only while the **Backup** checkbox on the Dashboard (config key `auto_backup_conflicts`) is set to ON (default).
 
 #### 4.4.3 SOLIDWORKS CAM Add-in Popup Appearing During EXPORT
 
