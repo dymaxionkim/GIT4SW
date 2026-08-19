@@ -201,77 +201,6 @@ def main():
         # swOpenDocOptions_IgnoreActivationAndSuppression = 64 (suppress automatic loading of parent assembly).
         doc_type = 2 # swDocASSEMBLY
         options = 1 | 2 | 64
-        error = win32com.client.VARIANT(pythoncom.VT_BYREF | pythoncom.VT_I4, 0)
-        warning = win32com.client.VARIANT(pythoncom.VT_BYREF | pythoncom.VT_I4, 0)
-
-        print(f"Opening document: {assembly_file_path}", flush=True)
-        model = swApp.OpenDoc6(assembly_file_path, doc_type, options, "", error, warning)
-        if not model:
-            print("Error: Failed to open assembly document in SolidWorks.", file=sys.stderr, flush=True)
-            sys.exit(1)
-
-        # Resolve lightweight components
-        try:
-            print("Resolving lightweight components...", flush=True)
-            model.ResolveAllLightWeightComponents(True)
-        except Exception as e:
-            print(f"Warning resolving lightweight components: {e}", flush=True)
-
-        # If a specific configuration is requested, activate it before extracting the BOM
-        if args.config:
-            print(f"Activating configuration: {args.config}", flush=True)
-            try:
-                show_cfg_val = model.ShowConfiguration2
-                if callable(show_cfg_val):
-                    show_cfg_val(args.config)
-                else:
-                    model.ShowConfiguration2 = args.config
-            except Exception as e_cfg:
-                print(f"Warning: Failed to activate configuration '{args.config}': {e_cfg}", flush=True)
-
-        # Get active configuration in a highly robust manner
-        config = None
-        try:
-            cfg_mgr = getattr(model, 'ConfigurationManager', None)
-            if cfg_mgr:
-                config = getattr(cfg_mgr, 'ActiveConfiguration', None)
-        except:
-            pass
-
-        if config is None:
-            try:
-                act_cfg_val = getattr(model, 'GetActiveConfiguration', None)
-                if act_cfg_val:
-                    config = act_cfg_val() if callable(act_cfg_val) else act_cfg_val
-            except:
-                pass
-
-        root_comp = None
-        if config:
-            # Try GetRootComponent3
-            try:
-                root_val = config.GetRootComponent3
-                root_comp = root_val(True) if callable(root_val) else root_val
-            except Exception as e:
-                print(f"GetRootComponent3 failed: {e}. Trying GetRootComponent2...", flush=True)
-
-            if root_comp is None:
-                try:
-                    root_val = config.GetRootComponent2
-                    root_comp = root_val() if callable(root_val) else root_val
-                except Exception as e:
-                    print(f"GetRootComponent2 failed: {e}. Trying GetRootComponent...", flush=True)
-
-            if root_comp is None:
-                try:
-                    root_val = config.GetRootComponent
-                    root_comp = root_val() if callable(root_val) else root_val
-                except:
-                    pass
-
-        if not root_comp:
-            print("Error: Could not get the root component of the assembly.", file=sys.stderr, flush=True)
-            sys.exit(1)
 
         all_bom_rows = []
         all_custom_prop_names = set()
@@ -409,10 +338,139 @@ def main():
                 if path and path.lower().endswith('.sldasm'):
                     traverse(rep_child, depth + 1, absolute_qty)
 
-        # Start traversal from Depth 1 (children of root)
-        print("Traversing assembly components...", flush=True)
-        traverse(root_comp, 1, 1)
-        print(f"Traversal complete. Found {len(all_bom_rows)} nodes.", flush=True)
+        def open_and_traverse(attempt):
+            """Opens the assembly, resolves it and runs the BOM traversal.
+
+            Returns True when the traversal produced at least one BOM row."""
+            nonlocal model, config, root_comp
+            error = win32com.client.VARIANT(pythoncom.VT_BYREF | pythoncom.VT_I4, 0)
+            warning = win32com.client.VARIANT(pythoncom.VT_BYREF | pythoncom.VT_I4, 0)
+
+            print(f"Opening document: {assembly_file_path}", flush=True)
+            model = swApp.OpenDoc6(assembly_file_path, doc_type, options, "", error, warning)
+            if not model:
+                print("Error: Failed to open assembly document in SolidWorks.", file=sys.stderr, flush=True)
+                sys.exit(1)
+
+            # Resolve lightweight components
+            try:
+                print("Resolving lightweight components...", flush=True)
+                model.ResolveAllLightWeightComponents(True)
+            except Exception as e:
+                print(f"Warning resolving lightweight components: {e}", flush=True)
+
+            # If a specific configuration is requested, activate it before extracting the BOM
+            if args.config:
+                print(f"Activating configuration: {args.config}", flush=True)
+                try:
+                    show_cfg_val = model.ShowConfiguration2
+                    if callable(show_cfg_val):
+                        show_cfg_val(args.config)
+                    else:
+                        model.ShowConfiguration2 = args.config
+                except Exception as e_cfg:
+                    print(f"Warning: Failed to activate configuration '{args.config}': {e_cfg}", flush=True)
+
+            # Get active configuration in a highly robust manner
+            config = None
+            try:
+                cfg_mgr = getattr(model, 'ConfigurationManager', None)
+                if cfg_mgr:
+                    config = getattr(cfg_mgr, 'ActiveConfiguration', None)
+            except:
+                pass
+
+            if config is None:
+                try:
+                    act_cfg_val = getattr(model, 'GetActiveConfiguration', None)
+                    if act_cfg_val:
+                        config = act_cfg_val() if callable(act_cfg_val) else act_cfg_val
+                except:
+                    pass
+
+            root_comp = None
+            if config:
+                # Try GetRootComponent3
+                try:
+                    root_val = config.GetRootComponent3
+                    root_comp = root_val(True) if callable(root_val) else root_val
+                except Exception as e:
+                    print(f"GetRootComponent3 failed: {e}. Trying GetRootComponent2...", flush=True)
+
+                if root_comp is None:
+                    try:
+                        root_val = config.GetRootComponent2
+                        root_comp = root_val() if callable(root_val) else root_val
+                    except Exception as e:
+                        print(f"GetRootComponent2 failed: {e}. Trying GetRootComponent...", flush=True)
+
+                if root_comp is None:
+                    try:
+                        root_val = config.GetRootComponent
+                        root_comp = root_val() if callable(root_val) else root_val
+                    except:
+                        pass
+
+            if not root_comp:
+                print("Error: Could not get the root component of the assembly.", file=sys.stderr, flush=True)
+                sys.exit(1)
+
+            # Start traversal from Depth 1 (children of root)
+            print("Traversing assembly components...", flush=True)
+            traverse(root_comp, 1, 1)
+            print(f"Traversal complete. Found {len(all_bom_rows)} nodes.", flush=True)
+            return len(all_bom_rows) > 0
+
+        # A document can remain partially loaded in SolidWorks when a previous process
+        # (e.g. the UI's configuration query killed by its timeout, or an interrupted
+        # cleanup of a former BOM run) was terminated while the document was still
+        # loading. OpenDoc6 then returns that broken document, GetChildren yields no
+        # components and the BOM would silently come out empty. When the first attempt
+        # finds no components, close the document and retry once with a fresh full load.
+        max_attempts = 2
+        for attempt in range(1, max_attempts + 1):
+            found_nodes = open_and_traverse(attempt)
+            if found_nodes or attempt >= max_attempts:
+                break
+
+            # Never close a document with unsaved changes: CloseDoc would raise a
+            # save prompt inside SolidWorks and block the runner.
+            try:
+                dirty_val = model.GetSaveFlag
+                is_dirty = dirty_val() if callable(dirty_val) else dirty_val
+            except Exception:
+                is_dirty = False
+            if is_dirty:
+                print("Warning: Assembly appears empty but has unsaved changes. Skipping reload retry.", flush=True)
+                break
+
+            print("Warning: No components found in the assembly. The document is probably only partially "
+                  "loaded in SolidWorks. Closing it and retrying with a fresh load...", flush=True)
+            try:
+                title_val = model.GetTitle
+                doc_title = title_val() if callable(title_val) else title_val
+                if doc_title:
+                    swApp.CloseDoc(doc_title)
+            except Exception as e_close:
+                print(f"Warning: Failed to close document before retry: {e_close}", flush=True)
+            model = None
+            config = None
+            root_comp = None
+            gc.collect()
+            try:
+                pythoncom.CoCollectFreeUnusedLibraries()
+            except Exception:
+                pass
+            time.sleep(1.0)
+
+        # Never silently write an empty BOM: an assembly with zero extractable
+        # rows is almost always a broken document state, not a real result.
+        if not all_bom_rows:
+            print("Error: No components were found for the BOM. Either every component is "
+                  "suppressed or excluded from the BOM, or the SolidWorks document state is "
+                  "broken (partially loaded document). If unsure, restart SolidWorks and run "
+                  "the BOM extraction again.", file=sys.stderr, flush=True)
+            sys.exit(1)
 
         # Load column_order from config.json; fall back to hardcoded default
         default_column_order = [

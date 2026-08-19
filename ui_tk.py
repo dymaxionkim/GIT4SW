@@ -5942,7 +5942,29 @@ a:hover {{ text-decoration: underline; }}
             open_before_abs.append(os.path.normpath(os.path.join(self.workspace_path, f)).lower())
         self.sw_open_before_bom = ",".join(open_before_abs)
 
-        # Connect to SolidWorks via a separate subprocess to avoid GUI thread COM apartment clashes
+        # Query the configurations in a background thread so the UI stays responsive
+        # while SolidWorks loads large assemblies (can take several minutes). The former
+        # synchronous query with a 30s timeout killed the subprocess mid-load and left
+        # a partially loaded document in SolidWorks, which made the BOM runner produce
+        # an empty BOM.
+        self.increment_tasks()
+        self.btn_bom.state(["disabled"])
+        self.write_log(f"ℹ️ Querying SolidWorks configurations for {os.path.basename(filepath)}...", "info")
+
+        def run_config_query():
+            config_names = self._query_sw_configurations(full_path)
+
+            def after_query():
+                self._finish_bom_config_query(full_path, filepath, config_names)
+
+            # Re-enable the UI, then continue on the UI thread with the query result
+            self.decrement_tasks()
+            self.task_queue.put(('log', (f"ℹ️ Configuration query finished: {len(config_names)} configuration(s) found.", "info"), after_query))
+
+        threading.Thread(target=run_config_query, daemon=True).start()
+
+    def _query_sw_configurations(self, full_path):
+        """Runs the SolidWorks configuration query subprocess (blocking; call from a worker thread)."""
         config_names = []
         try:
             import json
@@ -6078,7 +6100,7 @@ finally:
                 capture_output=True,
                 text=True,
                 creationflags=creation_flags,
-                timeout=30.0
+                timeout=600.0
             )
             
             if res.returncode == 0:
@@ -6086,8 +6108,12 @@ finally:
                 if output_str:
                     config_names = json.loads(output_str)
         except Exception as e:
-            self.write_log(f"⚠️ Warning: Failed to query SolidWorks configurations: {e}", "warning")
+            self.task_queue.put(('log', (f"⚠️ Warning: Failed to query SolidWorks configurations: {e}", "warning"), None))
 
+        return config_names
+
+    def _finish_bom_config_query(self, full_path, filepath, config_names):
+        """UI-thread continuation after the SolidWorks configuration query finishes."""
         if len(config_names) >= 2:
             # Create modal select dialog
             dialog = tk.Toplevel(self)
