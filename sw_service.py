@@ -70,8 +70,8 @@ class SolidWorksService:
                     dirty = False
                     
                 return {
-                    'title': title,
-                    'path': path.replace("\\", "/"),
+                    'title': title or "",
+                    'path': (path or "").replace("\\", "/"),
                     'dirty': bool(dirty)
                 }
         except Exception as e:
