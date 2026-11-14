@@ -161,17 +161,19 @@ def main():
         if scan_files:
             asm_files = []
             for rel in scan_files:
+                base_fn = os.path.basename(rel)
+                if base_fn.startswith("~$"):
+                    continue
                 abs_path = os.path.normpath(os.path.join(workspace_path, rel))
                 if abs_path.lower().endswith(".sldasm") and os.path.exists(abs_path):
                     asm_files.append(abs_path)
         else:
             asm_files = []
             for dirpath, dirnames, filenames in os.walk(workspace_path):
-                # Skip .git directory
-                if ".git" in dirpath:
-                    continue
+                # Prune .git and .backup directories in-place without skipping .github
+                dirnames[:] = [d for d in dirnames if d.lower() not in (".git", ".backup")]
                 for fn in filenames:
-                    if fn.lower().endswith(".sldasm"):
+                    if fn.lower().endswith(".sldasm") and not fn.startswith("~$"):
                         asm_files.append(os.path.join(dirpath, fn))
 
         total = len(asm_files)

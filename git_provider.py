@@ -178,19 +178,16 @@ class GiteaProvider(GitProvider):
         return remote_url.lower().startswith(self.gitea_url.lower())
 
     def get_credential_host(self, remote_url=None):
-        if remote_url and self.handles_url(remote_url):
-            from urllib.parse import urlparse
-            parsed = urlparse(remote_url)
+        from urllib.parse import urlparse
+        target_url = remote_url if (remote_url and self.handles_url(remote_url)) else self.gitea_url
+        if target_url:
+            parsed = urlparse(target_url)
             host = parsed.netloc or parsed.path.split("/")[0]
             if "@" in host:
                 host = host.split("@")[-1]
             if ":" in host:
                 host = host.split(":")[0]
             return host
-        if self.gitea_url:
-            from urllib.parse import urlparse
-            parsed = urlparse(self.gitea_url)
-            return parsed.netloc
         return ""
 
     def _api_base(self):

@@ -73,8 +73,8 @@ class SolidWorksMonitorService:
                 except Exception:
                     dirty = False
                 return {
-                    'title': title,
-                    'path': path.replace("\\", "/"),
+                    'title': title or "",
+                    'path': (path or "").replace("\\", "/"),
                     'dirty': bool(dirty)
                 }
         except Exception as e:
@@ -100,8 +100,8 @@ class SolidWorksMonitorService:
                     except Exception:
                         dirty = False
                     docs.append({
-                        'title': title,
-                        'path': path.replace("\\", "/"),
+                        'title': title or "",
+                        'path': (path or "").replace("\\", "/"),
                         'dirty': bool(dirty),
                         'doc_obj': doc # reference to the COM object
                     })
@@ -151,6 +151,7 @@ class SolidWorksMonitorService:
         orig_ref_prompt = True
         orig_warn_save = False
         orig_rebuild_err = False
+        orig_rebuild_action = 0
         orig_load_ext_ref = 0
         orig_lightweight_resolve = 0
         orig_large_assembly_resolve = 0
@@ -158,6 +159,7 @@ class SolidWorksMonitorService:
             orig_ref_prompt = sw.GetUserPreferenceToggle(15)   # swExtRefNoPromptOrSave
             orig_warn_save = sw.GetUserPreferenceToggle(249)    # swWarnSaveUpdateErrors
             orig_rebuild_err = sw.GetUserPreferenceToggle(119)  # swShowErrorsEveryRebuild
+            orig_rebuild_action = sw.GetUserPreferenceIntegerValue(246) # swRebuildErrorAction
             orig_load_ext_ref = sw.GetUserPreferenceIntegerValue(242) # swLoadExternalReferences
             orig_lightweight_resolve = sw.GetUserPreferenceIntegerValue(243) # swAssemblyLoadLightweightResolve
             orig_large_assembly_resolve = sw.GetUserPreferenceIntegerValue(245) # swLargeAssemblyModeResolveLightweight
@@ -245,11 +247,13 @@ class SolidWorksMonitorService:
                     try:
                         print(f"  Attempting CloseDoc('{identifier}') for main doc", flush=True)
                         sw.CloseDoc(identifier)
+                        break
                     except:
                         pass
                     try:
                         print(f"  Attempting QuitDoc('{identifier}') for main doc", flush=True)
                         sw.QuitDoc(identifier)
+                        break
                     except:
                         pass
 
@@ -373,17 +377,16 @@ class SolidWorksMonitorService:
                                 for identifier in uniq_ids:
                                     try:
                                         print(f"  Attempting CloseDoc('{identifier}')", flush=True)
-                                        res = sw.CloseDoc(identifier)
-                                        print(f"    CloseDoc Result: {res}", flush=True)
-                                        if res:
-                                            closed_any = True
+                                        sw.CloseDoc(identifier)
+                                        closed_any = True
+                                        break
                                     except Exception as e_close:
                                         print(f"    Warning: CloseDoc parent '{identifier}' error: {e_close}", flush=True)
                                     try:
                                         print(f"  Attempting QuitDoc('{identifier}')", flush=True)
-                                        res = sw.QuitDoc(identifier)
-                                        print(f"    QuitDoc Result: {res}", flush=True)
+                                        sw.QuitDoc(identifier)
                                         closed_any = True
+                                        break
                                     except Exception as e_quit:
                                         print(f"    Warning: QuitDoc parent '{identifier}' error: {e_quit}", flush=True)
                             except Exception:
@@ -402,17 +405,16 @@ class SolidWorksMonitorService:
                                 for identifier in uniq_ids:
                                     try:
                                         print(f"  Attempting CloseDoc('{identifier}')", flush=True)
-                                        res = sw.CloseDoc(identifier)
-                                        print(f"    CloseDoc Result: {res}", flush=True)
-                                        if res:
-                                            closed_any = True
+                                        sw.CloseDoc(identifier)
+                                        closed_any = True
+                                        break
                                     except Exception as e_close:
                                         print(f"    Warning: CloseDoc child '{identifier}' error: {e_close}", flush=True)
                                     try:
                                         print(f"  Attempting QuitDoc('{identifier}')", flush=True)
-                                        res = sw.QuitDoc(identifier)
-                                        print(f"    QuitDoc Result: {res}", flush=True)
+                                        sw.QuitDoc(identifier)
                                         closed_any = True
+                                        break
                                     except Exception as e_quit:
                                         print(f"    Warning: QuitDoc child '{identifier}' error: {e_quit}", flush=True)
                             except Exception:
@@ -440,6 +442,7 @@ class SolidWorksMonitorService:
                 sw.SetUserPreferenceToggle(15, orig_ref_prompt)
                 sw.SetUserPreferenceToggle(249, orig_warn_save)
                 sw.SetUserPreferenceToggle(119, orig_rebuild_err)
+                sw.SetUserPreferenceIntegerValue(246, orig_rebuild_action)
                 sw.SetUserPreferenceIntegerValue(242, orig_load_ext_ref)
                 sw.SetUserPreferenceIntegerValue(243, orig_lightweight_resolve)
                 sw.SetUserPreferenceIntegerValue(245, orig_large_assembly_resolve)

@@ -328,9 +328,11 @@ def main():
     hosts_env = os.environ.get('GIT4SW_GIT_HOSTS', '').strip()
     if hosts_env:
         for h in hosts_env.split(','):
-            h = h.strip()
+            h = h.strip().lower()
             if h:
-                allowed_hosts.add(h.lower())
+                allowed_hosts.add(h)
+                if ':' in h:
+                    allowed_hosts.add(h.split(':', 1)[0])
     if not allowed_hosts:
         allowed_hosts.add('github.com')
     
@@ -339,7 +341,8 @@ def main():
         stripped = line.strip()
         if stripped.startswith('host='):
             host_val = stripped.split('=', 1)[1].strip().lower()
-            if host_val in allowed_hosts:
+            host_no_port = host_val.split(':', 1)[0]
+            if host_val in allowed_hosts or host_no_port in allowed_hosts:
                 matched = True
                 break
     
@@ -368,20 +371,46 @@ if __name__ == '__main__':
         if token:
             env["GIT4SW_TOKEN"] = token
             
-            # Compute credential hosts from remote URL if available
+            # Compute credential hosts from remote URL, config gitea_url, and command args
             git_hosts = set()
             try:
-                code, remote_url, _ = subprocess.run(
+                res = subprocess.run(
                     [args[0] if os.path.basename(args[0]).lower() in ("git", "git.exe") else "git",
                      "remote", "get-url", "origin"],
                     cwd=cwd, capture_output=True, text=True, errors="ignore",
                     env={**os.environ, "GCM_INTERACTIVE": "never", "GIT_TERMINAL_PROMPT": "0"}
                 )
-                if code == 0 and remote_url.strip():
-                    provider = detect_provider(remote_url.strip(), config)
-                    cred_host = provider.get_credential_host(remote_url.strip())
+                if res.returncode == 0 and res.stdout.strip():
+                    remote_url = res.stdout.strip()
+                    provider = detect_provider(remote_url, config)
+                    cred_host = provider.get_credential_host(remote_url)
                     if cred_host:
-                        git_hosts.add(cred_host)
+                        git_hosts.add(cred_host.lower())
+            except Exception:
+                pass
+
+            try:
+                gitea_cfg_url = config.get("gitea_url", "").strip()
+                if gitea_cfg_url:
+                    provider = detect_provider(gitea_cfg_url, config)
+                    cred_host = provider.get_credential_host(gitea_cfg_url)
+                    if cred_host:
+                        git_hosts.add(cred_host.lower())
+            except Exception:
+                pass
+
+            try:
+                from urllib.parse import urlparse
+                for arg in args:
+                    if isinstance(arg, str) and (arg.startswith("http://") or arg.startswith("https://")):
+                        parsed = urlparse(arg)
+                        h = parsed.netloc
+                        if "@" in h:
+                            h = h.split("@")[-1]
+                        if ":" in h:
+                            h = h.split(":")[0]
+                        if h:
+                            git_hosts.add(h.lower())
             except Exception:
                 pass
             
@@ -767,6 +796,8 @@ class GitService:
                 if len(line) >= 3:
                     status_code = line[:2]
                     filepath = line[3:].strip().replace("\\", "/")
+                    if (status_code.startswith("R") or status_code.startswith("C")) and " -> " in filepath:
+                        filepath = filepath.split(" -> ", 1)[1].strip()
                     if "\t" in filepath:
                         filepath = filepath.split("\t")[0].replace("\\", "/")
                     if filepath.startswith('"') and filepath.endswith('"'):
@@ -1054,10 +1085,11 @@ class GitService:
                 else:
                     files_to_rm.append(fp)
             
-            if files_to_add:
-                self._run_lfs_cmd(["git", "add"] + files_to_add)
-            if files_to_rm:
-                self._run_lfs_cmd(["git", "rm", "--ignore-unmatch"] + files_to_rm)
+            chunk_size = 100
+            for i in range(0, len(files_to_add), chunk_size):
+                self._run_lfs_cmd(["git", "add", "--"] + files_to_add[i:i + chunk_size])
+            for i in range(0, len(files_to_rm), chunk_size):
+                self._run_lfs_cmd(["git", "rm", "--ignore-unmatch", "--"] + files_to_rm[i:i + chunk_size])
         except Exception as e:
             raise RuntimeError(f"Failed to stage/remove files: {e}")
             
@@ -1263,6 +1295,7 @@ class GitService:
         """
         Scans modified files in status, hashes them, and checks if they match the Git index.
         If they match, runs 'git checkout --' to discard the false-positive modification status.
+        Supports both regular Git blobs (SHA-1) and Git LFS pointer blobs (SHA-256 + size).
         """
         if not self.is_git_repo():
             return
@@ -1270,49 +1303,102 @@ class GitService:
         import hashlib
         
         try:
-            status_out = self._run_lfs_cmd(["git", "status", "--porcelain"])
+            status_out = self._run_lfs_cmd(["git", "-c", "core.quotepath=false", "status", "--porcelain"])
             fake_clean_list = []
             
             for line in status_out.splitlines():
                 if len(line) >= 3 and line[0] == ' ' and line[1] == 'M':
                     filepath = line[3:].strip()
                     if filepath.startswith('"') and filepath.endswith('"'):
-                         filepath = filepath[1:-1]
+                        filepath = filepath[1:-1]
+                        try:
+                            import codecs
+                            b, _ = codecs.escape_decode(bytes(filepath, "utf-8"))
+                            filepath = b.decode("utf-8")
+                        except Exception:
+                            pass
+                    filepath_norm = filepath.replace("\\", "/")
                          
-                    abs_path = os.path.join(self.repo_path, filepath)
+                    abs_path = os.path.join(self.repo_path, filepath_norm)
                     if not os.path.exists(abs_path):
                         continue
                         
                     try:
-                        with open(abs_path, 'rb') as f:
-                            data = f.read()
-                        header = f"blob {len(data)}\0".encode('utf-8')
-                        sha1 = hashlib.sha1()
-                        sha1.update(header)
-                        sha1.update(data)
-                        local_hash = sha1.hexdigest()
-                    except Exception as he:
-                        print(f"DEBUG: Failed to hash {filepath}: {he}")
-                        continue
-                        
-                    try:
-                        entry = self.repo.index.entries[(filepath, 0)]
+                        entry = self.repo.index.entries.get((filepath_norm, 0))
+                        if entry is None:
+                            continue
                         index_hash = entry.hexsha
                     except Exception as ie:
-                        print(f"DEBUG: Failed to get index entry for {filepath}: {ie}")
+                        print(f"DEBUG: Failed to get index entry for {filepath_norm}: {ie}")
+                        continue
+
+                    is_same = False
+                    try:
+                        # Check if index blob is a small LFS pointer (< 256 bytes)
+                        blob_obj = self.repo.odb.info(entry.binsha)
+                        if blob_obj and blob_obj.size < 256:
+                            raw_stream = self.repo.odb.stream(entry.binsha).read()
+                            if raw_stream.startswith(b"version https://git-lfs.github.com/spec/v1"):
+                                pointer_text = raw_stream.decode("utf-8", errors="ignore")
+                                lfs_sha256 = None
+                                lfs_size = None
+                                for pline in pointer_text.splitlines():
+                                    pline = pline.strip()
+                                    if pline.startswith("oid sha256:"):
+                                        lfs_sha256 = pline.split("oid sha256:", 1)[1].strip()
+                                    elif pline.startswith("size "):
+                                        try:
+                                            lfs_size = int(pline.split("size ", 1)[1].strip())
+                                        except ValueError:
+                                            pass
+                                if lfs_sha256 and lfs_size is not None:
+                                    disk_size = os.path.getsize(abs_path)
+                                    if disk_size == lfs_size:
+                                        sha256 = hashlib.sha256()
+                                        with open(abs_path, "rb") as f:
+                                            while True:
+                                                chunk = f.read(1024 * 1024)
+                                                if not chunk:
+                                                    break
+                                                sha256.update(chunk)
+                                        if sha256.hexdigest() == lfs_sha256:
+                                            is_same = True
+                                continue_regular = False
+                            else:
+                                continue_regular = True
+                        else:
+                            continue_regular = True
+
+                        if continue_regular:
+                            disk_size = os.path.getsize(abs_path)
+                            if blob_obj is None or disk_size == blob_obj.size:
+                                sha1 = hashlib.sha1()
+                                sha1.update(f"blob {disk_size}\0".encode("utf-8"))
+                                with open(abs_path, "rb") as f:
+                                    while True:
+                                        chunk = f.read(1024 * 1024)
+                                        if not chunk:
+                                            break
+                                        sha1.update(chunk)
+                                if sha1.hexdigest() == index_hash:
+                                    is_same = True
+                    except Exception as he:
+                        print(f"DEBUG: Failed to hash {filepath_norm}: {he}")
                         continue
                         
-                    if local_hash == index_hash:
-                        print(f"DEBUG: Fake modification detected for {filepath}. Index: {index_hash}, Local: {local_hash}")
-                        fake_clean_list.append(filepath)
+                    if is_same:
+                        print(f"DEBUG: Fake modification detected for {filepath_norm}. Index: {index_hash}")
+                        fake_clean_list.append(filepath_norm)
             
             if fake_clean_list:
                 print(f"DEBUG: Automatically clearing fake modifications for: {fake_clean_list}")
-                for fp in fake_clean_list:
-                     try:
-                         self._run_lfs_cmd(["git", "checkout", "--", fp])
-                     except Exception as ce:
-                         print(f"DEBUG: Failed to auto-clear {fp}: {ce}")
+                chunk_size = 100
+                for i in range(0, len(fake_clean_list), chunk_size):
+                    batch = fake_clean_list[i:i + chunk_size]
+                    try:
+                        self._run_lfs_cmd(["git", "checkout", "--"] + batch)
+                    except Exception as ce:
+                        print(f"DEBUG: Failed to auto-clear batch {batch}: {ce}")
                          
         except Exception as e:
             print(f"DEBUG: Error in clean_fake_modified_files: {e}")
@@ -1374,9 +1460,10 @@ class GitService:
             else:
                 untracked.append(rel_path)
                 
-        # Batch checkout all tracked files in a single git command
-        if tracked:
-            self._run_lfs_cmd(["git", "checkout", "--"] + tracked)
+        # Batch checkout tracked files in chunks to avoid Windows command-line length limit
+        chunk_size = 100
+        for i in range(0, len(tracked), chunk_size):
+            self._run_lfs_cmd(["git", "checkout", "--"] + tracked[i:i + chunk_size])
             
         # Delete untracked files individually
         for rel_path in untracked:
@@ -1619,7 +1706,7 @@ class GitService:
         if username:
             remote_url = self.get_remote_url()
             if remote_url:
-                provider = detect_provider(remote_url, {})
+                provider = detect_provider(remote_url, _load_config_simple())
                 domain = provider.get_credential_host(remote_url)
                 if not domain:
                     from urllib.parse import urlparse

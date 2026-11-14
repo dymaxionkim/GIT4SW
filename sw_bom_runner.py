@@ -198,9 +198,10 @@ def main():
 
         # Open document silently and read-only.
         # swOpenDocOptions_Silent = 1, swOpenDocOptions_ReadOnly = 2,
-        # swOpenDocOptions_IgnoreActivationAndSuppression = 64 (suppress automatic loading of parent assembly).
+        # swOpenDocOptions_AutoMissingConfig = 32.
+        # Note: Do not set 64 (swOpenDocOptions_OverrideDefaultLoadLightweight).
         doc_type = 2 # swDocASSEMBLY
-        options = 1 | 2 | 64
+        options = 1 | 2 | 32
 
         all_bom_rows = []
         all_custom_prop_names = set()
@@ -368,6 +369,10 @@ def main():
                         show_cfg_val(args.config)
                     else:
                         model.ShowConfiguration2 = args.config
+                    try:
+                        model.ResolveAllLightWeightComponents(True)
+                    except Exception:
+                        pass
                 except Exception as e_cfg:
                     print(f"Warning: Failed to activate configuration '{args.config}': {e_cfg}", flush=True)
 
@@ -1010,15 +1015,23 @@ def main():
         if swApp:
             if not was_already_running:
                 import threading
-                def exit_sw_async(app):
+                def exit_sw_async():
                     try:
                         print("Exiting SolidWorks (launched by BOM runner)...", flush=True)
-                        app.ExitApp()
+                        pythoncom.CoInitialize()
+                        try:
+                            raw_sw = win32com.client.GetActiveObject("SldWorks.Application")
+                            sw_local = get_dynamic_sw_app(raw_sw)
+                            if sw_local:
+                                sw_local.ExitApp()
+                        finally:
+                            pythoncom.CoUninitialize()
                     except Exception as exit_e:
-                        print(f"Warning: Error during swApp.ExitApp(): {exit_e}", flush=True)
+                        print(f"Note: swApp.ExitApp() finished/skipped: {exit_e}", flush=True)
                         
                 try:
-                    t_exit = threading.Thread(target=exit_sw_async, args=(swApp,), daemon=True)
+                    swApp = None
+                    t_exit = threading.Thread(target=exit_sw_async, daemon=True)
                     t_exit.start()
                     t_exit.join(timeout=5.0)
                 except Exception as t_err:

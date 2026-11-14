@@ -3685,13 +3685,16 @@ a:hover {{ text-decoration: underline; }}
                         else:
                             files_to_rm.append(f)
                             
-                    if files_to_add:
-                        self.git_service._run_lfs_cmd(["git", "add"] + files_to_add)
-                    if files_to_rm:
-                        self.git_service._run_lfs_cmd(["git", "rm", "--ignore-unmatch"] + files_to_rm)
+                    chunk_size = 100
+                    for i in range(0, len(files_to_add), chunk_size):
+                        self.git_service._run_lfs_cmd(["git", "add", "--"] + files_to_add[i:i + chunk_size])
+                    for i in range(0, len(files_to_rm), chunk_size):
+                        self.git_service._run_lfs_cmd(["git", "rm", "--ignore-unmatch", "--"] + files_to_rm[i:i + chunk_size])
                 except Exception as e:
                     raise RuntimeError(f"Failed to stage/remove files in index: {e}")
                 
+                orig_head = self.git_service.get_branch_tip_commit("HEAD") or "HEAD~1"
+
                 # Commit locally first
                 name = "SolidWorks Designer"
                 email = "designer@example.com"
@@ -3734,7 +3737,7 @@ a:hover {{ text-decoration: underline; }}
                             )
                             if resolutions is None:
                                 self.write_log("Upload cancelled by user. Rolling back local commit...", "warning")
-                                self.git_service._run_lfs_cmd(["git", "reset", "--soft", "HEAD~1"])
+                                self.git_service._run_lfs_cmd(["git", "reset", "--soft", orig_head])
                                 return
                             
                             self.write_log("Applying resolutions and completing sync...", "info")
@@ -3752,7 +3755,7 @@ a:hover {{ text-decoration: underline; }}
                                 if resolutions is None:
                                     self.write_log("Upload cancelled by user. Aborting merge and rolling back local commit...", "warning")
                                     self.git_service.abort_merge()
-                                    self.git_service._run_lfs_cmd(["git", "reset", "--soft", "HEAD~1"])
+                                    self.git_service._run_lfs_cmd(["git", "reset", "--soft", orig_head])
                                     return
                                 
                                 self.write_log("Applying resolutions to complete sync...", "info")
@@ -3764,33 +3767,41 @@ a:hover {{ text-decoration: underline; }}
                     except Exception as sync_err:
                         # If fetch/pull/push failed, rollback local commit too
                         self.write_log(f"Upload sync failed: {sync_err}. Rolling back local commit...", "error")
-                        self.git_service._run_lfs_cmd(["git", "reset", "--soft", "HEAD~1"])
+                        self.git_service.abort_merge()
+                        self.git_service._run_lfs_cmd(["git", "reset", "--soft", orig_head])
                         raise sync_err
                         
-                # 4. Try to automatically unlock if they were ours
-                for file_rel_path in files_to_commit:
-                    try:
-                        locks = self.git_service.get_lfs_locks()
-                        matched_lock_path = None
-                        for l_path in locks:
-                            if l_path.lower() == file_rel_path.lower():
-                                matched_lock_path = l_path
-                                break
-                        if matched_lock_path and locks[matched_lock_path]['is_ours']:
-                            self.git_service.unlock_file(matched_lock_path)
-                            # Clean up both tracking sets so the monitor does not
-                            # treat the file as still locked-by-us.
-                            rel_path_lower = file_rel_path.lower().replace("\\", "/")
-                            for f in list(self.files_locked_by_us):
-                                if f.lower() == rel_path_lower:
-                                    self.files_locked_by_us.discard(f)
-                                    break
-                            for f in list(self.files_manually_locked_by_us):
-                                if f.lower() == rel_path_lower:
-                                    self.files_manually_locked_by_us.discard(f)
-                                    break
-                    except Exception:
-                        pass
+                # 4. Try to automatically unlock if they were ours (fetch locks once and batch unlock)
+                try:
+                    locks = self.git_service.get_lfs_locks()
+                    locks_by_lower = {l_path.lower(): (l_path, info) for l_path, info in locks.items()}
+                    to_unlock = []
+                    for file_rel_path in files_to_commit:
+                        match = locks_by_lower.get(file_rel_path.lower())
+                        if match and match[1].get('is_ours'):
+                            to_unlock.append(match[0])
+                    if to_unlock:
+                        unlock_results = self.git_service.batch_unlock_files(to_unlock, max_workers=5)
+                        for u_path, u_ok, _ in unlock_results:
+                            if u_ok:
+                                rel_path_lower = u_path.lower().replace("\\", "/")
+                                for f in list(self.files_locked_by_us):
+                                    if f.lower() == rel_path_lower:
+                                        self.files_locked_by_us.discard(f)
+                                        break
+                                for f in list(self.files_manually_locked_by_us):
+                                    if f.lower() == rel_path_lower:
+                                        self.files_manually_locked_by_us.discard(f)
+                                        break
+                                abs_u = os.path.join(self.workspace_path, u_path)
+                                if os.path.exists(abs_u):
+                                    try:
+                                        mode = os.stat(abs_u).st_mode
+                                        os.chmod(abs_u, mode & ~stat.S_IWRITE)
+                                    except Exception:
+                                        pass
+                except Exception:
+                    pass
                         
                 def on_done():
                     self.txt_message.delete("1.0", tk.END)
@@ -3827,10 +3838,13 @@ a:hover {{ text-decoration: underline; }}
                 # Get all changed files in the repo
                 try:
                     all_changed = []
-                    status_out = self.git_service._run_lfs_cmd(["git", "status", "--porcelain", "-u"])
+                    status_out = self.git_service._run_lfs_cmd(["git", "-c", "core.quotepath=false", "status", "--porcelain", "-u"])
                     for line in status_out.splitlines():
                         if len(line) >= 3:
+                            status_code = line[:2]
                             filepath = line[3:].strip().replace("\\", "/")
+                            if (status_code.startswith("R") or status_code.startswith("C")) and " -> " in filepath:
+                                filepath = filepath.split(" -> ", 1)[1].strip()
                             if "\t" in filepath:
                                 filepath = filepath.split("\t")[0].replace("\\", "/")
                             if filepath.startswith('"') and filepath.endswith('"'):
@@ -3940,11 +3954,13 @@ a:hover {{ text-decoration: underline; }}
                 
                 if files_to_add:
                     for chunk in [files_to_add[i:i+100] for i in range(0, len(files_to_add), 100)]:
-                        self.git_service._run_lfs_cmd(["git", "add"] + chunk)
+                        self.git_service._run_lfs_cmd(["git", "add", "--"] + chunk)
                 if files_to_rm:
                     for chunk in [files_to_rm[i:i+100] for i in range(0, len(files_to_rm), 100)]:
-                        self.git_service._run_lfs_cmd(["git", "rm", "--ignore-unmatch"] + chunk)
+                        self.git_service._run_lfs_cmd(["git", "rm", "--ignore-unmatch", "--"] + chunk)
                 
+                orig_head = self.git_service.get_branch_tip_commit("HEAD") or "HEAD~1"
+
                 # Get signature details from repo config or default
                 name = "SolidWorks Designer"
                 email = "designer@example.com"
@@ -3990,7 +4006,7 @@ a:hover {{ text-decoration: underline; }}
                             )
                             if resolutions is None:
                                 self.write_log("Upload cancelled by user. Rolling back local commit...", "warning")
-                                self.git_service._run_lfs_cmd(["git", "reset", "--soft", "HEAD~1"])
+                                self.git_service._run_lfs_cmd(["git", "reset", "--soft", orig_head])
                                 return
                             
                             self.write_log("Applying resolutions and completing sync...", "info")
@@ -4008,7 +4024,7 @@ a:hover {{ text-decoration: underline; }}
                                 if resolutions is None:
                                     self.write_log("Upload cancelled by user. Aborting merge and rolling back local commit...", "warning")
                                     self.git_service.abort_merge()
-                                    self.git_service._run_lfs_cmd(["git", "reset", "--soft", "HEAD~1"])
+                                    self.git_service._run_lfs_cmd(["git", "reset", "--soft", orig_head])
                                     return
                                 
                                 self.write_log("Applying resolutions to complete sync...", "info")
@@ -4020,31 +4036,41 @@ a:hover {{ text-decoration: underline; }}
                         self.write_log(f"Successfully pushed branch '{branch}' to remote server.", "success")
                     except Exception as sync_err:
                         self.write_log(f"Upload sync failed: {sync_err}. Rolling back local commit...", "error")
-                        self.git_service._run_lfs_cmd(["git", "reset", "--soft", "HEAD~1"])
+                        self.git_service.abort_merge()
+                        self.git_service._run_lfs_cmd(["git", "reset", "--soft", orig_head])
                         raise sync_err
                 
-                # Try to automatically unlock if they were ours
+                # Try to automatically unlock if they were ours (fetch locks once and batch unlock)
                 sw_committed = [f for f in files_to_stage if os.path.splitext(f)[1].lower() in ('.sldprt', '.sldasm', '.slddrw')]
-                for file_rel_path in sw_committed:
+                if sw_committed:
                     try:
                         locks = self.git_service.get_lfs_locks()
-                        matched_lock_path = None
-                        for l_path in locks:
-                            if l_path.lower() == file_rel_path.lower():
-                                matched_lock_path = l_path
-                                break
-                        if matched_lock_path and locks[matched_lock_path]['is_ours']:
-                            self.git_service.unlock_file(matched_lock_path)
-                            # Clean up both tracking sets
-                            rel_path_lower = file_rel_path.lower().replace("\\", "/")
-                            for f in list(self.files_locked_by_us):
-                                if f.lower() == rel_path_lower:
-                                    self.files_locked_by_us.discard(f)
-                                    break
-                            for f in list(self.files_manually_locked_by_us):
-                                if f.lower() == rel_path_lower:
-                                    self.files_manually_locked_by_us.discard(f)
-                                    break
+                        locks_by_lower = {l_path.lower(): (l_path, info) for l_path, info in locks.items()}
+                        to_unlock = []
+                        for file_rel_path in sw_committed:
+                            match = locks_by_lower.get(file_rel_path.lower())
+                            if match and match[1].get('is_ours'):
+                                to_unlock.append(match[0])
+                        if to_unlock:
+                            unlock_results = self.git_service.batch_unlock_files(to_unlock, max_workers=5)
+                            for u_path, u_ok, _ in unlock_results:
+                                if u_ok:
+                                    rel_path_lower = u_path.lower().replace("\\", "/")
+                                    for f in list(self.files_locked_by_us):
+                                        if f.lower() == rel_path_lower:
+                                            self.files_locked_by_us.discard(f)
+                                            break
+                                    for f in list(self.files_manually_locked_by_us):
+                                        if f.lower() == rel_path_lower:
+                                            self.files_manually_locked_by_us.discard(f)
+                                            break
+                                    abs_u = os.path.join(self.workspace_path, u_path)
+                                    if os.path.exists(abs_u):
+                                        try:
+                                            mode = os.stat(abs_u).st_mode
+                                            os.chmod(abs_u, mode & ~stat.S_IWRITE)
+                                        except Exception:
+                                            pass
                     except Exception:
                         pass
                 
@@ -4236,6 +4262,11 @@ a:hover {{ text-decoration: underline; }}
             # 1) Backup OURS version
             ours_backup = os.path.join(backup_root, f"{base_name}_OURS{ext}")
             try:
+                if os.path.exists(ours_backup):
+                    try:
+                        os.chmod(ours_backup, os.stat(ours_backup).st_mode | stat.S_IWRITE)
+                    except Exception:
+                        pass
                 data = _git_show(":2", git_rel, workspace_path) or _git_show("HEAD", git_rel, workspace_path)
                 if data:
                     with open(ours_backup, "wb") as fh:
@@ -4251,6 +4282,11 @@ a:hover {{ text-decoration: underline; }}
             # 2) Backup THEIRS version
             theirs_backup = os.path.join(backup_root, f"{base_name}_THEIRS{ext}")
             try:
+                if os.path.exists(theirs_backup):
+                    try:
+                        os.chmod(theirs_backup, os.stat(theirs_backup).st_mode | stat.S_IWRITE)
+                    except Exception:
+                        pass
                 data = _git_show(":3", git_rel, workspace_path)
                 if not data and theirs_ref:
                     data = _git_show(theirs_ref, git_rel, workspace_path)
@@ -4556,7 +4592,10 @@ a:hover {{ text-decoration: underline; }}
                 clone_url, html_url = provider.create_repository(token, repo_name, organization_name, private=True)
                 self.write_log(f"Created repository on {server_name}.", "success")
                 
-                clone_url = clone_url.replace("https://", f"https://x-access-token:{token}@")
+                if clone_url.startswith("https://"):
+                    clone_url = clone_url.replace("https://", f"https://x-access-token:{token}@", 1)
+                elif clone_url.startswith("http://"):
+                    clone_url = clone_url.replace("http://", f"http://x-access-token:{token}@", 1)
                 
                 self.write_log(f"Cloning repository to {local_repo_path}...", "info")
                 import git
@@ -4585,7 +4624,7 @@ a:hover {{ text-decoration: underline; }}
                     
                 # 8. Copy template files recursively
                 self.write_log("Copying template files to workspace...", "info")
-                template_path = os.path.abspath("template")
+                template_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "template")
                 if os.path.exists(template_path):
                     self._copy_template_dir(template_path, local_repo_path)
                     self.write_log("Templates copied successfully (renaming '_' to '.' prefixed files).", "success")
@@ -5461,6 +5500,8 @@ a:hover {{ text-decoration: underline; }}
         if github_token and cred_host:
             if remote_url.startswith("https://"):
                 authenticated_url = remote_url.replace("https://", f"https://x-access-token:{github_token}@", 1)
+            elif remote_url.startswith("http://"):
+                authenticated_url = remote_url.replace("http://", f"http://x-access-token:{github_token}@", 1)
                 
         def redact_token(text):
             if github_token and len(github_token) >= 8:
@@ -5535,12 +5576,20 @@ a:hover {{ text-decoration: underline; }}
             self.write_log(f"The current branch is '{current}'. Cannot merge default branch into itself.", "info")
             return
 
-        # Verify the detected default branch actually exists locally
+        # Verify the detected default branch exists locally or on origin
         try:
             branches = [b.name for b in self.git_service.repo.branches]
         except Exception:
             branches = []
         source = default if default in branches else None
+        if not source:
+            try:
+                remote_tip = self.git_service.get_branch_tip_commit(f"origin/{default}")
+                if remote_tip:
+                    self.git_service._run_lfs_cmd(["git", "branch", "-f", default, f"origin/{default}"])
+                    source = default
+            except Exception:
+                pass
         if not source:
             self.write_log("Local 'main' or 'master' branch does not exist.", "error")
             return
@@ -5562,6 +5611,11 @@ a:hover {{ text-decoration: underline; }}
                     # --- Fetch remote to get up-to-date remote branch info ---
                     try:
                         self.git_service._run_lfs_cmd(["git", "fetch", "origin"])
+                        # Keep local default branch ref synchronized with origin/<source> before merging
+                        try:
+                            self.git_service._run_lfs_cmd(["git", "branch", "-f", source, f"origin/{source}"])
+                        except Exception:
+                            pass
                     except Exception as fetch_e:
                         self.write_log(f"Remote fetch failed ({fetch_e}). Proceeding with local data...", "warning")
 
@@ -5949,6 +6003,8 @@ a:hover {{ text-decoration: underline; }}
         # an empty BOM.
         self.increment_tasks()
         self.btn_bom.state(["disabled"])
+        # Suppress background monitor auto-lock while configuration query opens the assembly as ReadOnly
+        self.suppress_auto_lock = True
         self.write_log(f"ℹ️ Querying SolidWorks configurations for {os.path.basename(filepath)}...", "info")
 
         def run_config_query():
@@ -6048,18 +6104,29 @@ try:
     except:
         pass
         
-    # 2. If not found in open docs, open silently and read-only to query
+    # 2. Try ISldWorks::GetConfigurationNames(path) header query without opening the assembly
+    if not config_names:
+        try:
+            cfg_fn = getattr(sw_app, 'GetConfigurationNames', None)
+            if cfg_fn:
+                cfg_list = cfg_fn(path) if callable(cfg_fn) else None
+                if cfg_list:
+                    config_names = list(cfg_list)
+        except:
+            pass
+
+    # 3. If still not found, open silently and read-only to query
     if not config_names:
         opened_temp = False
         model = None
         try:
             error = win32com.client.VARIANT(pythoncom.VT_BYREF | pythoncom.VT_I4, 0)
             warning = win32com.client.VARIANT(pythoncom.VT_BYREF | pythoncom.VT_I4, 0)
-            # doc_type = 2 (swDocASSEMBLY), options = 1 | 2 | 64
+            # doc_type = 2 (swDocASSEMBLY), options = 1 | 2 | 32
             #   1  = swOpenDocOptions_Silent
             #   2  = swOpenDocOptions_ReadOnly
-            #   64 = swOpenDocOptions_IgnoreActivationAndSuppression (suppress parent assembly auto-loading)
-            model = sw_app.OpenDoc6(path, 2, 1 | 2 | 64, "", error, warning)
+            #   32 = swOpenDocOptions_AutoMissingConfig
+            model = sw_app.OpenDoc6(path, 2, 1 | 2 | 32, "", error, warning)
             if model:
                 opened_temp = True
                 cfg_val = getattr(model, 'GetConfigurationNames', None)
@@ -6145,8 +6212,11 @@ finally:
                 self.start_bom_runner_process(full_path, filepath, selected_config.get())
 
             def on_cancel():
+                self.suppress_auto_lock = False
                 dialog.destroy()
                 self.write_log("ℹ️ BOM extraction cancelled by user.", "info")
+
+            dialog.protocol("WM_DELETE_WINDOW", on_cancel)
 
             btn_frm = ttk.Frame(dialog)
             btn_frm.pack(pady=15)
@@ -6469,6 +6539,16 @@ finally:
                 def cancel_action():
                     is_cancelled[0] = True
                     try:
+                        if proc.pid:
+                            subprocess.run(
+                                f"taskkill /F /T /PID {proc.pid}",
+                                shell=True,
+                                stdout=subprocess.DEVNULL,
+                                stderr=subprocess.DEVNULL
+                            )
+                    except Exception:
+                        pass
+                    try:
                         proc.terminate()
                     except Exception:
                         pass
@@ -6477,6 +6557,8 @@ finally:
                     except Exception:
                         pass
                     self.write_log("⚠️ Export process cancelled by user.", "warning")
+
+                progress_pop.protocol("WM_DELETE_WINDOW", cancel_action)
                     
                 # Cancel Button
                 btn_cancel = ttk.Button(progress_pop, text="Cancel", command=cancel_action)
@@ -6528,6 +6610,7 @@ finally:
                             # Change the Cancel button to a Close button
                             btn_cancel.config(text="Close")
                             btn_cancel.config(command=lambda: progress_pop.destroy())
+                            progress_pop.protocol("WM_DELETE_WINDOW", progress_pop.destroy)
                         except Exception:
                             pass
                         self.write_log("✅ Background export process finished successfully.", "success")
@@ -6537,6 +6620,7 @@ finally:
                             lbl_file.config(text=f"❌ SolidWorks export process failed with exit code {returncode}.", fg="#dc2626", height=2)
                             btn_cancel.config(text="Close")
                             btn_cancel.config(command=lambda: progress_pop.destroy())
+                            progress_pop.protocol("WM_DELETE_WINDOW", progress_pop.destroy)
                         except Exception:
                             pass
                         self.write_log(f"❌ Background export process failed with exit code {returncode}.", "error")
@@ -6563,9 +6647,10 @@ finally:
                                 except Exception as e:
                                     print(f"Error parsing progress output: {e}")
                             else:
-                                if "Switching to configuration:" in line_str:
+                                if "Switching to configuration:" in line_str or "Using already active configuration:" in line_str:
                                     try:
-                                        config_part = line_str.split("Switching to configuration:")[1].strip()
+                                        marker = "Switching to configuration:" if "Switching to configuration:" in line_str else "Using already active configuration:"
+                                        config_part = line_str.split(marker)[1].strip()
                                         if " for STEP export" in config_part:
                                             config_part = config_part.split(" for STEP export")[0].strip()
                                         self.after(0, lambda conf=config_part: update_config_progress(conf))
@@ -6952,8 +7037,14 @@ finally:
                                     if success:
                                         _rel = p.replace('\\', '/').lower()
                                         self.files_locked_by_us.add(_rel)
+                                        abs_p = os.path.join(self.workspace_path, p)
+                                        if os.path.exists(abs_p):
+                                            try:
+                                                os.chmod(abs_p, os.stat(abs_p).st_mode | stat.S_IWRITE)
+                                            except Exception:
+                                                pass
                                         self.write_log(f"Auto-locked component '{os.path.basename(p)}'.", "info")
-                                self.refresh_file_list()
+                                self.task_queue.put(('callback', None, self.refresh_file_list))
                         except Exception as ce:
                             print(f"Component auto-lock error: {ce}")
                 else:
@@ -7026,8 +7117,14 @@ finally:
                                                 if success:
                                                     _rel = p.replace('\\', '/').lower()
                                                     self.files_locked_by_us.add(_rel)
+                                                    abs_p = os.path.join(self.workspace_path, p)
+                                                    if os.path.exists(abs_p):
+                                                        try:
+                                                            os.chmod(abs_p, os.stat(abs_p).st_mode | stat.S_IWRITE)
+                                                        except Exception:
+                                                            pass
                                                     self.write_log(f"Auto-locked component '{os.path.basename(p)}'.", "info")
-                                            self.refresh_file_list()
+                                            self.task_queue.put(('callback', None, self.refresh_file_list))
                                             break
                                 except Exception:
                                     pass
@@ -7549,6 +7646,12 @@ finally:
                             for path, success, msg in results:
                                 if success:
                                     self.files_locked_by_us.add(path)
+                                    abs_p = os.path.join(self.workspace_path, path)
+                                    if os.path.exists(abs_p):
+                                        try:
+                                            os.chmod(abs_p, os.stat(abs_p).st_mode | stat.S_IWRITE)
+                                        except Exception:
+                                            pass
                                     self.task_queue.put(('sw_status', f"Automatically locked {path}", None))
                                 else:
                                     self.task_queue.put(('silent_error', f"Auto-lock failed for {path}: {msg}", None))
@@ -7581,6 +7684,12 @@ finally:
                                             if f.lower() == remove_target.lower():
                                                 self.files_locked_by_us.discard(f)
                                                 break
+                                    abs_p = os.path.join(self.workspace_path, path)
+                                    if os.path.exists(abs_p):
+                                        try:
+                                            os.chmod(abs_p, os.stat(abs_p).st_mode & ~stat.S_IWRITE)
+                                        except Exception:
+                                            pass
                                     self.task_queue.put(('sw_status', f"Automatically unlocked {path}", None))
                                 else:
                                     self.task_queue.put(('silent_error', f"Auto-unlock failed for {path}: {msg}", None))
@@ -7710,7 +7819,10 @@ finally:
                     status_out = self.git_service._run_lfs_cmd(["git", "-c", "core.quotepath=false", "status", "--porcelain", "-u"])
                     for line in status_out.splitlines():
                         if len(line) >= 3:
+                            status_code = line[:2]
                             filepath = line[3:].strip().replace("\\", "/")
+                            if (status_code.startswith("R") or status_code.startswith("C")) and " -> " in filepath:
+                                filepath = filepath.split(" -> ", 1)[1].strip()
                             if "\t" in filepath:
                                 filepath = filepath.split("\t")[0].replace("\\", "/")
                             if filepath.startswith('"') and filepath.endswith('"'):
@@ -7779,10 +7891,12 @@ finally:
                 
                 if files_to_add:
                     for chunk in [files_to_add[i:i+100] for i in range(0, len(files_to_add), 100)]:
-                        self.git_service._run_lfs_cmd(["git", "add"] + chunk)
+                        self.git_service._run_lfs_cmd(["git", "add", "--"] + chunk)
                 if files_to_rm:
                     for chunk in [files_to_rm[i:i+100] for i in range(0, len(files_to_rm), 100)]:
-                        self.git_service._run_lfs_cmd(["git", "rm", "--ignore-unmatch"] + chunk)
+                        self.git_service._run_lfs_cmd(["git", "rm", "--ignore-unmatch", "--"] + chunk)
+
+                orig_head = self.git_service.get_branch_tip_commit("HEAD") or "HEAD~1"
 
                 # 5. Commit with forced message
                 import git
@@ -7811,42 +7925,58 @@ finally:
                 # 6. Pull --rebase and push (best effort)
                 remote_url = self.git_service.get_remote_url()
                 branch = self.git_service.get_current_branch()
+                push_succeeded = True
 
                 if remote_url and branch:
                     try:
                         self.git_service._run_lfs_cmd(["git", "pull", "origin", branch, "--rebase"])
                         self.git_service._run_lfs_cmd(["git", "push", "origin", branch])
                     except Exception as e:
+                        push_succeeded = False
                         print(f"Failed to sync on exit: {e}")
-                        # Rollback the local commit so the repo is not left in a half-pushed state
+                        # Abort any in-progress rebase and rollback the local commit
                         try:
-                            self.git_service._run_lfs_cmd(["git", "reset", "--soft", "HEAD~1"])
+                            self.git_service._run_lfs_cmd(["git", "rebase", "--abort"], check=False)
+                        except Exception:
+                            pass
+                        try:
+                            self.git_service._run_lfs_cmd(["git", "reset", "--soft", orig_head])
                         except Exception:
                             pass
 
-                # 7. Auto-unlock SW files that were ours
-                sw_committed = [f for f in files_to_stage if os.path.splitext(f)[1].lower() in ('.sldprt', '.sldasm', '.slddrw')]
-                for file_rel_path in sw_committed:
-                    try:
-                        locks = self.git_service.get_lfs_locks()
-                        matched_lock_path = None
-                        for l_path in locks:
-                            if l_path.lower() == file_rel_path.lower():
-                                matched_lock_path = l_path
-                                break
-                        if matched_lock_path and locks[matched_lock_path]['is_ours']:
-                            self.git_service.unlock_file(matched_lock_path)
-                            rel_path_lower = file_rel_path.lower().replace("\\", "/")
-                            for f in list(self.files_locked_by_us):
-                                if f.lower() == rel_path_lower:
-                                    self.files_locked_by_us.discard(f)
-                                    break
-                            for f in list(self.files_manually_locked_by_us):
-                                if f.lower() == rel_path_lower:
-                                    self.files_manually_locked_by_us.discard(f)
-                                    break
-                    except Exception:
-                        pass
+                # 7. Auto-unlock SW files that were ours (only if push succeeded)
+                if push_succeeded:
+                    sw_committed = [f for f in files_to_stage if os.path.splitext(f)[1].lower() in ('.sldprt', '.sldasm', '.slddrw')]
+                    if sw_committed:
+                        try:
+                            locks = self.git_service.get_lfs_locks()
+                            locks_by_lower = {l_path.lower(): (l_path, info) for l_path, info in locks.items()}
+                            to_unlock = []
+                            for file_rel_path in sw_committed:
+                                match = locks_by_lower.get(file_rel_path.lower())
+                                if match and match[1].get('is_ours'):
+                                    to_unlock.append(match[0])
+                            if to_unlock:
+                                unlock_results = self.git_service.batch_unlock_files(to_unlock, max_workers=5)
+                                for u_path, u_ok, _ in unlock_results:
+                                    if u_ok:
+                                        rel_path_lower = u_path.lower().replace("\\", "/")
+                                        for f in list(self.files_locked_by_us):
+                                            if f.lower() == rel_path_lower:
+                                                self.files_locked_by_us.discard(f)
+                                                break
+                                        for f in list(self.files_manually_locked_by_us):
+                                            if f.lower() == rel_path_lower:
+                                                self.files_manually_locked_by_us.discard(f)
+                                                break
+                                        abs_u = os.path.join(self.workspace_path, u_path)
+                                        if os.path.exists(abs_u):
+                                            try:
+                                                os.chmod(abs_u, os.stat(abs_u).st_mode & ~stat.S_IWRITE)
+                                            except Exception:
+                                                pass
+                        except Exception:
+                            pass
 
                 self.task_queue.put(('callback', None, self.destroy))
             except Exception as e:

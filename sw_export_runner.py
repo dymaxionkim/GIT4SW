@@ -707,13 +707,37 @@ def close_all_documents_without_saving(swApp, already_open_paths=None):
 
 def run_single_export(file_abs, target_formats, output_dir, workspace_path, every_configurations=True):
     if not WIN32_AVAILABLE:
-        print("Error: PyWin32 is not installed or not running on Windows.")
+        print("Error: PyWin32 is not installed or not running on Windows.", flush=True)
         sys.exit(1)
         
+    import contextlib
+    import threading
+
+    @contextlib.contextmanager
+    def heartbeat_monitor(operation_desc, interval=15.0, max_duration=1200.0):
+        stop_evt = threading.Event()
+        start_ts = time.time()
+
+        def _worker():
+            while not stop_evt.wait(interval):
+                elapsed = time.time() - start_ts
+                if elapsed > max_duration:
+                    print(f"[HEARTBEAT] Operation exceeded max duration ({max_duration:.0f}s): {operation_desc}", flush=True)
+                    break
+                print(f"[HEARTBEAT] Still running: {operation_desc} ({elapsed:.0f}s elapsed)...", flush=True)
+
+        hb_thread = threading.Thread(target=_worker, daemon=True)
+        hb_thread.start()
+        try:
+            yield
+        finally:
+            stop_evt.set()
+            hb_thread.join(timeout=1.0)
+
     pythoncom.CoInitialize()
     swApp, was_running = start_or_bind_solidworks()
     if swApp is None:
-        print("Failed to bind to active SolidWorks instance for single export.")
+        print("Failed to bind to active SolidWorks instance for single export.", flush=True)
         sys.exit(1)
         
     # --- Key fix: do not populate already_open_paths from GetDocuments() ---
@@ -724,6 +748,7 @@ def run_single_export(file_abs, target_formats, output_dir, workspace_path, ever
     already_open_paths = set()
         
     model = None
+    export_failed = False
     try:
                         
         # Ensure preference settings are set to suppress any popup warnings/dialogs
@@ -742,34 +767,31 @@ def run_single_export(file_abs, target_formats, output_dir, workspace_path, ever
             swApp.SetUserPreferenceIntegerValue(245, 1) # swLargeAssemblyModeResolveLightweight -> Always (Resolve in large assembly mode silently)
             swApp.SetUserPreferenceToggle(389, False) # swShowStartupScreen -> False (Bypass Welcome screen on startup)
         except Exception as pref_e:
-            print(f"Failed to set user preferences in single export: {pref_e}")
+            print(f"Failed to set user preferences in single export: {pref_e}", flush=True)
                 
         f_lower = file_abs.lower()
-        # Common flags:
+        # SolidWorks swOpenDocOptions_e flags (verified from swconst.tlb):
         #   1   = swOpenDocOptions_Silent
         #   2   = swOpenDocOptions_ReadOnly
-        #   32  = swOpenDocOptions_LoadModel        (drawing/assembly: load referenced model/components)
-        #   64  = swOpenDocOptions_IgnoreActivationAndSuppression
-        #         (suppress parent assembly auto-activation/loading - applied to sldprt/slddrw/sldasm to
-        #          block the parent assembly from being opened alongside)
-        #   128 = swOpenDocOptions_AutoMissingComponentResolve
+        #   16  = swOpenDocOptions_LoadModel        (drawing: load referenced model)
+        #   32  = swOpenDocOptions_AutoMissingConfig (automatically resolve missing configurations)
+        # Note: Do NOT set 64 (swOpenDocOptions_OverrideDefaultLoadLightweight) or 128 (swOpenDocOptions_LoadLightweight)
+        # because opening assemblies in lightweight mode causes ShowConfiguration2 to fail and forces slow lazy
+        # component resolution during SaveAs3.
         if f_lower.endswith(".slddrw"):
             doc_type = 3  # swDocDRAWING
-            # Drawing: referenced model loads normally via LoadModel(32); only parent assembly auto-loading is blocked via 64.
-            open_options = 1 | 32 | 64 | 2 | 128
+            open_options = 1 | 2 | 16 | 32
         elif f_lower.endswith(".sldprt"):
             doc_type = 1  # swDocPART
-            # 1 = swOpenDocOptions_Silent, 64 = IgnoreActivation, 2 = ReadOnly, 128 = AutoMissingComponentResolve
-            open_options = 1 | 64 | 2 | 128
+            open_options = 1 | 2 | 32
         elif f_lower.endswith(".sldasm"):
             doc_type = 2  # swDocASSEMBLY
-            # Assembly: components load normally via LoadModel(32); only parent assembly auto-loading is blocked via 64.
-            open_options = 1 | 32 | 64 | 2 | 128
+            open_options = 1 | 2 | 32
         else:
-            print(f"Unsupported file format: {file_abs}")
+            print(f"Unsupported file format: {file_abs}", flush=True)
             sys.exit(1)
 
-        # For .sldprt: suppress parent assembly auto-loading during OpenDoc6.
+        # For .sldprt: suppress external reference loading during OpenDoc6.
         # Assembly and drawing files still load references normally.
         orig_load_ext_for_open = None
         if f_lower.endswith(".sldprt"):
@@ -779,7 +801,7 @@ def run_single_export(file_abs, target_formats, output_dir, workspace_path, ever
             except Exception:
                 pass
 
-        print(f"Opening: {file_abs}")
+        print(f"Opening: {file_abs}", flush=True)
         error = win32com.client.VARIANT(pythoncom.VT_BYREF | pythoncom.VT_I4, 0)
         warning = win32com.client.VARIANT(pythoncom.VT_BYREF | pythoncom.VT_I4, 0)
 
@@ -788,7 +810,8 @@ def run_single_export(file_abs, target_formats, output_dir, workspace_path, ever
         # and adding them to already_open_paths would prevent closing them. Use an empty set for already_open_paths.
         # At close time, all currently open documents are closed.
 
-        model = swApp.OpenDoc6(file_abs, doc_type, open_options, "", error, warning)
+        with heartbeat_monitor(f"OpenDoc6 ({os.path.basename(file_abs)})"):
+            model = swApp.OpenDoc6(file_abs, doc_type, open_options, "", error, warning)
 
         # Restore swLoadExternalReferences immediately after opening
         if orig_load_ext_for_open is not None:
@@ -798,7 +821,7 @@ def run_single_export(file_abs, target_formats, output_dir, workspace_path, ever
                 pass
 
         if model is None:
-            print(f"Failed to open {file_abs}. Error: {error.value}")
+            print(f"Failed to open {file_abs}. Error: {error.value}", flush=True)
             sys.exit(1)
 
             
@@ -807,6 +830,14 @@ def run_single_export(file_abs, target_formats, output_dir, workspace_path, ever
         time.sleep(1) # Delay for large document stabilization
         
         if f_lower.endswith(".sldasm"):
+            # Resolve any lightweight components upfront so configuration switching and STEP export work reliably
+            try:
+                with heartbeat_monitor(f"ResolveAllLightWeightComponents ({os.path.basename(file_abs)})"):
+                    res_lw = model.ResolveAllLightWeightComponents(False)
+                    print(f"Resolved lightweight components (status: {res_lw})", flush=True)
+            except Exception as lw_err:
+                print(f"Note: ResolveAllLightWeightComponents skipped/failed: {lw_err}", flush=True)
+
             # Unified sldasm processing (STEP_ASM)
             do_step_asm = "STEP_ASM" in target_formats
             
@@ -838,11 +869,13 @@ def run_single_export(file_abs, target_formats, output_dir, workspace_path, ever
                         else:
                             config_names = conf_val
                         if config_names and len(config_names) >= 2:
-                            configs_to_process = config_names
+                            configs_to_process = list(config_names)
+                            if active_cfg_name and active_cfg_name in configs_to_process:
+                                configs_to_process = [active_cfg_name] + [c for c in configs_to_process if c != active_cfg_name]
                         else:
                             configs_to_process = [active_cfg_name] if active_cfg_name else [None]
                     except Exception as conf_err:
-                        print(f"Failed to get configuration names for sldasm: {conf_err}")
+                        print(f"Failed to get configuration names for sldasm: {conf_err}", flush=True)
                         configs_to_process = [active_cfg_name] if active_cfg_name else [None]
                 else:
                     configs_to_process = [active_cfg_name] if active_cfg_name else [None]
@@ -856,21 +889,33 @@ def run_single_export(file_abs, target_formats, output_dir, workspace_path, ever
                     swApp.SetUserPreferenceIntegerValue(75, 214)                          # AP214
                     swApp.SetUserPreferenceToggle(787, True)                              # Export Appearances
                 except Exception as pref_e:
-                    print(f"Failed to set STEP_ASM preferences: {pref_e}")
+                    print(f"Failed to set STEP_ASM preferences: {pref_e}", flush=True)
                 
                 file_dir = os.path.dirname(file_abs)
                 base_filename = os.path.splitext(os.path.basename(file_abs))[0]
+                current_cfg_name = active_cfg_name
                 
                 for config_name in configs_to_process:
                     if config_name:
-                        try:
-                            print(f"Switching to configuration: {config_name}", flush=True)
-                            success = model.ShowConfiguration2(config_name)
-                            if not success:
-                                print(f"Warning: ShowConfiguration2 returned False for configuration: {config_name}", flush=True)
-                            time.sleep(1) # Delay for large configuration switching rebuild
-                        except Exception as show_conf_err:
-                            print(f"Failed to show configuration {config_name}: {show_conf_err}", flush=True)
+                        if config_name == current_cfg_name:
+                            print(f"Using already active configuration: {config_name}", flush=True)
+                        else:
+                            try:
+                                print(f"Switching to configuration: {config_name}", flush=True)
+                                with heartbeat_monitor(f"ShowConfiguration2 ({config_name})"):
+                                    success = model.ShowConfiguration2(config_name)
+                                if not success:
+                                    print(f"Warning: ShowConfiguration2 returned False for configuration: {config_name}", flush=True)
+                                else:
+                                    current_cfg_name = config_name
+                                time.sleep(1) # Delay for large configuration switching rebuild
+                                try:
+                                    with heartbeat_monitor(f"ResolveAllLightWeightComponents ({config_name})"):
+                                        model.ResolveAllLightWeightComponents(False)
+                                except Exception:
+                                    pass
+                            except Exception as show_conf_err:
+                                print(f"Failed to show configuration {config_name}: {show_conf_err}", flush=True)
                     
                     dest_dir_step = os.path.join(file_dir, output_dir, "STEP_ASM")
                     os.makedirs(dest_dir_step, exist_ok=True)
@@ -883,15 +928,18 @@ def run_single_export(file_abs, target_formats, output_dir, workspace_path, ever
                         try:
                             os.remove(dest_file_path)
                         except Exception as del_e:
-                            print(f"Failed to remove existing file {dest_file_path}: {del_e}")
+                            print(f"Failed to remove existing file {dest_file_path}: {del_e}", flush=True)
                             
                     # Save with Silent option (9 = Silent | AvoidDialogueOnSave) and current version (0)
-                    result = model.SaveAs3(dest_file_path, 0, 9)
+                    print(f"Exporting STEP_ASM to: {dest_file_path} ...", flush=True)
+                    with heartbeat_monitor(f"SaveAs3 ({os.path.basename(dest_file_path)})"):
+                        result = model.SaveAs3(dest_file_path, 0, 9)
                     time.sleep(1) # Crucial delay to allow disk write to finalize and release lock
-                    if result == 0:
-                        print(f"Successfully exported STEP_ASM {file_abs} -> {dest_file_path}")
+                    if result == 0 and os.path.exists(dest_file_path):
+                        print(f"Successfully exported STEP_ASM {file_abs} -> {dest_file_path}", flush=True)
                     else:
-                        print(f"Failed to save STEP_ASM {dest_file_path} (SaveAs3 code: {result})")
+                        export_failed = True
+                        print(f"Failed to save STEP_ASM {dest_file_path} (SaveAs3 code: {result})", flush=True)
                             
                 # Restore STEP_ASM settings
                 try:
@@ -900,7 +948,7 @@ def run_single_export(file_abs, target_formats, output_dir, workspace_path, ever
                     if orig_step_appearances is not None:
                         swApp.SetUserPreferenceToggle(787, orig_step_appearances)
                 except Exception as restore_e:
-                    print(f"Failed to restore STEP_ASM preferences: {restore_e}")
+                    print(f"Failed to restore STEP_ASM preferences: {restore_e}", flush=True)
         else:
             # Drawing and Part export logic
             for active_fmt in target_formats:
@@ -923,7 +971,7 @@ def run_single_export(file_abs, target_formats, output_dir, workspace_path, ever
                         swApp.SetUserPreferenceToggle(327, True)                              # Use printer line weights
                         swApp.SetUserPreferenceToggle(325, True)                              # High quality lines
                     except Exception as pref_e:
-                        print(f"Failed to set PDF preferences: {pref_e}")
+                        print(f"Failed to set PDF preferences: {pref_e}", flush=True)
                         
                 elif active_fmt == "DXF":
                     format_subdir = "DXF"
@@ -939,7 +987,7 @@ def run_single_export(file_abs, target_formats, output_dir, workspace_path, ever
                         swApp.SetUserPreferenceIntegerValue(75, 214)                          # AP214
                         swApp.SetUserPreferenceToggle(787, True)                              # Export Appearances
                     except Exception as pref_e:
-                        print(f"Failed to set STEP preferences: {pref_e}")
+                        print(f"Failed to set STEP preferences: {pref_e}", flush=True)
 
                 # Determine output directory
                 file_dir = os.path.dirname(file_abs)
@@ -950,8 +998,8 @@ def run_single_export(file_abs, target_formats, output_dir, workspace_path, ever
                 
                 # Determine configurations list to iterate
                 configs_to_process = [None]
+                active_cfg_name = None
                 if active_fmt == "STEP":
-                    active_cfg_name = None
                     try:
                         cfg_mgr = getattr(model, 'ConfigurationManager', None)
                         if cfg_mgr:
@@ -977,27 +1025,37 @@ def run_single_export(file_abs, target_formats, output_dir, workspace_path, ever
                             else:
                                 config_names = conf_val
                             if config_names and len(config_names) >= 2:
-                                configs_to_process = config_names
+                                configs_to_process = list(config_names)
+                                if active_cfg_name and active_cfg_name in configs_to_process:
+                                    configs_to_process = [active_cfg_name] + [c for c in configs_to_process if c != active_cfg_name]
                             else:
                                 configs_to_process = [active_cfg_name] if active_cfg_name else [None]
                         except Exception as conf_err:
-                            print(f"Failed to get configuration names: {conf_err}")
+                            print(f"Failed to get configuration names: {conf_err}", flush=True)
                             configs_to_process = [active_cfg_name] if active_cfg_name else [None]
                     else:
                         configs_to_process = [active_cfg_name] if active_cfg_name else [None]
                         
+                current_cfg_name = active_cfg_name
                 for config_name in configs_to_process:
                     if config_name:
-                        try:
-                            print(f"Switching to configuration: {config_name} for STEP export", flush=True)
-                            success = model.ShowConfiguration2(config_name)
-                            if not success:
-                                print(f"Warning: ShowConfiguration2 returned False for configuration: {config_name}", flush=True)
-                            time.sleep(1) # Delay for configuration switching rebuild
+                        if config_name == current_cfg_name:
+                            print(f"Using already active configuration: {config_name} for STEP export", flush=True)
                             dest_file_path = os.path.join(dest_dir, f"{base_filename}__{config_name}{target_ext}")
-                        except Exception as show_conf_err:
-                            print(f"Failed to show configuration {config_name}: {show_conf_err}", flush=True)
-                            dest_file_path = os.path.join(dest_dir, base_filename + target_ext)
+                        else:
+                            try:
+                                print(f"Switching to configuration: {config_name} for STEP export", flush=True)
+                                with heartbeat_monitor(f"ShowConfiguration2 ({config_name})"):
+                                    success = model.ShowConfiguration2(config_name)
+                                if not success:
+                                    print(f"Warning: ShowConfiguration2 returned False for configuration: {config_name}", flush=True)
+                                else:
+                                    current_cfg_name = config_name
+                                time.sleep(1) # Delay for configuration switching rebuild
+                                dest_file_path = os.path.join(dest_dir, f"{base_filename}__{config_name}{target_ext}")
+                            except Exception as show_conf_err:
+                                print(f"Failed to show configuration {config_name}: {show_conf_err}", flush=True)
+                                dest_file_path = os.path.join(dest_dir, base_filename + target_ext)
                     else:
                         dest_file_path = os.path.join(dest_dir, base_filename + target_ext)
                         
@@ -1006,15 +1064,17 @@ def run_single_export(file_abs, target_formats, output_dir, workspace_path, ever
                         try:
                             os.remove(dest_file_path)
                         except Exception as del_e:
-                            print(f"Failed to remove existing file {dest_file_path}: {del_e}")
+                            print(f"Failed to remove existing file {dest_file_path}: {del_e}", flush=True)
                             
                     # Save with Silent option (9 = Silent | AvoidDialogueOnSave) and current version (0)
-                    result = model.SaveAs3(dest_file_path, 0, 9)
+                    with heartbeat_monitor(f"SaveAs3 ({os.path.basename(dest_file_path)})"):
+                        result = model.SaveAs3(dest_file_path, 0, 9)
                     time.sleep(1) # Crucial delay to allow disk write to finalize and release lock
-                    if result == 0:
-                        print(f"Successfully exported {file_abs} -> {dest_file_path}")
+                    if result == 0 and os.path.exists(dest_file_path):
+                        print(f"Successfully exported {file_abs} -> {dest_file_path}", flush=True)
                     else:
-                        print(f"Failed to save {dest_file_path} (SaveAs3 code: {result})")
+                        export_failed = True
+                        print(f"Failed to save {dest_file_path} (SaveAs3 code: {result})", flush=True)
                     
                 # Restore settings
                 if active_fmt == "PDF":
@@ -1026,7 +1086,7 @@ def run_single_export(file_abs, target_formats, output_dir, workspace_path, ever
                         if orig_pdf_high_quality is not None:
                             swApp.SetUserPreferenceToggle(325, orig_pdf_high_quality)
                     except Exception as restore_e:
-                        print(f"Failed to restore PDF preferences: {restore_e}")
+                        print(f"Failed to restore PDF preferences: {restore_e}", flush=True)
                 elif active_fmt == "STEP":
                     try:
                         if orig_step_ap is not None:
@@ -1034,7 +1094,7 @@ def run_single_export(file_abs, target_formats, output_dir, workspace_path, ever
                         if orig_step_appearances is not None:
                             swApp.SetUserPreferenceToggle(787, orig_step_appearances)
                     except Exception as restore_e:
-                        print(f"Failed to restore STEP preferences: {restore_e}")
+                        print(f"Failed to restore STEP preferences: {restore_e}", flush=True)
 
         # Close the specific main model document first to release active reference links.
         if model:
@@ -1104,11 +1164,13 @@ def run_single_export(file_abs, target_formats, output_dir, workspace_path, ever
                             try:
                                 print(f"  Attempting CloseDoc('{identifier}') for main doc", flush=True)
                                 swApp.CloseDoc(identifier)
+                                break
                             except:
                                 pass
                             try:
                                 print(f"  Attempting QuitDoc('{identifier}') for main doc", flush=True)
                                 swApp.QuitDoc(identifier)
+                                break
                             except:
                                 pass
                     finally:
@@ -1123,9 +1185,11 @@ def run_single_export(file_abs, target_formats, output_dir, workspace_path, ever
 
         # Final cleanup for any remaining documents (skeletons, assemblies, etc.)
         close_all_documents_without_saving(swApp, already_open_paths)
+        if export_failed:
+            sys.exit(1)
         
     except Exception as file_e:
-        print(f"Error processing {file_abs}: {repr(file_e)}")
+        print(f"Error processing {file_abs}: {repr(file_e)}", flush=True)
         if swApp:
             if model:
                 try:
@@ -1190,10 +1254,12 @@ def run_single_export(file_abs, target_formats, output_dir, workspace_path, ever
                             for identifier in uniq_main_ids:
                                 try:
                                     swApp.CloseDoc(identifier)
+                                    break
                                 except:
                                     pass
                                 try:
                                     swApp.QuitDoc(identifier)
+                                    break
                                 except:
                                     pass
                         finally:
@@ -1283,6 +1349,51 @@ def run_export(job_file):
         pythoncom.CoUninitialize()
         sys.exit(1)
 
+    orig_prefs_toggle = {}
+    orig_prefs_int = {}
+    toggle_pref_ids = (11, 143, 15, 119, 249, 46, 389)
+    int_pref_ids = (246, 242, 243, 245)
+
+    def _save_orig_preferences(app):
+        for pid in toggle_pref_ids:
+            try:
+                orig_prefs_toggle[pid] = app.GetUserPreferenceToggle(pid)
+            except Exception:
+                pass
+        for pid in int_pref_ids:
+            try:
+                orig_prefs_int[pid] = app.GetUserPreferenceIntegerValue(pid)
+            except Exception:
+                pass
+
+    def _apply_batch_preferences(app):
+        try:
+            app.SetUserPreferenceToggle(11, False)  # swDxfIssuingWarning
+            app.SetUserPreferenceToggle(143, False) # swDxfMappingFileEnabled
+            app.SetUserPreferenceToggle(15, True)   # swExtRefNoPromptOrSave (Don't prompt to save read-only referenced docs)
+            app.SetUserPreferenceToggle(119, False) # swShowErrorsEveryRebuild (Suppress rebuild errors dialog)
+            app.SetUserPreferenceIntegerValue(246, 1) # swRebuildErrorAction -> swStopContinuePrompt_Continue (Always continue on rebuild errors)
+            app.SetUserPreferenceToggle(249, False) # swWarnSaveUpdateErrors (Suppress save warnings on rebuild errors)
+            app.SetUserPreferenceToggle(46, False)  # swAutoSaveEnable (Disable Auto-Save/Recovery to prevent recovery prompts)
+            app.SetUserPreferenceIntegerValue(242, 1) # swLoadExternalReferences -> swLoadExternalReferences_All (Load all references silently)
+            app.SetUserPreferenceIntegerValue(243, 1) # swAssemblyLoadLightweightResolve -> Always (Resolve lightweight components silently)
+            app.SetUserPreferenceIntegerValue(245, 1) # swLargeAssemblyModeResolveLightweight -> Always (Resolve in large assembly mode silently)
+            app.SetUserPreferenceToggle(389, False) # swShowStartupScreen -> False (Bypass Welcome screen on startup)
+        except Exception as pref_e:
+            print(f"Failed to set user preferences: {pref_e}", flush=True)
+
+    def _restore_orig_preferences(app):
+        for pid, val in orig_prefs_toggle.items():
+            try:
+                app.SetUserPreferenceToggle(pid, val)
+            except Exception:
+                pass
+        for pid, val in orig_prefs_int.items():
+            try:
+                app.SetUserPreferenceIntegerValue(pid, val)
+            except Exception:
+                pass
+
     # Apply configuration and preferences to the bound swApp instance (always executed)
     try:
         force_visible(swApp)
@@ -1301,18 +1412,8 @@ def run_export(job_file):
             print(f"Could not retrieve SolidWorks PID: {pid_e}", flush=True)
             sw_pid = None
             
-        # Suppress warnings and dialog prompts
-        try:
-            swApp.SetUserPreferenceToggle(11, False)  # swDxfIssuingWarning
-            swApp.SetUserPreferenceToggle(143, False) # swDxfMappingFileEnabled
-            swApp.SetUserPreferenceToggle(15, True)   # swExtRefNoPromptOrSave (Don't prompt to save read-only referenced docs)
-            swApp.SetUserPreferenceToggle(119, False) # swShowErrorsEveryRebuild (Suppress rebuild errors dialog)
-            swApp.SetUserPreferenceIntegerValue(246, 1) # swRebuildErrorAction -> swStopContinuePrompt_Continue (Always continue on rebuild errors)
-            swApp.SetUserPreferenceToggle(249, False) # swWarnSaveUpdateErrors (Suppress save warnings on rebuild errors)
-            swApp.SetUserPreferenceToggle(46, False)  # swAutoSaveEnable (Disable Auto-Save/Recovery to prevent recovery prompts)
-            swApp.SetUserPreferenceToggle(389, False) # swShowStartupScreen -> False (Bypass Welcome screen on startup)
-        except Exception as pref_e:
-            print(f"Failed to set user preferences: {pref_e}", flush=True)
+        _save_orig_preferences(swApp)
+        _apply_batch_preferences(swApp)
 
         # List of file jobs to run, sorted by format order: PDF/DXF (.slddrw) -> STEP (.sldprt) -> STEP_ASM (.sldasm)
         def get_file_priority(f_rel):
@@ -1337,7 +1438,7 @@ def run_export(job_file):
         for idx, file_rel in enumerate(file_list):
             file_abs = os.path.normpath(os.path.join(workspace_path, file_rel))
             if not os.path.exists(file_abs):
-                print(f"Skipping missing file: {file_abs}")
+                print(f"Skipping missing file: {file_abs}", flush=True)
                 continue
                 
             target_formats = file_jobs[file_rel]
@@ -1382,7 +1483,7 @@ def run_export(job_file):
             t_read.start()
             
             start_time = time.time()
-            timeout = 180.0 # 180 seconds watchdog silence timeout
+            timeout = 600.0 # 600 seconds watchdog silence timeout (kept alive by 15s heartbeats during heavy SaveAs3/OpenDoc6)
             timed_out = False
             
             while True:
@@ -1411,7 +1512,7 @@ def run_export(job_file):
                     
                 if time.time() - start_time > timeout:
                     timed_out = True
-                    print(f"\n[WARNING] Watchdog Timeout: File conversion exceeded 180 seconds limit ({file_rel}). Force terminating process...", flush=True)
+                    print(f"\n[WARNING] Watchdog Timeout: File conversion exceeded {int(timeout)} seconds silence limit ({file_rel}). Force terminating process...", flush=True)
                     proc.terminate()
                     try:
                         proc.wait(timeout=5)
@@ -1440,7 +1541,8 @@ def run_export(job_file):
                 
                 print("Launching a new SolidWorks instance to resume...", flush=True)
                 try:
-                    swApp, was_already_running = start_or_bind_solidworks()
+                    # Do NOT overwrite was_already_running so final cleanup honors initial SolidWorks state
+                    swApp, _ = start_or_bind_solidworks()
                     if swApp:
                         force_visible(swApp)
                         try:
@@ -1457,13 +1559,7 @@ def run_export(job_file):
                             sw_pid = None
                             
                         # Suppress warnings and prompts on the new instance
-                        swApp.SetUserPreferenceToggle(11, False)
-                        swApp.SetUserPreferenceToggle(143, False)
-                        swApp.SetUserPreferenceToggle(15, True)
-                        swApp.SetUserPreferenceToggle(119, False)
-                        swApp.SetUserPreferenceIntegerValue(246, 1)
-                        swApp.SetUserPreferenceToggle(249, False)
-                        swApp.SetUserPreferenceToggle(46, False)
+                        _apply_batch_preferences(swApp)
                 except Exception as re_e:
                     print(f"Failed to restart SolidWorks instance: {re_e}", flush=True)
                     swApp = None
@@ -1489,16 +1585,15 @@ def run_export(job_file):
                     time.sleep(0.25)
 
         # Restore global warning preferences
-        try:
-            swApp.SetUserPreferenceToggle(11, True)
-            swApp.SetUserPreferenceToggle(143, True)
-            swApp.SetUserPreferenceToggle(15, False)
-        except:
-            pass
+        _restore_orig_preferences(swApp)
 
     finally:
         # Close all open documents and exit SolidWorks if we started it
         if swApp:
+            try:
+                _restore_orig_preferences(swApp)
+            except Exception:
+                pass
             try:
                 # --- Key fix: do not update already_open_paths from GetDocuments() ---
                 # Same principle as BOM: during batch processing, files that a subprocess failed to close
@@ -1514,23 +1609,31 @@ def run_export(job_file):
                     print("Closing all documents (SolidWorks was launched by export runner)...", flush=True)
                     close_all_documents_without_saving(swApp, already_open_paths=None)
             except Exception as close_err:
-                print(f"Error during final documents cleanup: {close_err}")
+                print(f"Error during final documents cleanup: {close_err}", flush=True)
                 
             if not was_already_running:
-                def exit_sw_async(app):
+                def exit_sw_async():
                     try:
-                        app.ExitApp()
+                        pythoncom.CoInitialize()
+                        try:
+                            raw_sw = win32com.client.GetActiveObject("SldWorks.Application")
+                            sw_local = get_dynamic_sw_app(raw_sw)
+                            if sw_local:
+                                sw_local.ExitApp()
+                        finally:
+                            pythoncom.CoUninitialize()
                     except Exception as exit_e:
-                        print(f"Error during swApp.ExitApp(): {exit_e}")
+                        print(f"Note: swApp.ExitApp() finished/skipped: {exit_e}", flush=True)
                         
                 try:
-                    t_exit = threading.Thread(target=exit_sw_async, args=(swApp,), daemon=True)
+                    swApp = None
+                    t_exit = threading.Thread(target=exit_sw_async, daemon=True)
                     t_exit.start()
                     t_exit.join(timeout=5.0) # Wait up to 5.0 seconds for graceful ExitApp
                 except Exception as t_err:
-                    print(f"Failed to start async ExitApp thread: {t_err}")
+                    print(f"Failed to start async ExitApp thread: {t_err}", flush=True)
             else:
-                print("SolidWorks was already running before export. Skipping ExitApp.")
+                print("SolidWorks was already running before export. Skipping ExitApp.", flush=True)
                 
         # Clean up process if still alive and we started it
         if not was_already_running:
@@ -1540,11 +1643,11 @@ def run_export(job_file):
                     subprocess.run(f"taskkill /F /PID {sw_pid}", shell=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
                 subprocess.run("taskkill /F /IM SLDWORKS.exe", shell=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
                 subprocess.run("taskkill /F /IM sldworks_fs.exe", shell=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-                print("Forcefully terminated all remaining SolidWorks processes to ensure clean exit.")
+                print("Forcefully terminated all remaining SolidWorks processes to ensure clean exit.", flush=True)
             except Exception as kill_e:
-                print(f"Could not clean up SolidWorks processes: {kill_e}")
+                print(f"Could not clean up SolidWorks processes: {kill_e}", flush=True)
         else:
-            print("SolidWorks was already running. Skipping process termination.")
+            print("SolidWorks was already running. Skipping process termination.", flush=True)
                 
         pythoncom.CoUninitialize()
         
@@ -1552,9 +1655,9 @@ def run_export(job_file):
         try:
             if os.path.exists(job_file):
                 os.remove(job_file)
-                print(f"Successfully cleaned up temporary job file: {job_file}")
+                print(f"Successfully cleaned up temporary job file: {job_file}", flush=True)
         except Exception as cleanup_e:
-            print(f"Failed to remove job file {job_file}: {cleanup_e}")
+            print(f"Failed to remove job file {job_file}: {cleanup_e}", flush=True)
             
         if has_errors:
             print("[ERROR] Export finished with errors. One or more files failed to convert.", flush=True)
