@@ -14,7 +14,7 @@ import time
 import markdown
 from tkinterweb import HtmlFrame
 
-from git_service import GitService, MergeConflictError, run_git_subprocess
+from git_service import GitService, MergeConflictError, run_git_subprocess, get_configured_git_exe
 from git_provider import (
     GitHubProvider, GiteaProvider, create_provider, detect_provider,
     parse_remote_url, load_config_for_token
@@ -521,9 +521,16 @@ class FileCommitHistoryDialog(tk.Toplevel):
             except Exception:
                 pass
 
-            # 4-B. If not found, launch sldworks.exe and poll ROT up to 60 s
+            # 4-B. If not found, launch the configured SLDWORKS.exe and poll ROT up to 60 s
             if sw_app is None:
-                sldworks_exe = r"C:\Program Files\SOLIDWORKS Corp\SOLIDWORKS\sldworks.exe"
+                try:
+                    sldworks_exe = self.parent.load_solidworks_path()
+                except Exception:
+                    sldworks_exe = r"C:\Program Files\SOLIDWORKS Corp\SOLIDWORKS\SLDWORKS.exe"
+                try:
+                    sldworks_exe = os.path.abspath(os.path.expandvars(sldworks_exe))
+                except Exception:
+                    pass
                 if os.path.exists(sldworks_exe):
                     print(f"SolidWorks not running - launching: {sldworks_exe}", flush=True)
                     self.after(0, lambda: self.lbl_status.config(
@@ -550,7 +557,11 @@ class FileCommitHistoryDialog(tk.Toplevel):
                     except Exception as _launch_err:
                         print(f"Failed to launch SolidWorks: {_launch_err}", flush=True)
                 else:
-                    print(f"sldworks.exe not found at default path: {sldworks_exe}", flush=True)
+                    print(
+                        f"Configured SolidWorks executable not found: {sldworks_exe}. "
+                        "Check 'solidworks_path' in config.json.",
+                        flush=True,
+                    )
 
             # 4-C. Fallback: GetObject
             if sw_app is None:
@@ -1208,8 +1219,8 @@ class GIT4SWApp(tk.Tk):
         # Stored auto sync configuration
         config_data = self.load_config_data()
         self.auto_sync_var = tk.BooleanVar(value=config_data.get("auto_sync", False))
-        self.auto_backup_conflicts_var = tk.BooleanVar(value=config_data.get("auto_backup_conflicts", True))
-        self.auto_lock_var = tk.BooleanVar(value=config_data.get("auto_lock", True))
+        self.auto_backup_conflicts_var = tk.BooleanVar(value=config_data.get("auto_backup_conflicts", False))
+        self.auto_lock_var = tk.BooleanVar(value=config_data.get("auto_lock", False))
         
         self.setup_styles()
         self.init_ui()
@@ -1259,9 +1270,10 @@ class GIT4SWApp(tk.Tk):
         """Background worker: fetch from origin and compare HEAD vs upstream."""
         try:
             script_dir = os.path.dirname(os.path.abspath(__file__))
+            git_exe = get_configured_git_exe()
 
             fetch = subprocess.run(
-                ["git", "fetch", "origin", "--quiet"],
+                [git_exe, "fetch", "origin", "--quiet"],
                 cwd=script_dir, capture_output=True, timeout=30
             )
             if fetch.returncode != 0:
@@ -1270,7 +1282,7 @@ class GIT4SWApp(tk.Tk):
 
             # Count commits that remote has but local doesn't (behind count)
             behind = subprocess.run(
-                ["git", "rev-list", "--count", "HEAD..@{u}"],
+                [git_exe, "rev-list", "--count", "HEAD..@{u}"],
                 cwd=script_dir, capture_output=True, text=True, timeout=10
             )
             if behind.returncode != 0:
@@ -1345,8 +1357,9 @@ class GIT4SWApp(tk.Tk):
 
         def worker():
             try:
+                git_exe = get_configured_git_exe()
                 pull = subprocess.run(
-                    ["git", "pull", "origin"],
+                    [git_exe, "pull", "origin"],
                     cwd=script_dir, capture_output=True, text=True, timeout=120
                 )
                 if pull.returncode != 0:
@@ -2666,7 +2679,7 @@ a:hover {{ text-decoration: underline; }}
                             pass
                     if not username:
                         try:
-                            res = subprocess.run(["git", "config", "user.name"], capture_output=True, text=True, check=True)
+                            res = subprocess.run([get_configured_git_exe(), "config", "user.name"], capture_output=True, text=True, check=True)
                             username = res.stdout.strip()
                         except Exception:
                             pass
@@ -2822,7 +2835,7 @@ a:hover {{ text-decoration: underline; }}
                 
                 if not username:
                     try:
-                        res = subprocess.run(["git", "config", "user.name"], capture_output=True, text=True, check=True)
+                        res = subprocess.run([get_configured_git_exe(), "config", "user.name"], capture_output=True, text=True, check=True)
                         username = res.stdout.strip()
                     except Exception:
                         pass
@@ -5928,7 +5941,8 @@ a:hover {{ text-decoration: underline; }}
             try:
                 with open(config_path, "r", encoding="utf-8") as f:
                     config = json.load(f)
-                    return config.get("solidworks_path", default_path)
+                    value = config.get("solidworks_path", default_path)
+                    return str(value) if value else default_path
             except Exception:
                 return default_path
         return default_path
@@ -6028,6 +6042,13 @@ a:hover {{ text-decoration: underline; }}
             import subprocess
             
             target_path_fs = os.path.normpath(full_path).replace('\\', '/')
+
+            # Use the executable configured in config.json instead of a hardcoded path.
+            sldworks_exe = self.load_solidworks_path()
+            try:
+                sldworks_exe = os.path.abspath(os.path.expandvars(sldworks_exe))
+            except Exception:
+                pass
             
             py_code = """
 import win32com.client
@@ -6052,7 +6073,7 @@ def get_sw_app():
     except:
         pass
     # Try launching
-    sldworks_exe = r"C:\\Program Files\\SOLIDWORKS Corp\\SOLIDWORKS\\sldworks.exe"
+    sldworks_exe = __SOLIDWORKS_EXE__
     if os.path.exists(sldworks_exe):
         import subprocess
         subprocess.Popen([sldworks_exe])
@@ -6156,7 +6177,7 @@ finally:
         pythoncom.CoUninitialize()
     except:
         pass
-""".replace("__TARGET_PATH__", repr(target_path_fs))
+""".replace("__TARGET_PATH__", repr(target_path_fs)).replace("__SOLIDWORKS_EXE__", repr(sldworks_exe))
             # Run the query using the current python interpreter without opening a shell window
             creation_flags = 0
             if sys.platform == 'win32':
@@ -6240,6 +6261,13 @@ finally:
         msg_suffix = f" (Config: {config_name})" if config_name else ""
         self.write_log(f"🚀 Starting BOM extraction for {os.path.basename(filepath)}{msg_suffix}...", "info")
 
+        # Resolve the SolidWorks executable from config.json for the BOM subprocess.
+        sldworks_exe = self.load_solidworks_path()
+        try:
+            sldworks_exe = os.path.abspath(os.path.expandvars(sldworks_exe))
+        except Exception:
+            pass
+
         def run_bom():
             try:
                 import sys
@@ -6251,6 +6279,7 @@ finally:
                 
                 env_vars = os.environ.copy()
                 env_vars["PYTHONIOENCODING"] = "utf-8"
+                env_vars["GIT4SW_SOLIDWORKS_PATH"] = sldworks_exe
                 
                 cmd = [sys.executable, "-u", runner_path, full_path]
                 if config_name:
@@ -6260,6 +6289,7 @@ finally:
                     cmd.extend(["--was-running", running_str])
                 if hasattr(self, 'sw_open_before_bom') and self.sw_open_before_bom:
                     cmd.extend(["--open-before", self.sw_open_before_bom])
+                cmd.extend(["--solidworks-path", sldworks_exe])
                 
                 proc = subprocess.Popen(
                     cmd,
@@ -6454,6 +6484,13 @@ finally:
             out_dir_val = ent_out_dir.get().strip()
             if not out_dir_val:
                 out_dir_val = "2D"
+
+            # Resolve the SolidWorks executable from config.json for the export subprocess.
+            sldworks_exe = self.load_solidworks_path()
+            try:
+                sldworks_exe = os.path.abspath(os.path.expandvars(sldworks_exe))
+            except Exception:
+                pass
                 
             # Create job dictionary
             job_data = {
@@ -6462,6 +6499,7 @@ finally:
                 "prefix": prefix_val,
                 "output_dir": out_dir_val,
                 "every_configurations": every_cfg_var.get(),
+                "solidworks_path": sldworks_exe,
                 "files": filtered_files
             }
             
@@ -6487,6 +6525,7 @@ finally:
                 import os as os_env
                 env_vars = os_env.environ.copy()
                 env_vars["PYTHONIOENCODING"] = "utf-8"
+                env_vars["GIT4SW_SOLIDWORKS_PATH"] = sldworks_exe
                 
                 # Suppress the background monitor's automatic LFS Lock attempts so they do not
                 # interfere while the EXPORT runner opens files in SolidWorks as ReadOnly.
@@ -7260,13 +7299,27 @@ finally:
 
         files_arg = ",".join(asm_files)
 
+        # Resolve the SolidWorks executable from config.json so the scanner launches
+        # exactly the configured installation instead of a hardcoded default path.
+        sldworks_exe = self.load_solidworks_path()
+        try:
+            sldworks_exe = os.path.abspath(os.path.expandvars(sldworks_exe))
+        except Exception:
+            pass
+        self.write_log(f"Find Top: SolidWorks executable from config.json: {sldworks_exe}", "info")
+
         def run():
             try:
                 import subprocess
                 env_vars = os.environ.copy()
                 env_vars["PYTHONIOENCODING"] = "utf-8"
+                env_vars["GIT4SW_SOLIDWORKS_PATH"] = sldworks_exe
 
-                cmd = [sys.executable, "-u", runner_path, self.workspace_path, "--files", files_arg]
+                cmd = [
+                    sys.executable, "-u", runner_path, self.workspace_path,
+                    "--files", files_arg,
+                    "--solidworks-path", sldworks_exe,
+                ]
                 proc = subprocess.Popen(
                     cmd,
                     stdout=subprocess.PIPE,

@@ -99,8 +99,8 @@ Open the **Config** tab from the bottom of the left sidebar, fill in your local 
 | **Default Local Path** | `default_local_path` | Default parent directory for cloning or creating new repositories (e.g., `D:\github`) |
 | **Organization Name** | `organization_name` | Target GitHub/Gitea organization for new repositories |
 | **Auto Sync** | `auto_sync` | Controlled via Dashboard **Sync** checkbox (`true` / `false`) |
-| **Auto Backup Conflicts** | `auto_backup_conflicts` | Controlled via Dashboard **Backup** checkbox (`true` / `false`) |
-| **Auto Lock** | `auto_lock` | Controlled via Dashboard **Lock** checkbox (`true` / `false`) |
+| **Auto Backup Conflicts** | `auto_backup_conflicts` | Controlled via Dashboard **Backup** checkbox (`true` / `false`, default `false`) |
+| **Auto Lock** | `auto_lock` | Controlled via Dashboard **Lock** checkbox (`true` / `false`, default `false`) |
 
 ### 4.2 Basic Workflow
 

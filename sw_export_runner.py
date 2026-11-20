@@ -22,14 +22,80 @@ except ImportError:
 
 SW_MOD = None
 
+# Default installation directory used only when config.json does not provide a path.
+DEFAULT_SLDWORKS_DIR = r"C:\Program Files\SOLIDWORKS Corp\SOLIDWORKS"
+DEFAULT_SLDWORKS_EXE = os.path.join(DEFAULT_SLDWORKS_DIR, "sldworks.exe")
+
+# Environment variable used to propagate config.json's solidworks_path to runner
+# subprocesses (export batch -> per-file --single children, BOM, Find Top).
+SOLIDWORKS_PATH_ENV = "GIT4SW_SOLIDWORKS_PATH"
+
+
+def get_configured_solidworks_exe(explicit_path=None):
+    """Resolve the SolidWorks executable: explicit argument > env var > default."""
+    raw = explicit_path or os.environ.get(SOLIDWORKS_PATH_ENV) or DEFAULT_SLDWORKS_EXE
+    try:
+        return os.path.abspath(os.path.expandvars(os.path.expanduser(str(raw))))
+    except Exception:
+        return str(raw)
+
+
+def get_solidworks_install_dir(explicit_path=None):
+    return os.path.dirname(get_configured_solidworks_exe(explicit_path))
+
+
+def get_solidworks_typelib_paths(explicit_path=None):
+    """Return (sldworks.tlb, swconst.tlb) based on the configured executable's folder.
+
+    Falls back to the default installation folder when the configured folder does
+    not contain the typelib files (e.g. only the exe was copied elsewhere).
+    """
+    sw_dir = get_solidworks_install_dir(explicit_path)
+
+    def _pick(name):
+        candidate = os.path.join(sw_dir, name)
+        if os.path.exists(candidate):
+            return candidate
+        fallback = os.path.join(DEFAULT_SLDWORKS_DIR, name)
+        return fallback if os.path.exists(fallback) else candidate
+
+    return _pick("sldworks.tlb"), _pick("swconst.tlb")
+
+
+def get_running_solidworks_exe(swApp):
+    """Return the executable path reported by a bound SolidWorks instance, if any."""
+    try:
+        exe = swApp.GetExecutablePath()
+        return str(exe) if exe else None
+    except Exception:
+        return None
+
+
+def warn_if_solidworks_path_mismatch(swApp, configured_exe):
+    running_exe = get_running_solidworks_exe(swApp)
+    if running_exe and configured_exe:
+        try:
+            same = os.path.normcase(os.path.normpath(running_exe)) == os.path.normcase(os.path.normpath(configured_exe))
+        except Exception:
+            same = running_exe.lower() == configured_exe.lower()
+        if not same:
+            print(
+                f"WARNING: Active SolidWorks instance is '{running_exe}', which differs from the "
+                f"configured path '{configured_exe}'. Using the active instance.",
+                flush=True,
+            )
+
+
 def load_sw_typelib():
     global SW_MOD
     if SW_MOD is not None:
         return SW_MOD
     try:
         import win32com.client.gencache
-        # Find path to sldworks.tlb dynamically to get the correct registered or unregistered version
-        tlb_path = r"C:\Program Files\SOLIDWORKS Corp\SOLIDWORKS\sldworks.tlb"
+        # Find the typelib that belongs to the configured SolidWorks installation
+        # instead of a hardcoded path, so early binding matches the configured exe.
+        tlb_path, tlb_const_path = get_solidworks_typelib_paths()
+        print(f"Using SolidWorks typelib: {tlb_path}", flush=True)
         major, minor = 34, 0  # Fallback to SW 2026 (Major 34)
         if os.path.exists(tlb_path):
             try:
@@ -45,7 +111,6 @@ def load_sw_typelib():
         SW_MOD = win32com.client.gencache.EnsureModule('{83A33D31-27C5-11CE-BFD4-00400513BB57}', 0, major, minor)
         
         # Also ensure constants module is loaded
-        tlb_const_path = r"C:\Program Files\SOLIDWORKS Corp\SOLIDWORKS\swconst.tlb"
         if os.path.exists(tlb_const_path):
             try:
                 import pythoncom
@@ -303,29 +368,32 @@ def force_visible(swApp):
         except Exception as e_dyn:
             print(f"Warning: Could not set visibility even via dynamic dispatch: {e_dyn}", flush=True)
 
-def start_or_bind_solidworks():
+def start_or_bind_solidworks(sldworks_exe=None):
     pythoncom.CoInitialize()
     swApp = None
     was_already_running = False
+
+    configured_exe = get_configured_solidworks_exe(sldworks_exe)
+    print(f"Configured SolidWorks executable: {configured_exe}", flush=True)
     
     # 1. Try to connect to an existing active instance first
     print("Attempting to connect to active SolidWorks instance via GetActiveObject...", flush=True)
     try:
         raw_obj = win32com.client.GetActiveObject("SldWorks.Application")
         swApp = get_dynamic_sw_app(raw_obj)
+        warn_if_solidworks_path_mismatch(swApp, configured_exe)
         print("Successfully bound to active SolidWorks instance.", flush=True)
         was_already_running = True
     except Exception as e_active:
         pass
         
-    # 2. If not found, launch SOLIDWORKS directly and poll ROT
+    # 2. If not found, launch the configured SOLIDWORKS executable and poll ROT
     if swApp is None:
-        sldworks_exe = r"C:\Program Files\SOLIDWORKS Corp\SOLIDWORKS\sldworks.exe"
-        if os.path.exists(sldworks_exe):
-            print(f"No active instance found. Spawning SolidWorks process directly: {sldworks_exe}", flush=True)
+        if os.path.exists(configured_exe):
+            print(f"No active instance found. Spawning SolidWorks process directly: {configured_exe}", flush=True)
             try:
                 import subprocess
-                subprocess.Popen([sldworks_exe])
+                subprocess.Popen([configured_exe])
                 
                 # Poll ROT for registration up to 30 seconds
                 poll_timeout = 30.0
@@ -334,12 +402,20 @@ def start_or_bind_solidworks():
                     try:
                         raw_obj = win32com.client.GetActiveObject("SldWorks.Application")
                         swApp = get_dynamic_sw_app(raw_obj)
+                        warn_if_solidworks_path_mismatch(swApp, configured_exe)
                         print("Successfully bound to SolidWorks instance after manual process launch.", flush=True)
                         break
                     except Exception:
                         time.sleep(0.5)
             except Exception as e_launch:
                 print(f"Failed to launch SolidWorks directly: {e_launch}.", flush=True)
+        else:
+            print(
+                f"Error: Configured SolidWorks executable not found: {configured_exe}. "
+                "Check 'solidworks_path' in config.json.",
+                file=sys.stderr,
+                flush=True,
+            )
                 
     # 3. Fallback to GetObject (dynamic representation)
     if swApp is None:
@@ -347,6 +423,7 @@ def start_or_bind_solidworks():
         try:
             raw_obj = win32com.client.GetObject(Class="SldWorks.Application")
             swApp = get_dynamic_sw_app(raw_obj)
+            warn_if_solidworks_path_mismatch(swApp, configured_exe)
             print("Successfully bound to SolidWorks instance via GetObject.", flush=True)
             was_already_running = True
         except Exception as e_get:
@@ -705,7 +782,7 @@ def close_all_documents_without_saving(swApp, already_open_paths=None):
             pass
     print("close_all_documents_without_saving: end", flush=True)
 
-def run_single_export(file_abs, target_formats, output_dir, workspace_path, every_configurations=True):
+def run_single_export(file_abs, target_formats, output_dir, workspace_path, every_configurations=True, sldworks_exe=None):
     if not WIN32_AVAILABLE:
         print("Error: PyWin32 is not installed or not running on Windows.", flush=True)
         sys.exit(1)
@@ -735,7 +812,7 @@ def run_single_export(file_abs, target_formats, output_dir, workspace_path, ever
             hb_thread.join(timeout=1.0)
 
     pythoncom.CoInitialize()
-    swApp, was_running = start_or_bind_solidworks()
+    swApp, was_running = start_or_bind_solidworks(sldworks_exe)
     if swApp is None:
         print("Failed to bind to active SolidWorks instance for single export.", flush=True)
         sys.exit(1)
@@ -1288,6 +1365,12 @@ def run_export(job_file):
     output_dir = job.get("output_dir", "2D")
     all_files = job.get("files", [])
     every_configurations = job.get("every_configurations", True)
+    sldworks_exe = job.get("solidworks_path") or os.environ.get(SOLIDWORKS_PATH_ENV)
+    if sldworks_exe:
+        # Propagate to typelib loading and to per-file --single subprocesses.
+        sldworks_exe = get_configured_solidworks_exe(sldworks_exe)
+        os.environ[SOLIDWORKS_PATH_ENV] = sldworks_exe
+    print(f"Configured SolidWorks executable: {get_configured_solidworks_exe(sldworks_exe)}", flush=True)
     
     # Normalize prefix (handle None or empty string or "*")
     if prefix is None or prefix.strip() == "" or prefix.strip() == "*":
@@ -1343,7 +1426,7 @@ def run_export(job_file):
     
     # Connect to SolidWorks
     sw_pid = None
-    swApp, was_already_running = start_or_bind_solidworks()
+    swApp, was_already_running = start_or_bind_solidworks(sldworks_exe)
     if swApp is None:
         print("[ERROR] Failed to start or bind SolidWorks instance.", flush=True)
         pythoncom.CoUninitialize()
@@ -1542,7 +1625,7 @@ def run_export(job_file):
                 print("Launching a new SolidWorks instance to resume...", flush=True)
                 try:
                     # Do NOT overwrite was_already_running so final cleanup honors initial SolidWorks state
-                    swApp, _ = start_or_bind_solidworks()
+                    swApp, _ = start_or_bind_solidworks(sldworks_exe)
                     if swApp:
                         force_visible(swApp)
                         try:
