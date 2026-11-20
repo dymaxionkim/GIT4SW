@@ -24,8 +24,8 @@
 * **브랜치 관리**: "Make my branch"로 개인 원격 브랜치 자동 생성. "Merge all branches into main"으로 일괄 병합 및 충돌 해결(Ours/Theirs).
 * **순차 작업 큐**: 백그라운드 작업은 자동 큐잉; Terminate 버튼으로 멈춘 Git 프로세스 강제 종료.
 * **자동 동기화 (Auto Sync)**: 시작/저장소 변경 시 자동 fetch 및 병합; 이미 최신이면 생략.
-* **충돌 자동 백업 (Auto Backup Conflicts)**: 병합/풀 충돌 시 충돌 해결 팝업 전에 충돌 파일을 `.backup/`에 `_OURS`/`_THEIRS` 복사본으로 자동 백업합니다. 대시보드 체크박스 또는 `auto_backup_conflicts` 설정 키(기본 ON)로 On/Off 전환 가능.
-* **자동 잠금 (Auto Lock)**: SolidWorks에서 파일이 열리면 자동으로 LFS Lock이 획득되고 닫으면 해제되며, 어셈블리를 열면 해당 컴포넌트들도 자동으로 잠깁니다. 대시보드 체크박스 또는 `auto_lock` 설정 키(기본 ON)로 On/Off 전환 가능. 수동 Lock/Unlock 버튼은 항상 동작합니다.
+* **충돌 자동 백업 (Auto Backup Conflicts)**: 병합/풀 충돌 시 충돌 해결 팝업 전에 충돌 파일을 `.backup/`에 `_OURS`/`_THEIRS` 복사본으로 자동 백업합니다. 대시보드 체크박스 또는 `auto_backup_conflicts` 설정 키(기본 OFF)로 On/Off 전환 가능.
+* **자동 잠금 (Auto Lock)**: SolidWorks에서 파일이 열리면 자동으로 LFS Lock이 획득되고 닫으면 해제되며, 어셈블리를 열면 해당 컴포넌트들도 자동으로 잠깁니다. 대시보드 체크박스 또는 `auto_lock` 설정 키(기본 OFF)로 On/Off 전환 가능. 수동 Lock/Unlock 버튼은 항상 동작합니다.
 * **충돌 해결**: 다중 파일 선택 대화상자, 충돌 파일 자동 `.backup/` 백업. LFS 포인터 오류 처리.
 * **EXPORT (일괄 변환)**: `.sldprt`/`.sldasm`/`.slddrw` → PDF, DXF, STEP(AP214 컬러). 다중 포맷 동시 선택. Watchdog(180초)가 멈춘 SolidWorks 자동 재시작. 파일 기준(설정 기준 아님) 진행률.
 * **BOM 추출**: 어셈블리 재귀 탐색 → 계층 BOM Tree + 납작 Partlist를 Excel(`.xlsx`)로 저장. 억제/BOM 제외 부품 필터링. 다중 설정 선택 지원.
@@ -130,7 +130,7 @@ uv run main.py --config config_codeberg.json
    - SolidWorks에서 파트나 어셈블리 파일을 오픈하여 수정을 시작하는 즉시 백그라운드 모니터에 의해 `git lfs lock` 명령이 실행됩니다. 타 협업 개발자가 원격 상태를 새로고침하면 해당 도면이 "잠김" 상태로 표시되므로 수정 소실 걱정 없이 안전하게 협업이 유지됩니다.
 
 > [!NOTE]
-> 자동 잠금은 대시보드의 **Lock** 체크박스(설정 키 `auto_lock`)가 ON(기본값)일 때만 수행됩니다. OFF이면 자동 lock/unlock이 비활성화되며, Lock/Unlock 버튼으로 수동 잠금/해제는 항상 가능합니다.
+> 자동 잠금은 대시보드의 **Lock** 체크박스(설정 키 `auto_lock`)가 ON(기본값 OFF)일 때만 수행됩니다. OFF이면 자동 lock/unlock이 비활성화되며, Lock/Unlock 버튼으로 수동 잠금/해제는 항상 가능합니다.
 
 5. **저장 및 버전 업로드 (Check-in)**:
    - 파일 수정이 완료되면 `File Manager` 탭으로 이동합니다.
@@ -186,7 +186,7 @@ uv run main.py --config config_codeberg.json
 * 복구하려면 해당 백업 파일을 원래 위치로 복사하고 파일명에서 타임스탬프 부분을 지워주면 됩니다.
 
 > [!NOTE]
-> 이 자동 백업은 대시보드의 **Backup** 체크박스(설정 키 `auto_backup_conflicts`)가 ON(기본값)일 때만 수행됩니다.
+> 이 자동 백업은 대시보드의 **Backup** 체크박스(설정 키 `auto_backup_conflicts`)가 ON(기본값 OFF)일 때만 수행됩니다.
 
 #### 4.4.3 EXPORT 실행 중 SOLIDWORKS CAM 애드인 팝업이 나타나는 경우
 

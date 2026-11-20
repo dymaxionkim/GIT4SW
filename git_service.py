@@ -42,6 +42,102 @@ def _load_config_simple(config_paths=None):
     return {}
 
 
+def get_configured_git_exe(default="git"):
+    """Return the git executable configured in config.json, or `default` if unset/missing."""
+    config = _load_config_simple()
+    git_path = config.get("git_path")
+    if git_path and os.path.exists(git_path):
+        return git_path
+    return default
+
+
+def get_configured_git_lfs_exe():
+    """Return the git-lfs executable configured in config.json, or None if unset/missing."""
+    config = _load_config_simple()
+    lfs_path = config.get("git-lfs_path")
+    if lfs_path and os.path.exists(lfs_path):
+        return lfs_path
+    return None
+
+
+# Directories this process prepended to PATH for the configured git/git-lfs executables.
+# Tracked so a config change can remove stale entries instead of accumulating them.
+_managed_path_dirs = set()
+
+# Track the GIT_PYTHON_GIT_EXECUTABLE value we set so a config change can restore
+# whatever the user's environment originally had instead of clobbering it.
+_GIT_EXEC_ENV = "GIT_PYTHON_GIT_EXECUTABLE"
+_UNSET = object()
+_original_git_exec_env = _UNSET
+_managed_git_exec_env = False
+
+
+def _set_managed_git_exec_env(path):
+    global _original_git_exec_env, _managed_git_exec_env
+    if not _managed_git_exec_env:
+        _original_git_exec_env = os.environ.get(_GIT_EXEC_ENV, _UNSET)
+    os.environ[_GIT_EXEC_ENV] = path
+    _managed_git_exec_env = True
+
+
+def _clear_managed_git_exec_env():
+    global _original_git_exec_env, _managed_git_exec_env
+    if not _managed_git_exec_env:
+        return
+    if _original_git_exec_env is _UNSET:
+        os.environ.pop(_GIT_EXEC_ENV, None)
+    else:
+        os.environ[_GIT_EXEC_ENV] = _original_git_exec_env
+    _original_git_exec_env = _UNSET
+    _managed_git_exec_env = False
+
+
+def _path_entry_norm(path):
+    if not path:
+        return ""
+    try:
+        return os.path.normcase(os.path.normpath(os.path.abspath(path)))
+    except Exception:
+        return str(path).lower()
+
+
+def _reset_managed_path_entries():
+    global _managed_path_dirs
+    if not _managed_path_dirs:
+        return
+    parts = [p for p in os.environ.get("PATH", "").split(os.pathsep) if p]
+    kept = [p for p in parts if _path_entry_norm(p) not in _managed_path_dirs]
+    os.environ["PATH"] = os.pathsep.join(kept)
+    _managed_path_dirs = set()
+
+
+def _prepend_path_dir(dir_path):
+    if not dir_path:
+        return
+    target = _path_entry_norm(dir_path)
+    parts = [p for p in os.environ.get("PATH", "").split(os.pathsep) if p]
+    if any(_path_entry_norm(p) == target for p in parts):
+        return
+    os.environ["PATH"] = os.pathsep.join([dir_path] + parts)
+    _managed_path_dirs.add(target)
+
+
+def _warn_if_executable_resolution_differs(name, configured_path, config_key):
+    """Warn when PATH resolves `name` to a different executable than the configured one."""
+    resolved = shutil.which(name)
+    if not resolved:
+        print(
+            f"Warning: configured {config_key} '{configured_path}' is not resolvable as '{name}' via PATH.",
+            flush=True,
+        )
+        return
+    if _path_entry_norm(resolved) != _path_entry_norm(configured_path):
+        print(
+            f"Warning: {config_key} is '{configured_path}', but PATH resolves '{name}' to '{resolved}'.",
+            flush=True,
+        )
+
+
 def _get_provider_from_url(remote_url):
     config = _load_config_simple()
     return detect_provider(remote_url, config)
@@ -514,20 +610,44 @@ class GitService:
                 print(f"Error loading config paths in GitService: {e}")
         
     def _apply_git_paths(self):
+        # Drop entries injected by a previous configuration so config changes do not
+        # leave stale git/git-lfs directories at the front of PATH.
+        _reset_managed_path_entries()
+
         if self.git_lfs_path and os.path.exists(self.git_lfs_path):
-            lfs_dir = os.path.dirname(self.git_lfs_path)
-            if lfs_dir and lfs_dir not in os.environ["PATH"]:
-                os.environ["PATH"] = lfs_dir + os.pathsep + os.environ["PATH"]
+            _prepend_path_dir(os.path.dirname(self.git_lfs_path))
+            _warn_if_executable_resolution_differs("git-lfs", self.git_lfs_path, "git-lfs_path")
+        elif self.git_lfs_path:
+            print(
+                f"Warning: configured git-lfs_path not found: {self.git_lfs_path}. "
+                "Falling back to git-lfs from PATH.",
+                flush=True,
+            )
 
         if self.git_path and os.path.exists(self.git_path):
+            # Keep GitPython and child processes on the configured executable.
+            _set_managed_git_exec_env(os.path.abspath(self.git_path))
             try:
                 git.refresh(path=self.git_path)
             except Exception as e:
                 print(f"Error refreshing git path in GitPython: {e}")
                 
             git_dir = os.path.dirname(self.git_path)
-            if git_dir and git_dir not in os.environ["PATH"]:
-                os.environ["PATH"] = git_dir + os.pathsep + os.environ["PATH"]
+            _prepend_path_dir(git_dir)
+            _warn_if_executable_resolution_differs("git", self.git_path, "git_path")
+        else:
+            if self.git_path:
+                print(
+                    f"Warning: configured git_path not found: {self.git_path}. "
+                    "Falling back to git from PATH.",
+                    flush=True,
+                )
+            # Let GitPython resolve git from PATH again instead of keeping a stale path.
+            _clear_managed_git_exec_env()
+            try:
+                git.refresh()
+            except Exception:
+                pass
 
     def _load_repo(self):
         try:
