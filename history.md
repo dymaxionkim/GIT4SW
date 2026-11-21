@@ -376,6 +376,29 @@ gantt
 
 ---
 
+---
+
+### 20단계: EXPORT 완료 후 발생하는 불필요한 "exit code 1" 및 SolidWorks 모니터 COM 오류 수정 (Milestone 20 - 2026-11-21)
+* **증상**:
+  - EXPORT 버튼 실행 시 PDF/DXF/STEP/STEP_ASM 산출물이 모두 정상 생성되었는데도, 마지막에 GUI 로그에 `🔴 ERROR: ❌ Background export process failed with exit code 1.`가 표시되었습니다.
+  - GUI 콘솔(터미널)에 `COM Error in get_all_open_documents: <unknown>.GetPathName` / `<unknown>.GetTitle`가 간헐적으로 출력되었습니다.
+* **원인 분석 — 다중 시트 도면의 시트별 DXF 파일명**:
+  - SolidWorks는 시트가 2개 이상인 도면을 DXF로 내보낼 때 `<도면명>.dxf` 대신 `00_<도면명>.dxf`, `01_<도면명>.dxf`처럼 **시트 번호 접두사가 붙은 파일**을 생성합니다. (테스트 저장소 `D:\github\N60`의 `3D\AA600\AA600_G51VD_ASSY.SLDDRW` → `2D\DXF\00_AA600_G51VD_ASSY.dxf`, `01_AA600_G51VD_ASSY.dxf`만 존재)
+  - 기존 코드는 `SaveAs3` 반환값이 0(성공)이어도 `<도면명>.dxf` 파일 존재만 확인했기 때문에 이 도면을 **실패로 오판**했습니다. → `export_failed = True` → 파일별 서브프로세스가 exit 1 → 배치 러너가 `has_errors = True`로 최종 exit 1을 반환했습니다.
+* **수정 — `sw_export_runner.py`**:
+  - `_find_exported_files()`를 추가하여 정확한 대상 경로뿐 아니라 **시트 접두사 출력(`NN_<이름>.<ext>`, 대소문자 무시)** 도 성공 산출물로 인식합니다.
+  - SaveAs3 결과 판정을 `_report_export_result()`로 통일하고, 실패 시 사유(반환 코드 / 산출물 없음)를 로그에 구체적으로 출력합니다.
+  - 내보내기 전 `_clear_existing_exports()`로 이전 산출물(시트별 파일 포함)을 삭제하여, 이전 실행의 잔여 파일이 실패를 성공으로 가리는 문제를 방지합니다.
+  - 본체(Body)가 없는 스켈레톤 파트는 STEP 저장이 원천적으로 불가능하므로 `GetBodies2(swAllBodies, False)` 결과가 0건이면 실패로 처리하지 않고 건너뜁니다. (본체 유무를 확인할 수 없을 때는 기존대로 실패 처리하여 실제 오류를 숨기지 않습니다.)
+  - 배치 러너가 마지막에 **실패한 파일 목록과 사유**를 출력하도록 하여, GUI 로그만으로 원인 파일을 즉시 식별할 수 있습니다.
+* **수정 — `sw_monitor.py`**:
+  - SolidWorks는 단일 스레드 COM 서버이므로, GUI 스레드와 모니터 스레드가 **하나의 캐시된 디스패치 포인터를 공유**하던 구조를 **스레드별 캐시(`threading.local`)** 로 변경했습니다. 이로 인해 배치 EXPORT 도중 발생하던 `<unknown>.GetPathName` / `<unknown>.GetTitle` 오류가 사라집니다.
+  - `_call_com_method()`가 실패 시 `getattr()` 결과(바인드된 메서드)를 반환하던 결함을 수정하여 `None`을 반환하도록 했고, `get_all_open_documents()`는 **문서 단위로 오류를 격리**해 닫히는 중인 문서 하나가 전체 열린 문서 목록을 비우지 않도록 했습니다.
+* **수정 — `ui_tk.py`**: 실패 안내 문구에 "See the log for the failing file(s)."를 추가해 후속 확인 경로를 명시했습니다.
+* **검증**: `_find_exported_files`/`_clear_existing_exports`/`_report_export_result`/`_model_body_count`에 대한 단위 시뮬레이션(다중 시트 DXF, 정상 단일 파일, 무관한 유사 파일명, SaveAs3 오류 코드, 산출물 미생성, 스켈레톤 파트) 전부 통과, 모듈 컴파일 및 모니터 서비스 스모크 테스트 통과.
+
+---
+
 1. **동기화 시 충돌 파일 시각적 차이 비교 (CAD Diff)**: eDrawings 뷰어 등을 활용하여 충돌이 발생한 로컬 도면과 원격 도면의 썸네일을 좌우로 배치해 변경 이력을 한눈에 대조해 볼 수 있는 시각화 인터페이스 제공안 고려 권장.
 2. **다중 사용자 LFS Locks 시각화 고도화**: 현재 Locks 정보는 텍스트 리스트 형태로 표시되나, 네트워크 토폴로지 맵 또는 디자이너 프로필과 매칭하여 동시 협업 중인 파일 간의 종속성을 시각적으로 경고해 주는 협업 뷰 제공 검토 권장.
 

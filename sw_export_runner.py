@@ -1,4 +1,5 @@
 import os
+import re
 import sys
 import json
 import time
@@ -782,6 +783,105 @@ def close_all_documents_without_saving(swApp, already_open_paths=None):
             pass
     print("close_all_documents_without_saving: end", flush=True)
 
+# SolidWorks writes one DXF/DWG per sheet when a drawing has more than one sheet and
+# prefixes each file with a zero padded sheet index ("00_AA600_ASSY.dxf",
+# "01_AA600_ASSY.dxf"). The plain "<name>.dxf" therefore does not exist even though the
+# export succeeded, so a bare os.path.exists() check reported a false failure (which
+# made the whole batch exit with code 1 after every file had been exported correctly).
+_SHEET_PREFIX_RE = re.compile(r"^\d+[_\-. ]")
+
+
+def _find_exported_files(dest_file_path):
+    """Return the file(s) SolidWorks actually produced for the requested target path.
+
+    The exact target path is preferred; per-sheet variants ("00_<name>.dxf") are also
+    accepted so multi-sheet drawing exports are recognised as successful.
+    """
+    if os.path.exists(dest_file_path):
+        return [dest_file_path]
+
+    dest_dir = os.path.dirname(dest_file_path) or "."
+    filename = os.path.basename(dest_file_path)
+    base, ext = os.path.splitext(filename)
+    if not base or not ext:
+        return []
+
+    expected_tail = (base + ext).lower()
+    found = []
+    try:
+        entries = os.listdir(dest_dir)
+    except OSError:
+        return []
+
+    for entry in entries:
+        lower = entry.lower()
+        if lower == filename.lower():
+            found.append(os.path.join(dest_dir, entry))
+            continue
+        if not lower.endswith(expected_tail) or len(entry) <= len(expected_tail):
+            continue
+        prefix = entry[: len(entry) - len(expected_tail)]
+        if _SHEET_PREFIX_RE.match(prefix):
+            found.append(os.path.join(dest_dir, entry))
+    return found
+
+
+def _clear_existing_exports(dest_file_path):
+    """Remove stale outputs (target name and per-sheet variants) before a new export.
+
+    Stale files would otherwise make a failed SaveAs3 look successful.
+    """
+    removed = 0
+    for path in _find_exported_files(dest_file_path):
+        try:
+            os.remove(path)
+            removed += 1
+        except Exception as del_e:
+            print(f"Failed to remove existing file {path}: {del_e}", flush=True)
+    return removed
+
+
+def _report_export_result(dest_file_path, result, source_path):
+    """Print the outcome of a SaveAs3 export and return True when it succeeded."""
+    produced = _find_exported_files(dest_file_path)
+    if result == 0 and produced:
+        print(f"Successfully exported {source_path} -> {dest_file_path}", flush=True)
+        if len(produced) > 1:
+            names = ", ".join(os.path.basename(p) for p in produced)
+            print(f"  (multi-sheet export produced {len(produced)} files: {names})", flush=True)
+        return True
+    if result == 0:
+        print(
+            f"Failed to save {dest_file_path} (SaveAs3 reported success but no output file was created)",
+            flush=True,
+        )
+    else:
+        print(f"Failed to save {dest_file_path} (SaveAs3 code: {result})", flush=True)
+    return False
+
+
+def _model_body_count(model):
+    """Number of bodies in the active model, or None when it cannot be determined.
+
+    swBodyType_e.swAllBodies is -1 (verified against the installed swconst typelib).
+    Skeleton parts legitimately contain no geometry, and STEP export can never produce
+    a file for them - that must not be reported as an export failure.
+    """
+    try:
+        getter = getattr(model, 'GetBodies2', None)
+        if getter is None:
+            return None
+        bodies = getter(-1, False)  # swAllBodies, bVisibleOnly=False
+        if bodies is None:
+            return None
+        try:
+            return len(bodies)
+        except TypeError:
+            return None
+    except Exception:
+        return None
+
+
 def run_single_export(file_abs, target_formats, output_dir, workspace_path, every_configurations=True, sldworks_exe=None):
     if not WIN32_AVAILABLE:
         print("Error: PyWin32 is not installed or not running on Windows.", flush=True)
@@ -1001,22 +1101,15 @@ def run_single_export(file_abs, target_formats, output_dir, workspace_path, ever
                     else:
                         dest_file_path = os.path.join(dest_dir_step, f"{base_filename}.step")
                         
-                    if os.path.exists(dest_file_path):
-                        try:
-                            os.remove(dest_file_path)
-                        except Exception as del_e:
-                            print(f"Failed to remove existing file {dest_file_path}: {del_e}", flush=True)
-                            
+                    _clear_existing_exports(dest_file_path)
+
                     # Save with Silent option (9 = Silent | AvoidDialogueOnSave) and current version (0)
                     print(f"Exporting STEP_ASM to: {dest_file_path} ...", flush=True)
                     with heartbeat_monitor(f"SaveAs3 ({os.path.basename(dest_file_path)})"):
                         result = model.SaveAs3(dest_file_path, 0, 9)
                     time.sleep(1) # Crucial delay to allow disk write to finalize and release lock
-                    if result == 0 and os.path.exists(dest_file_path):
-                        print(f"Successfully exported STEP_ASM {file_abs} -> {dest_file_path}", flush=True)
-                    else:
+                    if not _report_export_result(dest_file_path, result, file_abs):
                         export_failed = True
-                        print(f"Failed to save STEP_ASM {dest_file_path} (SaveAs3 code: {result})", flush=True)
                             
                 # Restore STEP_ASM settings
                 try:
@@ -1029,6 +1122,14 @@ def run_single_export(file_abs, target_formats, output_dir, workspace_path, ever
         else:
             # Drawing and Part export logic
             for active_fmt in target_formats:
+                # A skeleton part has no bodies at all, so STEP export can never produce a
+                # file. Skip it explicitly instead of letting SaveAs3 fail the whole batch.
+                if active_fmt == "STEP" and f_lower.endswith(".sldprt"):
+                    body_count = _model_body_count(model)
+                    if body_count == 0:
+                        print(f"Skipping STEP export for {file_abs}: the part contains no bodies.", flush=True)
+                        continue
+
                 orig_pdf_color = None
                 orig_pdf_line_weights = None
                 orig_pdf_high_quality = None
@@ -1136,22 +1237,15 @@ def run_single_export(file_abs, target_formats, output_dir, workspace_path, ever
                     else:
                         dest_file_path = os.path.join(dest_dir, base_filename + target_ext)
                         
-                    # Remove target file if exists
-                    if os.path.exists(dest_file_path):
-                        try:
-                            os.remove(dest_file_path)
-                        except Exception as del_e:
-                            print(f"Failed to remove existing file {dest_file_path}: {del_e}", flush=True)
-                            
+                    # Remove previous outputs (exact target and per-sheet variants)
+                    _clear_existing_exports(dest_file_path)
+
                     # Save with Silent option (9 = Silent | AvoidDialogueOnSave) and current version (0)
                     with heartbeat_monitor(f"SaveAs3 ({os.path.basename(dest_file_path)})"):
                         result = model.SaveAs3(dest_file_path, 0, 9)
                     time.sleep(1) # Crucial delay to allow disk write to finalize and release lock
-                    if result == 0 and os.path.exists(dest_file_path):
-                        print(f"Successfully exported {file_abs} -> {dest_file_path}", flush=True)
-                    else:
+                    if not _report_export_result(dest_file_path, result, file_abs):
                         export_failed = True
-                        print(f"Failed to save {dest_file_path} (SaveAs3 code: {result})", flush=True)
                     
                 # Restore settings
                 if active_fmt == "PDF":
@@ -1414,6 +1508,7 @@ def run_export(job_file):
         sys.exit(1)
 
     has_errors = False
+    failed_files = []  # [(relative path, reason)] so the GUI log names the failing files
     was_already_running = False
     # --- Key fix: do not populate already_open_paths from GetDocuments() ---
     # Same principle as BOM: in batch mode, subprocesses are invoked sequentially,
@@ -1607,6 +1702,7 @@ def run_export(job_file):
                     
             if timed_out:
                 has_errors = True
+                failed_files.append((file_rel, f"timeout after {int(timeout)}s without output"))
                 # Forcefully terminate SolidWorks by PID and image name to prevent DispatchEx locks on recovery
                 if sw_pid:
                     try:
@@ -1652,6 +1748,7 @@ def run_export(job_file):
                     continue
             elif proc.returncode != 0:
                 has_errors = True
+                failed_files.append((file_rel, f"conversion process exit code {proc.returncode}"))
                 print(f"[ERROR] Subprocess failed for file {file_rel} with exit code {proc.returncode}.", flush=True)
 
             # Send real-time progress update via stdout after completion (Completed: processed_count)
@@ -1744,6 +1841,10 @@ def run_export(job_file):
             
         if has_errors:
             print("[ERROR] Export finished with errors. One or more files failed to convert.", flush=True)
+            if failed_files:
+                print("[ERROR] Failed file(s):", flush=True)
+                for rel_path, reason in failed_files:
+                    print(f"[ERROR]   - {rel_path} ({reason})", flush=True)
             sys.exit(1)
 
 if __name__ == "__main__":
