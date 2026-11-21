@@ -131,6 +131,7 @@ Open the **Config** tab from the bottom of the left sidebar, fill in your local 
 7. **Bulk Export (PDF / DXF / STEP / STEP_ASM)**
    * Click **[EXPORT]**, choose target formats, configuration scope (`Every Configurations` or `Active Configuration Only`), optional filename `PREFIX`, and `OUTPUT_DIR` (default `2D`), then click **Start**.
    * Output files are saved under `<file_dir>/<OUTPUT_DIR>/<FORMAT>/` (e.g., `2D/PDF/`, `2D/DXF/`, `2D/STEP/`, `2D/STEP_ASM/`).
+   * STEP/STEP_ASM files are named `<model>__<configuration>.step`; when the configuration is the default one (`기본` in the Korean UI, `Default` in the English UI), the suffix is omitted and the file is saved as `<model>.step`.
 
 8. **Extract BOM & Partlist**
    * Select a single `.sldasm` file and click **[BOM]**. If multiple configurations exist, choose the target configuration in the prompt.

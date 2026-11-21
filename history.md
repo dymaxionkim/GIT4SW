@@ -399,6 +399,21 @@ gantt
 
 ---
 
+### 21단계: 기본 설정(`기본`) 모델의 STEP/STEP_ASM 파일명 접미사 생략 (Milestone 21 - 2026-11-21)
+* **요구 사항**:
+  - EXPORT 버튼에서 STEP / STEP_ASM을 체크해 STEP 파일을 생성할 때, 대상 모델 파일의 Configuration 이름이 기본 설정인 `기본`(영문 UI에서는 `Default`)이면 저장 파일명의 접미사를 생략합니다.
+* **수정 — `sw_export_runner.py`**:
+  - `_is_default_config_name()` / `_export_dest_path()` 헬퍼를 추가해 STEP(`.sldprt`) 및 STEP_ASM(`.sldasm`)의 대상 경로 생성을 한 곳으로 통일했습니다.
+  - 기본 설정명은 `DEFAULT_CONFIG_NAMES = ("기본", "Default")` 튜플로 관리하여, 한글 UI(`기본`)와 영문 UI(`Default`) 모두에서 접미사를 생략합니다.
+  - 설정명이 기본 설정명(앞뒤 공백 무시)이면 `<모델명>.step`, 그 외에는 기존과 동일하게 `<모델명>__<설정명>.step`으로 저장합니다. 설정명이 확인되지 않을 때(`None`)도 기존처럼 `<모델명>.step`입니다.
+  - 설정 전환(`ShowConfiguration2`) 예외 시의 기존 폴백(접미사 없는 이름) 동작은 그대로 유지했습니다.
+  - 이전 빌드가 남긴 `<모델명>__기본.step` / `<모델명>__Default.step` 잔여 산출물은 `_clear_suffixed_default_config_export()`로 다음 내보내기 시 함께 삭제하여, 접미사가 사라진 뒤 산출물 폴더에 구버전 중복 파일이 남지 않도록 했습니다. 기본 설정 이외의 산출물은 건드리지 않습니다.
+  - 다중 설정 모델(예: `기본`, `CONFIG1`)은 `Every Configurations`에서 각각 `<모델명>.step`, `<모델명>__CONFIG1.step`으로 저장되어 기존 파일명 체계를 유지합니다.
+* **문서**: `README.md` / `README_ko.md`의 EXPORT 절에 STEP/STEP_ASM 파일명 규칙(`<모델명>__<설정명>.step`, 기본 설정 `기본`/`Default`는 접미사 생략)을 명시했습니다.
+* **검증**: `_is_default_config_name` / `_export_dest_path` / `_clear_suffixed_default_config_export` 단위 시뮬레이션(기본, 공백 포함 기본, `Default`, 일반 설정, `None`, 유사 이름 `기본2`/`Default2`, 접미사 제거·유지, 잔여 파일 정리 시 무관 파일 보존) 전부 통과, `sw_export_runner.py` 컴파일 통과.
+
+---
+
 1. **동기화 시 충돌 파일 시각적 차이 비교 (CAD Diff)**: eDrawings 뷰어 등을 활용하여 충돌이 발생한 로컬 도면과 원격 도면의 썸네일을 좌우로 배치해 변경 이력을 한눈에 대조해 볼 수 있는 시각화 인터페이스 제공안 고려 권장.
 2. **다중 사용자 LFS Locks 시각화 고도화**: 현재 Locks 정보는 텍스트 리스트 형태로 표시되나, 네트워크 토폴로지 맵 또는 디자이너 프로필과 매칭하여 동시 협업 중인 파일 간의 종속성을 시각적으로 경고해 주는 협업 뷰 제공 검토 권장.
 

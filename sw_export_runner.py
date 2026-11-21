@@ -841,6 +841,44 @@ def _clear_existing_exports(dest_file_path):
     return removed
 
 
+# SolidWorks names the initial configuration "기본" in the Korean UI and "Default" in the
+# English UI. It is the model's own configuration, so STEP/STEP_ASM exports keep the plain
+# model name ("<name>.step") instead of carrying a "__기본"/"__Default" suffix.
+DEFAULT_CONFIG_NAMES = ("기본", "Default")
+
+
+def _is_default_config_name(config_name):
+    """True when the given configuration is the default configuration (기본 / Default)."""
+    if not config_name:
+        return False
+    try:
+        return str(config_name).strip() in DEFAULT_CONFIG_NAMES
+    except Exception:
+        return False
+
+
+def _export_dest_path(dest_dir, base_filename, config_name, target_ext):
+    """Destination path for one configuration of a STEP/STEP_ASM export.
+
+    The default configuration (기본 / Default) has no configuration suffix, so a single
+    configuration part/assembly is exported as "<base>.step" instead of "<base>__기본.step".
+    """
+    if config_name and not _is_default_config_name(config_name):
+        return os.path.join(dest_dir, f"{base_filename}__{config_name}{target_ext}")
+    return os.path.join(dest_dir, f"{base_filename}{target_ext}")
+
+
+def _clear_suffixed_default_config_export(dest_dir, base_filename, config_name, target_ext):
+    """Remove a stale "<base>__기본<ext>" / "<base>__Default<ext>" left by older builds.
+
+    Without this the output folder would keep an outdated duplicate next to the new
+    "<base><ext>" file after the suffix was dropped for the default configuration.
+    """
+    if not _is_default_config_name(config_name):
+        return 0
+    return _clear_existing_exports(os.path.join(dest_dir, f"{base_filename}__{config_name}{target_ext}"))
+
+
 def _report_export_result(dest_file_path, result, source_path):
     """Print the outcome of a SaveAs3 export and return True when it succeeded."""
     produced = _find_exported_files(dest_file_path)
@@ -1096,12 +1134,10 @@ def run_single_export(file_abs, target_formats, output_dir, workspace_path, ever
                     
                     dest_dir_step = os.path.join(file_dir, output_dir, "STEP_ASM")
                     os.makedirs(dest_dir_step, exist_ok=True)
-                    if config_name:
-                        dest_file_path = os.path.join(dest_dir_step, f"{base_filename}__{config_name}.step")
-                    else:
-                        dest_file_path = os.path.join(dest_dir_step, f"{base_filename}.step")
-                        
+                    dest_file_path = _export_dest_path(dest_dir_step, base_filename, config_name, ".step")
+
                     _clear_existing_exports(dest_file_path)
+                    _clear_suffixed_default_config_export(dest_dir_step, base_filename, config_name, ".step")
 
                     # Save with Silent option (9 = Silent | AvoidDialogueOnSave) and current version (0)
                     print(f"Exporting STEP_ASM to: {dest_file_path} ...", flush=True)
@@ -1219,7 +1255,7 @@ def run_single_export(file_abs, target_formats, output_dir, workspace_path, ever
                     if config_name:
                         if config_name == current_cfg_name:
                             print(f"Using already active configuration: {config_name} for STEP export", flush=True)
-                            dest_file_path = os.path.join(dest_dir, f"{base_filename}__{config_name}{target_ext}")
+                            dest_file_path = _export_dest_path(dest_dir, base_filename, config_name, target_ext)
                         else:
                             try:
                                 print(f"Switching to configuration: {config_name} for STEP export", flush=True)
@@ -1230,7 +1266,7 @@ def run_single_export(file_abs, target_formats, output_dir, workspace_path, ever
                                 else:
                                     current_cfg_name = config_name
                                 time.sleep(1) # Delay for configuration switching rebuild
-                                dest_file_path = os.path.join(dest_dir, f"{base_filename}__{config_name}{target_ext}")
+                                dest_file_path = _export_dest_path(dest_dir, base_filename, config_name, target_ext)
                             except Exception as show_conf_err:
                                 print(f"Failed to show configuration {config_name}: {show_conf_err}", flush=True)
                                 dest_file_path = os.path.join(dest_dir, base_filename + target_ext)
@@ -1239,6 +1275,7 @@ def run_single_export(file_abs, target_formats, output_dir, workspace_path, ever
                         
                     # Remove previous outputs (exact target and per-sheet variants)
                     _clear_existing_exports(dest_file_path)
+                    _clear_suffixed_default_config_export(dest_dir, base_filename, config_name, target_ext)
 
                     # Save with Silent option (9 = Silent | AvoidDialogueOnSave) and current version (0)
                     with heartbeat_monitor(f"SaveAs3 ({os.path.basename(dest_file_path)})"):
