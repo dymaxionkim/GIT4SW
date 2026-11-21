@@ -6656,7 +6656,7 @@ finally:
                     else:
                         try:
                             lbl_status.config(text=f"Export Failed (Exit Code: {returncode})", fg="#dc2626")
-                            lbl_file.config(text=f"❌ SolidWorks export process failed with exit code {returncode}.", fg="#dc2626", height=2)
+                            lbl_file.config(text=f"❌ Export failed with exit code {returncode}.\nSee the log for the failing file(s).", fg="#dc2626", height=2)
                             btn_cancel.config(text="Close")
                             btn_cancel.config(command=lambda: progress_pop.destroy())
                             progress_pop.protocol("WM_DELETE_WINDOW", progress_pop.destroy)

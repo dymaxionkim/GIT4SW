@@ -1,5 +1,6 @@
 import os
 import sys
+import threading
 
 # Enforce UTF-8 output streams with replacement errors to prevent encoding crashes on Windows
 if hasattr(sys.stdout, 'reconfigure'):
@@ -20,22 +21,52 @@ except ImportError:
 
 class SolidWorksMonitorService:
     def __init__(self):
-        self.sw_app = None
+        # SolidWorks is a single-threaded COM server: a dispatch pointer obtained in one
+        # thread must not be reused from another thread. Polling SolidWorks from the GUI
+        # thread and from the monitor thread through one cached pointer caused sporadic
+        # "<unknown>.GetPathName" / "<unknown>.GetTitle" errors, so the connection is
+        # cached per thread instead.
+        self._local = threading.local()
+
+    @property
+    def sw_app(self):
+        return getattr(self._local, "sw_app", None)
+
+    @sw_app.setter
+    def sw_app(self, value):
+        self._local.sw_app = value
+
+    @staticmethod
+    def _as_text(value):
+        """Return COM results as text; anything unexpected (None, bound method) becomes ''."""
+        return value if isinstance(value, str) else ""
 
     def _call_com_method(self, obj, name, *args):
-        """Safely retrieves a COM property or calls a COM method depending on win32com type caching state."""
+        """Safely retrieves a COM property or calls a COM method.
+
+        Returns None when the member is missing or the call fails. A document that is
+        being closed while SolidWorks still lists it (normal during batch exports) must
+        not abort the whole enumeration, so failures are contained here.
+        """
+        if obj is None:
+            return None
         try:
             val = getattr(obj, name)
+        except Exception:
+            return None
+        if not callable(val):
+            return val
+        try:
             return val(*args)
         except TypeError as e:
             if "not callable" in str(e):
-                return getattr(obj, name)
-            raise
+                return val
+            return None
         except Exception:
-            return getattr(obj, name)
+            return None
 
     def _get_sw_app(self):
-        """Attempts to connect to SolidWorks COM interface, caching the connection."""
+        """Attempts to connect to SolidWorks COM interface, caching the connection per thread."""
         if not WIN32_AVAILABLE:
             return None
             
@@ -64,50 +95,74 @@ class SolidWorksMonitorService:
         if not sw:
             return None
         try:
-            active_doc = sw.ActiveDoc
-            if active_doc:
-                path = self._call_com_method(active_doc, 'GetPathName')
-                title = self._call_com_method(active_doc, 'GetTitle')
-                try:
-                    dirty = self._call_com_method(active_doc, 'GetSaveFlag')
-                except Exception:
-                    dirty = False
-                return {
-                    'title': title or "",
-                    'path': (path or "").replace("\\", "/"),
-                    'dirty': bool(dirty)
-                }
+            active_doc = self._call_com_method(sw, 'ActiveDoc')
         except Exception as e:
             print(f"COM Error in get_active_document: {e}")
             self.sw_app = None
-        return None
+            return None
+
+        if not active_doc:
+            return None
+
+        try:
+            path = self._as_text(self._call_com_method(active_doc, 'GetPathName'))
+            title = self._as_text(self._call_com_method(active_doc, 'GetTitle'))
+            if not path and not title:
+                return None
+            dirty = bool(self._call_com_method(active_doc, 'GetSaveFlag'))
+            return {
+                'title': title,
+                'path': path.replace("\\", "/"),
+                'dirty': dirty
+            }
+        except Exception as e:
+            print(f"COM Error in get_active_document: {e}")
+            return None
 
     def get_all_open_documents(self):
         """Returns a list of dicts for all open documents in SolidWorks."""
         sw = self._get_sw_app()
         if not sw:
             return []
-        docs = []
+
         try:
             # sw.GetDocuments() returns an array/tuple of ModelDoc2 objects
             sw_docs = self._call_com_method(sw, 'GetDocuments')
-            if sw_docs:
-                for doc in sw_docs:
-                    path = self._call_com_method(doc, 'GetPathName')
-                    title = self._call_com_method(doc, 'GetTitle')
-                    try:
-                        dirty = self._call_com_method(doc, 'GetSaveFlag')
-                    except Exception:
-                        dirty = False
-                    docs.append({
-                        'title': title or "",
-                        'path': (path or "").replace("\\", "/"),
-                        'dirty': bool(dirty),
-                        'doc_obj': doc # reference to the COM object
-                    })
         except Exception as e:
             print(f"COM Error in get_all_open_documents: {e}")
             self.sw_app = None
+            return []
+
+        docs = []
+        if not sw_docs:
+            return docs
+        try:
+            doc_list = list(sw_docs)
+        except Exception:
+            return docs
+
+        # Each document is inspected independently: a document that is closing (or whose
+        # dispatch is not resolvable) must not hide every other open document.
+        for doc in doc_list:
+            if doc is None:
+                continue
+            try:
+                path = self._as_text(self._call_com_method(doc, 'GetPathName'))
+                title = self._as_text(self._call_com_method(doc, 'GetTitle'))
+            except Exception:
+                continue
+            if not path and not title:
+                continue
+            try:
+                dirty = bool(self._call_com_method(doc, 'GetSaveFlag'))
+            except Exception:
+                dirty = False
+            docs.append({
+                'title': title,
+                'path': path.replace("\\", "/"),
+                'dirty': dirty,
+                'doc_obj': doc # reference to the COM object
+            })
         return docs
 
     def check_and_close_file(self, file_rel_path, repo_path, prompt_callback):
@@ -286,32 +341,16 @@ class SolidWorksMonitorService:
                         
                         for d in all_docs:
                             try:
-                                try:
-                                    path = self._call_com_method(d, 'GetPathName')
-                                except Exception:
-                                    path = getattr(d, 'GetPathName')
-                                    if callable(path):
-                                        path = path()
-                                        
-                                try:
-                                    title = self._call_com_method(d, 'GetTitle')
-                                except Exception:
-                                    title = getattr(d, 'GetTitle')
-                                    if callable(title):
-                                        title = title()
-                                        
+                                path = self._as_text(self._call_com_method(d, 'GetPathName'))
+                                title = self._as_text(self._call_com_method(d, 'GetTitle'))
+
                                 if not title:
                                     title = path
                                     
                                 if not title:
                                     continue
                                     
-                                try:
-                                    dtype = d.GetType()
-                                except Exception:
-                                    dtype = getattr(d, 'GetType')
-                                    if callable(dtype):
-                                        dtype = dtype()
+                                dtype = self._call_com_method(d, 'GetType')
                                         
                                 path_lower = (path or "").lower()
                                 title_lower = (title or "").lower()
