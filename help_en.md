@@ -29,11 +29,12 @@ Central control panel for repository setup, sync, and real-time status.
 
 File-level checkout, check-in, and local modification management.
 
-- **File Table** — Treeview listing all workspace files with columns: File Path (color-coded: green=part, orange=assembly, red=drawing, purple=other), Status (Unmodified/Modified/New File), SolidWorks (Open if loaded), Locked (me/other), By (lock owner). Press `Ctrl+A` to select all. Sortable by Name, Extension, Status, SolidWorks, or Locked. Respects `.gitignore`.
+- **File Table** — Treeview listing all workspace files with columns: File Path (color-coded: green=part, orange=assembly, red=drawing, purple=other), Status (Unmodified/Modified/New File), SolidWorks (Open if loaded), Locked (me/other), By (lock owner). Press `Ctrl+A` to select all. Sortable by Name, Extension, Status, SolidWorks, or Locked. Respects `.gitignore` and hides the app-internal `.backup/` directory.
 - **CAD File Preview Canvas** — Shows a 180x135 thumbnail of the selected CAD file (hybrid OLE + COM extraction). Active only in File Manager with exactly one file selected.
 - **Click-to-Copy** — Click the preview canvas to copy the thumbnail bitmap to clipboard (CF_DIB) for pasting into other apps.
 - **Refresh** — Reloads files, queries LFS locks, and updates SolidWorks open documents.
 - **Find Top** — Scans `.sldasm` dependency graph via COM API (fast, no file opening). Marks top-level assemblies with a red **TOP** label. Runs in background subprocess.
+- **Orphan** — Finds `.sldprt` files not referenced by any assembly in the current path filter (COM dependency scan) plus the drawings of those orphan parts. Select with `Ctrl`/`Shift`, then delete; deleted files are staged with `git rm` for the next Upload.
 - **Open** — Opens the workspace folder in File Explorer.
 - **Lock** — Acquires LFS locks on selected files. Also auto-acquired when opening files in SolidWorks.
 - **Unlock File** — Releases your LFS locks on selected files.

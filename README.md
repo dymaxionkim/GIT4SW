@@ -33,8 +33,9 @@ When designing with SolidWorks, CAD binary files—drawings (`.slddrw`), parts (
 * **EXPORT (Bulk Conversion)**: Batch-converts `.slddrw` (PDF, DXF), `.sldprt` (STEP AP214), and `.sldasm` (STEP_ASM AP214) across all or active configurations. Runs each file in an isolated worker with a 15-second COM heartbeat monitor and a 600-second silence watchdog to recover automatically if SolidWorks hangs.
 * **BOM Extraction**: Traverses assembly structures recursively to export a hierarchical BOM Tree (`__BOM.xlsx`) and a flat Partlist (`__PL.xlsx`) under `2D/BOM/`, excluding suppressed and BOM-excluded components. Supports configuration selection for multi-configuration assemblies.
 * **Find Top (Top-Level Assembly Scanner)**: Scans `.sldasm` dependency graphs using SolidWorks `GetDocumentDependencies2` (metadata-only, without opening models) and tags top-level assemblies with a red **`TOP`** badge.
+* **Orphan Cleanup**: Finds `.sldprt` files that no assembly inside the current path filter references, lists drawings that only belong to those orphan parts, and lets you select them with `Ctrl`/`Shift` and delete them. The scan scope is the current file-list filter; deletions are staged with `git rm` and committed by the normal Upload flow.
 * **Visual Diff**: Lets you pick a historical commit for a selected CAD file and open the current version (`_OURS`) alongside the historical version (`_THEIRS`) in SolidWorks for side-by-side comparison.
-* **Color-Coded File List & Thumbnail Preview**: Displays parts in green (`#059669`), assemblies in orange (`#d97706`), and drawings in red (`#dc2626`), with sorting by name, extension, status, open state, or lock state, plus a 4:3 CAD thumbnail preview (click to copy to clipboard).
+* **Color-Coded File List & Thumbnail Preview**: Displays parts in green (`#059669`), assemblies in orange (`#d97706`), and drawings in red (`#dc2626`), with sorting by name, extension, status, open state, or lock state, plus a 4:3 CAD thumbnail preview (click to copy to clipboard). `.gitignore`d files and the app-internal `.backup/` directory are never listed.
 * **Multilingual Help & Config Editor**: Built-in Help viewer supports English (`help_en.md`), Korean (`help_ko.md`), and Japanese (`help_jp.md`). Click **Edit** in Config to open the active configuration file directly in Notepad.
 
 ---
@@ -142,6 +143,11 @@ Open the **Config** tab from the bottom of the left sidebar, fill in your local 
 
 10. **Scan Top-Level Assemblies (Find Top)**
     * Click **[Find Top]** in the File Manager toolbar to scan `.sldasm` references via `GetDocumentDependencies2` and highlight top-level assemblies with a **`TOP`** tag.
+
+11. **Clean Up Orphan Parts (Orphan)**
+    * Optionally choose a path filter in File Manager to limit the scope, then click **[Orphan]** next to **Solidworks**.
+    * The dialog scans the assemblies of the current filter and lists `.sldprt` files that no assembly references, plus the drawings that only reference those orphan parts.
+    * Use `Ctrl+Click` / `Shift+Click` to select multiple files, then click **[Delete Selected]**. Files with uncommitted changes trigger an extra warning. Deleted files are removed from disk and the deletion is staged with `git rm`; run **Upload** to commit it.
 
 ### 4.3 Maintainer Mode
 

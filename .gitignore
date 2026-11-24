@@ -19,3 +19,6 @@ README_files
 README.html
 .backup/
 .codegraph/
+.env
+.env.*
+!.env.example

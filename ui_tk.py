@@ -1,5 +1,6 @@
 import os
 import sys
+import copy
 import tkinter as tk
 from tkinter import ttk, messagebox, filedialog
 import tkinter.font as tkfont
@@ -20,6 +21,14 @@ from git_provider import (
     parse_remote_url, load_config_for_token
 )
 from sw_monitor import SolidWorksMonitorService
+from llm_provider import (
+    DEFAULT_LLM_CONFIG,
+    ensure_prompt_file,
+    generate_commit_message,
+    test_llm_connection,
+    resolve_api_key,
+)
+from sw_diff_analyzer import BackgroundDiffWorker, build_llm_payload
 
 # IShellItemImageFactory interface definition for CAD thumbnail extraction
 try:
@@ -798,6 +807,142 @@ class DrawingDiffResultsDialog(tk.Toplevel):
             messagebox.showerror("Error", f"Image file not found:\n{img_path}", parent=self)
 
 
+class CommitDescriptionDialog(tk.Toplevel):
+    """Modal dialog for editing (File Manager) or viewing (History Log) multi-line
+    commit bullet descriptions while keeping tables and check-in input single-line.
+    """
+
+    def __init__(
+        self,
+        parent,
+        summary_text="",
+        description_text="",
+        readonly=False,
+        title=None,
+        meta_text="",
+    ):
+        super().__init__(parent)
+        self.parent = parent
+        self.readonly = readonly
+        self.result = None  # Set to str when saved in edit mode; None when cancelled
+
+        self.title(title or ("Commit Description (Read-Only)" if readonly else "Commit Description (Detailed Bullets)"))
+        self.geometry("680x440")
+        self.minsize(520, 320)
+        self.configure(bg="#f3f4f6")
+        self.transient(parent)
+        self.grab_set()
+
+        # Header frame: optional commit metadata + 1-line summary preview
+        hdr = tk.Frame(self, bg="#f3f4f6")
+        hdr.pack(fill="x", padx=16, pady=(12, 6))
+
+        if meta_text:
+            lbl_meta = ttk.Label(hdr, text=meta_text, foreground="#4b5563", background="#f3f4f6")
+            lbl_meta.pack(anchor="w", pady=(0, 4))
+
+        lbl_sum_title = ttk.Label(
+            hdr,
+            text="Summary (1-line):",
+            font=("TkDefaultFont", 9, "bold"),
+            foreground="#374151",
+            background="#f3f4f6",
+        )
+        lbl_sum_title.pack(anchor="w")
+
+        ent_sum = ttk.Entry(hdr)
+        ent_sum.insert(0, summary_text or "(empty)")
+        ent_sum.configure(state="readonly")
+        ent_sum.pack(fill="x", pady=(2, 6))
+
+        lbl_desc = ttk.Label(
+            hdr,
+            text="Detailed Changes (File-by-File Bullets):" if not readonly else "Detailed Description:",
+            font=("TkDefaultFont", 9, "bold"),
+            foreground="#374151",
+            background="#f3f4f6",
+        )
+        lbl_desc.pack(anchor="w")
+
+        # Multi-line text editor with vertical scrollbar
+        body_frm = tk.Frame(self, bg="#f3f4f6")
+        body_frm.pack(fill="both", expand=True, padx=16, pady=(0, 8))
+
+        vsb = ttk.Scrollbar(body_frm, orient="vertical")
+        vsb.pack(side="right", fill="y")
+
+        self.txt_desc = tk.Text(
+            body_frm,
+            wrap="word",
+            bg="#ffffff" if not readonly else "#f9fafb",
+            fg="#1f2937",
+            insertbackground="#000000",
+            relief="solid",
+            bd=1,
+            highlightthickness=0,
+            font="TkDefaultFont",
+            yscrollcommand=vsb.set,
+        )
+        self.txt_desc.pack(side="left", fill="both", expand=True)
+        vsb.config(command=self.txt_desc.yview)
+
+        if description_text:
+            self.txt_desc.insert("1.0", description_text)
+        elif readonly:
+            self.txt_desc.insert("1.0", "(No detailed description recorded for this commit.)")
+
+        if readonly:
+            self.txt_desc.configure(state="disabled")
+
+        # Bottom action buttons
+        btn_frm = tk.Frame(self, bg="#f3f4f6")
+        btn_frm.pack(fill="x", padx=16, pady=(0, 12))
+
+        if readonly:
+            def _copy_all():
+                full = summary_text or ""
+                if description_text:
+                    full = f"{full}\n\n{description_text}" if full else description_text
+                try:
+                    self.clipboard_clear()
+                    self.clipboard_append(full)
+                    self.update()
+                except Exception:
+                    pass
+
+            btn_copy = ttk.Button(btn_frm, text="Copy All", command=_copy_all)
+            btn_copy.pack(side="left")
+
+            btn_close = ttk.Button(btn_frm, text="Close", style="Primary.TButton", command=self.destroy)
+            btn_close.pack(side="right")
+        else:
+            def _clear():
+                self.txt_desc.delete("1.0", tk.END)
+
+            def _save():
+                self.result = self.txt_desc.get("1.0", tk.END).strip()
+                self.destroy()
+
+            btn_clear = ttk.Button(btn_frm, text="Clear", command=_clear)
+            btn_clear.pack(side="left")
+
+            btn_save = ttk.Button(btn_frm, text="Save Description", style="Primary.TButton", command=_save)
+            btn_save.pack(side="right", padx=(8, 0))
+
+            btn_cancel = ttk.Button(btn_frm, text="Cancel", command=self.destroy)
+            btn_cancel.pack(side="right")
+
+        # Center relative to parent
+        self.update_idletasks()
+        x = parent.winfo_rootx() + (parent.winfo_width() - self.winfo_width()) // 2
+        y = parent.winfo_rooty() + (parent.winfo_height() - self.winfo_height()) // 2
+        self.geometry(f"+{max(0, x)}+{max(0, y)}")
+
+        self.bind("<Escape>", lambda _e: self.destroy())
+        if not readonly:
+            self.txt_desc.focus_set()
+
+
 class LfsCleanupWizardDialog(tk.Toplevel):
     def __init__(self, parent, git_service):
         super().__init__(parent)
@@ -1115,6 +1260,621 @@ class LfsCleanupWizardDialog(tk.Toplevel):
         self.destroy()
 
 
+class OrphanFilesDialog(tk.Toplevel):
+    """Lists .sldprt files that no assembly in the current file-list scope references.
+
+    Orphan drawings (drawings that only reference orphan parts) are listed as well so
+    the user can remove them together. Deleting removes the files from disk and stages
+    the deletion with ``git rm``; the commit itself is performed by the normal Upload
+    flow.
+    """
+
+    STATUS_DISPLAY = {
+        'modified': '🟢 Modified',
+        'untracked': '🔵 New File',
+        'deleted': '🔴 Deleted',
+        'unmodified': '⚪ Unmodified',
+    }
+
+    def __init__(self, parent, git_service, workspace_path, parts, assemblies,
+                 drawings, scope_label):
+        super().__init__(parent)
+        self.parent = parent
+        self.git_service = git_service
+        self.workspace_path = workspace_path
+        self.scope_label = scope_label or "All Files"
+        self.candidate_parts = list(parts or [])
+        self.scope_assemblies = list(assemblies or [])
+        self.scope_drawings = list(drawings or [])
+
+        self.rows = {}          # tree item id -> {'rel': str, 'kind': 'part'|'drawing'}
+        self.rel_items = {}     # normalized rel path -> tree item id
+        self.part_drawings = {} # orphan part rel -> [drawing rel]
+        self.scan_proc = None
+        self.is_scanning = False
+        self.is_deleting = False
+        self._closed = False
+
+        # Snapshot the git status / lock state of the file table for warnings.
+        self.status_map = {}
+        self.lock_map = {}
+        for entry in (getattr(parent, 'files_data', None) or []):
+            key = self._key(entry.get('file', ''))
+            if not key:
+                continue
+            self.status_map[key] = entry.get('status', 'unmodified')
+            self.lock_map[key] = {
+                'locked': entry.get('locked', False),
+                'locked_by': entry.get('locked_by'),
+                'is_our_lock': entry.get('is_our_lock', False),
+            }
+
+        self.title("Orphan Files")
+        self.geometry("860x560")
+        self.minsize(720, 420)
+        self.configure(bg="#f3f4f6")
+        self.transient(parent)
+        self.grab_set()
+
+        self.create_widgets()
+
+        # Center over the main window
+        self.update_idletasks()
+        try:
+            x = parent.winfo_rootx() + (parent.winfo_width() - self.winfo_width()) // 2
+            y = parent.winfo_rooty() + (parent.winfo_height() - self.winfo_height()) // 2
+            self.geometry(f"+{max(0, x)}+{max(0, y)}")
+        except Exception:
+            pass
+
+        self.protocol("WM_DELETE_WINDOW", self.on_close)
+        self.start_scan()
+
+    # ---------------------------------------------------------------- helpers
+    @staticmethod
+    def _key(rel_path):
+        return str(rel_path or "").replace("\\", "/").lower()
+
+    @staticmethod
+    def _format_size(size_bytes):
+        size = float(size_bytes)
+        if size < 1024:
+            return f"{int(size)} B"
+        if size < 1024 * 1024:
+            return f"{size / 1024:.1f} KB"
+        if size < 1024 * 1024 * 1024:
+            return f"{size / (1024 * 1024):.1f} MB"
+        return f"{size / (1024 * 1024 * 1024):.2f} GB"
+
+    def _ui(self, fn):
+        """Run fn on the GUI thread (callbacks may arrive after the dialog closes)."""
+        if self._closed:
+            return
+
+        def wrapped():
+            if self._closed:
+                return
+            try:
+                if not self.winfo_exists():
+                    return
+            except Exception:
+                return
+            try:
+                fn()
+            except tk.TclError:
+                pass
+
+        try:
+            self.parent.task_queue.put(('callback', None, wrapped))
+        except Exception:
+            pass
+
+    # ---------------------------------------------------------------- widgets
+    def create_widgets(self):
+        header = ttk.Frame(self)
+        header.pack(fill="x", padx=16, pady=(14, 2))
+
+        ttk.Label(
+            header,
+            text=("Orphan files are .sldprt files that no assembly in the current scope "
+                  "references. Drawings that only reference orphan parts are listed as well."),
+            wraplength=800, justify="left", style="TLabel",
+        ).pack(anchor="w")
+
+        scope_color = "#b45309" if self.scope_label != "All Files" else "#374151"
+        tk.Label(
+            header,
+            text=(f"Scope: {self.scope_label}   |   Candidates: {len(self.candidate_parts)} part(s), "
+                  f"{len(self.scope_assemblies)} assembly(ies), {len(self.scope_drawings)} drawing(s)"),
+            bg="#f3f4f6", fg=scope_color, font="TkDefaultFont", anchor="w", justify="left",
+        ).pack(anchor="w", pady=(6, 0))
+
+        if self.scope_label != "All Files":
+            tk.Label(
+                header,
+                text="⚠ References from files outside this filter were NOT checked.",
+                bg="#f3f4f6", fg="#b45309", font=("TkDefaultFont", 8, "bold"), anchor="w",
+            ).pack(anchor="w")
+        if not self.scope_assemblies:
+            tk.Label(
+                header,
+                text="⚠ No assemblies in scope: every listed part will be considered orphan.",
+                bg="#f3f4f6", fg="#b45309", font=("TkDefaultFont", 8, "bold"), anchor="w",
+            ).pack(anchor="w")
+
+        progress_frm = ttk.Frame(self)
+        progress_frm.pack(fill="x", padx=16, pady=(6, 4))
+        self.lbl_status = ttk.Label(progress_frm, text="Preparing scan...", style="TLabel")
+        self.lbl_status.pack(anchor="w")
+        self.progress = ttk.Progressbar(progress_frm, mode="indeterminate")
+        self.progress.pack(fill="x", pady=(4, 0))
+
+        table_frm = ttk.Frame(self)
+        table_frm.pack(fill="both", expand=True, padx=16, pady=4)
+
+        self.tree = ttk.Treeview(
+            table_frm,
+            columns=("path", "size", "status", "kind"),
+            show="headings",
+            selectmode="extended",
+        )
+        self.tree.heading("path", text="File Path", anchor="w")
+        self.tree.heading("size", text="Size", anchor="e")
+        self.tree.heading("status", text="Git Status", anchor="center")
+        self.tree.heading("kind", text="Type", anchor="center")
+        self.tree.column("path", anchor="w", width=470, stretch=True)
+        self.tree.column("size", anchor="e", width=90, stretch=False)
+        self.tree.column("status", anchor="center", width=110, stretch=False)
+        self.tree.column("kind", anchor="center", width=170, stretch=False)
+        vsb = ttk.Scrollbar(table_frm, orient="vertical", command=self.tree.yview)
+        self.tree.configure(yscrollcommand=vsb.set)
+        self.tree.pack(side="left", fill="both", expand=True)
+        vsb.pack(side="right", fill="y")
+
+        self.tree.tag_configure("part", foreground="#059669")
+        self.tree.tag_configure("drawing", foreground="#b45309")
+
+        self.tree.bind("<<TreeviewSelect>>", self._update_selected_label)
+        self.tree.bind("<Control-a>", self.select_all)
+        self.tree.bind("<Control-A>", self.select_all)
+
+        footer = ttk.Frame(self)
+        footer.pack(fill="x", padx=16, pady=(4, 14))
+
+        self.lbl_selected = ttk.Label(footer, text="Selected: 0", style="TLabel")
+        self.lbl_selected.pack(side="left")
+
+        self.btn_close = ttk.Button(footer, text="Close", command=self.on_close)
+        self.btn_close.pack(side="right", padx=(8, 0))
+
+        self.btn_delete = ttk.Button(
+            footer, text="Delete Selected", style="Danger.TButton",
+            command=self.on_delete_selected, state="disabled",
+        )
+        self.btn_delete.pack(side="right", padx=(8, 0))
+
+        self.btn_select_all = ttk.Button(
+            footer, text="Select All", command=self.select_all, state="disabled",
+        )
+        self.btn_select_all.pack(side="right", padx=(8, 0))
+
+        self.btn_rescan = ttk.Button(footer, text="Re-scan", command=self.start_scan)
+        self.btn_rescan.pack(side="right")
+
+    # ---------------------------------------------------------------- scanning
+    def start_scan(self):
+        if self.is_scanning or self.is_deleting:
+            return
+        self.is_scanning = True
+        self._clear_rows()
+        self.btn_delete.config(state="disabled")
+        self.btn_select_all.config(state="disabled")
+        self.btn_rescan.config(state="disabled")
+        self.lbl_status.config(text="Starting SolidWorks dependency scan...")
+        self.progress.config(mode="indeterminate")
+        self.progress.start(12)
+        self.parent.write_log(
+            f"Orphan scan started (scope: '{self.scope_label}', "
+            f"{len(self.scope_assemblies)} assembly(ies)).", "info"
+        )
+        threading.Thread(target=self.run_scan, daemon=True).start()
+
+    def run_scan(self):
+        """Worker thread: run sw_top_finder.py in orphan mode and parse its JSON result."""
+        import tempfile
+
+        tmp_paths = []
+        proc = None
+        try:
+            def write_list(items, prefix):
+                fd, path = tempfile.mkstemp(prefix=f"git4sw_{prefix}_", suffix=".json")
+                with os.fdopen(fd, "w", encoding="utf-8") as fh:
+                    json.dump(list(items or []), fh)
+                tmp_paths.append(path)
+                return path
+
+            assemblies_file = write_list(self.scope_assemblies, "asm")
+            parts_file = write_list(self.candidate_parts, "part")
+            drawings_file = write_list(self.scope_drawings, "drw")
+
+            script_dir = os.path.dirname(os.path.abspath(__file__))
+            runner_path = os.path.join(script_dir, "sw_top_finder.py")
+            sldworks_exe = self.parent.load_solidworks_path()
+            try:
+                sldworks_exe = os.path.abspath(os.path.expandvars(sldworks_exe))
+            except Exception:
+                pass
+
+            env_vars = os.environ.copy()
+            env_vars["PYTHONIOENCODING"] = "utf-8"
+            env_vars["GIT4SW_SOLIDWORKS_PATH"] = sldworks_exe
+
+            cmd = [
+                sys.executable, "-u", runner_path, self.workspace_path,
+                "--mode", "orphans",
+                "--assemblies-file", assemblies_file,
+                "--parts-file", parts_file,
+                "--drawings-file", drawings_file,
+                "--solidworks-path", sldworks_exe,
+            ]
+            proc = subprocess.Popen(
+                cmd,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT,
+                text=True,
+                bufsize=1,
+                encoding="utf-8",
+                errors="replace",
+                env=env_vars,
+            )
+            self.scan_proc = proc
+
+            json_result = None
+            for line in proc.stdout:
+                clean = line.strip()
+                if not clean:
+                    continue
+                if clean.startswith("{"):
+                    try:
+                        json_result = json.loads(clean)
+                    except Exception:
+                        pass
+                elif clean.startswith("[PROGRESS]"):
+                    tokens = clean.split()
+                    if len(tokens) >= 3 and "/" in tokens[2]:
+                        phase = tokens[1]
+                        done, total = tokens[2].split("/", 1)
+                        if phase == "A":
+                            self._ui(lambda d=done, t=total: self._update_progress(
+                                f"Scanning assemblies... {d}/{t}", d, t))
+                        elif phase == "D":
+                            self._ui(lambda d=done, t=total: self._update_progress(
+                                f"Checking drawings... {d}/{t}", d, t))
+                elif clean.lower().startswith("error"):
+                    self.parent.write_log(clean, "warning")
+
+            returncode = proc.wait()
+            self.scan_proc = None
+
+            if self._closed:
+                return
+            if json_result and json_result.get("error"):
+                self._ui(lambda: self.on_scan_failed(str(json_result["error"])))
+            elif json_result is not None:
+                self._ui(lambda: self.on_scan_done(json_result))
+            else:
+                self._ui(lambda: self.on_scan_failed(
+                    f"Scanner produced no result (exit code {returncode})."))
+        except Exception as e:
+            if not self._closed:
+                self._ui(lambda: self.on_scan_failed(str(e)))
+        finally:
+            self.scan_proc = None
+            for path in tmp_paths:
+                try:
+                    os.remove(path)
+                except Exception:
+                    pass
+
+    def _update_progress(self, text, done, total):
+        try:
+            total_int = max(int(total), 1)
+            done_int = max(min(int(done), total_int), 0)
+            self.progress.stop()
+            self.progress.config(mode="determinate", maximum=total_int, value=done_int)
+            self.lbl_status.config(text=text)
+        except Exception:
+            pass
+
+    def on_scan_done(self, result):
+        self.is_scanning = False
+        self.progress.stop()
+        self.progress.config(mode="determinate", value=0)
+        self.btn_rescan.config(state="normal")
+
+        orphans = list(result.get("orphans") or [])
+        self.part_drawings = {
+            str(part).replace("\\", "/"): [str(d).replace("\\", "/") for d in drawings]
+            for part, drawings in (result.get("orphan_part_drawings") or {}).items()
+        }
+        drawing_set = sorted({d for draws in self.part_drawings.values() for d in draws})
+
+        for rel in sorted(orphans):
+            self._add_row(rel, "part")
+        for rel in drawing_set:
+            self._add_row(rel, "drawing")
+
+        if not orphans and not drawing_set:
+            self.lbl_status.config(text="No orphan files found in the current list.")
+            self.btn_delete.config(state="disabled")
+            self.btn_select_all.config(state="disabled")
+            self.parent.write_log("Orphan scan complete: no orphan files found.", "info")
+            return
+
+        self.lbl_status.config(
+            text=(f"Scan complete: {len(orphans)} orphan part(s), "
+                  f"{len(drawing_set)} related drawing(s) found.")
+        )
+        self.btn_select_all.config(state="normal")
+        self._update_selected_label()
+        self.parent.write_log(
+            f"Orphan scan complete: {len(orphans)} orphan part(s), "
+            f"{len(drawing_set)} related drawing(s).", "info"
+        )
+
+    def on_scan_failed(self, message):
+        self.is_scanning = False
+        self.progress.stop()
+        self.progress.config(mode="determinate", value=0)
+        self.btn_rescan.config(state="normal")
+        self.lbl_status.config(text=f"Scan failed: {message}")
+        self.parent.write_log(f"Orphan scan failed: {message}", "error")
+
+    # ---------------------------------------------------------------- table rows
+    def _clear_rows(self):
+        for item in self.tree.get_children():
+            self.tree.delete(item)
+        self.rows.clear()
+        self.rel_items.clear()
+        self._update_selected_label()
+
+    def _add_row(self, rel_path, kind):
+        rel_path = rel_path.replace("\\", "/")
+        abs_path = os.path.join(self.workspace_path, rel_path)
+        try:
+            size_txt = self._format_size(os.path.getsize(abs_path))
+        except Exception:
+            size_txt = "-"
+        status = self.status_map.get(self._key(rel_path), "unmodified")
+        status_txt = self.STATUS_DISPLAY.get(status, status)
+        kind_txt = "Part" if kind == "part" else "Drawing (orphan part)"
+        item = self.tree.insert(
+            "", "end",
+            values=(rel_path.replace("/", "\\"), size_txt, status_txt, kind_txt),
+            tags=(kind,),
+        )
+        self.rows[item] = {"rel": rel_path, "kind": kind}
+        self.rel_items[self._key(rel_path)] = item
+
+    def select_all(self, event=None):
+        if self.tree.get_children():
+            self.tree.selection_set(self.tree.get_children())
+        self._update_selected_label()
+        return "break"
+
+    def _update_selected_label(self, event=None):
+        if self.is_scanning or self.is_deleting:
+            return
+        count = len(self.tree.selection())
+        self.lbl_selected.config(text=f"Selected: {count}")
+        self.btn_delete.config(state="normal" if count else "disabled")
+
+    # ---------------------------------------------------------------- deletion
+    def on_delete_selected(self):
+        if self.is_deleting or self.is_scanning:
+            return
+
+        selected_items = self.tree.selection()
+        if not selected_items:
+            self.lbl_status.config(text="Select at least one file to delete.")
+            return
+
+        targets = []
+        part_targets = []
+        for item in selected_items:
+            row = self.rows.get(item)
+            if not row:
+                continue
+            targets.append(row["rel"])
+            if row["kind"] == "part":
+                part_targets.append(row["rel"])
+
+        # Offer to include the orphan drawings of the selected parts.
+        related = []
+        for rel in part_targets:
+            for drawing in self.part_drawings.get(rel, []):
+                if drawing not in targets and drawing not in related:
+                    related.append(drawing)
+        if related:
+            preview = "\n".join(f"  - {rel}" for rel in related[:10])
+            if len(related) > 10:
+                preview += f"\n  ... and {len(related) - 10} more"
+            include = messagebox.askyesno(
+                "Include Drawings",
+                f"{len(related)} orphan drawing(s) reference the selected part(s):\n\n"
+                f"{preview}\n\nDelete them together with the selected part(s)?",
+                parent=self,
+            )
+            if include:
+                targets.extend(related)
+
+        # Block deletion of files that are open in SolidWorks or locked by others.
+        open_lower = {str(f).lower() for f in getattr(self.parent, "last_open_files", set())}
+        open_targets = [rel for rel in targets if rel.lower() in open_lower]
+        locked_targets = []
+        for rel in targets:
+            info = self.lock_map.get(self._key(rel))
+            if info and info.get("locked") and not info.get("is_our_lock"):
+                locked_targets.append(rel)
+        if open_targets or locked_targets:
+            blocks = []
+            if open_targets:
+                text = "Open in SolidWorks (close them first):\n" + "\n".join(
+                    f"  - {p}" for p in open_targets[:10])
+                if len(open_targets) > 10:
+                    text += f"\n  ... and {len(open_targets) - 10} more"
+                blocks.append(text)
+            if locked_targets:
+                text = "Locked by another user (unlock first):\n" + "\n".join(
+                    f"  - {p}" for p in locked_targets[:10])
+                if len(locked_targets) > 10:
+                    text += f"\n  ... and {len(locked_targets) - 10} more"
+                blocks.append(text)
+            messagebox.showwarning(
+                "Cannot Delete Orphan Files", "\n\n".join(blocks), parent=self)
+            self.lbl_status.config(text="Some selected files cannot be deleted. See the warning.")
+            return
+
+        modified = [rel for rel in targets if self.status_map.get(self._key(rel)) == "modified"]
+        drawing_count = sum(1 for rel in targets if rel.lower().endswith(".slddrw"))
+
+        preview = "\n".join(f"  - {rel}" for rel in targets[:15])
+        if len(targets) > 15:
+            preview += f"\n  ... and {len(targets) - 15} more"
+
+        warnings = []
+        if modified:
+            warnings.append(
+                f"⚠ WARNING: {len(modified)} selected file(s) have uncommitted changes. "
+                f"Their edits will be lost permanently.")
+        if drawing_count:
+            warnings.append(
+                f"⚠ WARNING: {drawing_count} drawing(s) of orphan parts are included in this deletion.")
+        if self.scope_label != "All Files":
+            warnings.append(
+                f"⚠ WARNING: Scan scope was '{self.scope_label}' only. References from files "
+                f"outside this filter were not checked.")
+        warnings.append(
+            "The files are deleted from disk and the deletion is staged with 'git rm'. "
+            "Use Upload to commit the deletion.")
+
+        message = (
+            f"Delete {len(targets)} file(s)?\n\n{preview}\n\n" + "\n\n".join(warnings)
+        )
+        if not messagebox.askyesno("Delete Orphan Files", message, icon="warning", parent=self):
+            return
+
+        self.is_deleting = True
+        self.btn_delete.config(state="disabled")
+        self.btn_select_all.config(state="disabled")
+        self.btn_rescan.config(state="disabled")
+        self.btn_close.config(state="disabled")
+        self.lbl_status.config(text=f"Deleting {len(targets)} file(s)...")
+        self.progress.config(mode="indeterminate")
+        self.progress.start(12)
+        threading.Thread(
+            target=self.run_delete, args=(targets, bool(modified)), daemon=True
+        ).start()
+
+    def run_delete(self, targets, force):
+        """Worker thread: release our LFS locks, then delete and stage the files."""
+        failed_unlock = []
+        try:
+            our_locks = [
+                rel for rel in targets
+                if self.lock_map.get(self._key(rel), {}).get("is_our_lock")
+            ]
+            if our_locks:
+                try:
+                    for rel_path, ok, result in self.git_service.batch_unlock_files(our_locks):
+                        if not ok:
+                            failed_unlock.append(f"{rel_path}: {result}")
+                except Exception as e:
+                    failed_unlock.append(str(e))
+            deleted, failed = self.git_service.delete_workspace_files(targets, force=force)
+        except Exception as e:
+            deleted, failed = [], [(rel, str(e)) for rel in targets]
+
+        self._ui(lambda: self.on_delete_done(deleted, failed, failed_unlock))
+
+    def on_delete_done(self, deleted, failed, failed_unlock):
+        self.is_deleting = False
+        self.progress.stop()
+        self.progress.config(mode="determinate", value=0)
+        self.btn_rescan.config(state="normal")
+        self.btn_close.config(state="normal")
+
+        for rel in deleted:
+            item = self.rel_items.get(self._key(rel))
+            if item is not None:
+                try:
+                    self.tree.delete(item)
+                except Exception:
+                    pass
+                self.rows.pop(item, None)
+                self.rel_items.pop(self._key(rel), None)
+
+        self._update_selected_label()
+        if deleted:
+            self.lbl_status.config(
+                text=f"Deleted {len(deleted)} file(s). Use Upload to commit the deletion.")
+            self.parent.write_log(
+                f"Orphan cleanup: deleted {len(deleted)} file(s) and staged the deletion. "
+                f"Use Upload to commit.", "success")
+        if failed_unlock:
+            self.parent.write_log(
+                f"Orphan cleanup: {len(failed_unlock)} LFS lock(s) could not be released "
+                f"(deletion continued).", "warning")
+
+        if failed:
+            detail = "\n".join(f"  - {rel}: {reason}" for rel, reason in failed[:12])
+            if len(failed) > 12:
+                detail += f"\n  ... and {len(failed) - 12} more"
+            self.lbl_status.config(text=f"{len(failed)} file(s) could not be deleted.")
+            messagebox.showwarning(
+                "Some Files Were Not Deleted",
+                f"{len(failed)} file(s) could not be deleted:\n\n{detail}",
+                parent=self,
+            )
+            self.parent.write_log(
+                f"Orphan cleanup failed for {len(failed)} file(s).", "error")
+
+        if not self.rows:
+            self.btn_select_all.config(state="disabled")
+            self.btn_delete.config(state="disabled")
+
+        # Keep the File Manager table and its "Deleted" staging status in sync.
+        try:
+            self.parent.refresh_file_list()
+        except Exception:
+            pass
+
+    # ---------------------------------------------------------------- closing
+    def on_close(self):
+        if self.is_deleting:
+            messagebox.showinfo(
+                "Please Wait", "A deletion is in progress. Please wait for it to finish.",
+                parent=self)
+            return
+        self._closed = True
+        proc = self.scan_proc
+        if proc is not None:
+            try:
+                proc.terminate()
+            except Exception:
+                pass
+        try:
+            self.grab_release()
+        except Exception:
+            pass
+        try:
+            if getattr(self.parent, "_orphan_dialog", None) is self:
+                self.parent._orphan_dialog = None
+        except Exception:
+            pass
+        self.destroy()
+
+
 def queue_during_bg_tasks(method):
     import functools
     @functools.wraps(method)
@@ -1238,6 +1998,20 @@ class GIT4SWApp(tk.Tk):
         #  this prevents the monitor from detecting files opened in the same SolidWorks
         #  instance and attempting unnecessary Locks.)
         self.suppress_auto_lock = False
+        self.commit_description_body = ""
+        self._history_commit_map = {}
+
+        # Zero-Interference background SolidWorks diff pre-computer
+        self.bg_diff_worker = BackgroundDiffWorker(
+            get_git_service_cb=lambda: self.git_service,
+            get_workspace_path_cb=lambda: self.workspace_path,
+            load_config_cb=self.load_config_data,
+            is_busy_cb=lambda: (self.bg_tasks_count > 0 or getattr(self, 'suppress_auto_lock', False)),
+            get_open_files_cb=lambda: list(getattr(self, 'last_open_files', set())),
+            set_suppress_auto_lock_cb=lambda flag: setattr(self, 'suppress_auto_lock', bool(flag)),
+            on_status_change_cb=self._on_bg_diff_status_changed,
+            log_cb=lambda m: self.write_log(m, "info"),
+        )
         
         # Monitor thread for SolidWorks active document status
         self.sw_monitor_active = True
@@ -1929,8 +2703,8 @@ class GIT4SWApp(tk.Tk):
             except Exception as e:
                 self.write_log(f"Failed to read config file: {e}", "error")
                 
-        # Normalize string representations of lists back to actual lists
-        # (handles legacy config.json where commit_messages/column_order were saved as strings)
+        # Normalize string representations of lists/dicts back to native Python types
+        # (handles legacy config.json where commit_messages/column_order/llm_params were saved as strings)
         for list_key in ("commit_messages", "column_order"):
             val = config_data.get(list_key)
             if isinstance(val, str) and val.startswith('['):
@@ -1940,6 +2714,30 @@ class GIT4SWApp(tk.Tk):
                         config_data[list_key] = parsed
                 except Exception:
                     pass
+
+        llm_params_val = config_data.get("llm_params")
+        if isinstance(llm_params_val, str) and llm_params_val.strip().startswith('{'):
+            try:
+                parsed = json.loads(llm_params_val)
+                if isinstance(parsed, dict):
+                    config_data["llm_params"] = parsed
+            except Exception:
+                try:
+                    parsed = ast.literal_eval(llm_params_val)
+                    if isinstance(parsed, dict):
+                        config_data["llm_params"] = parsed
+                except Exception:
+                    pass
+
+        for bool_key in ("llm_verify_ssl", "auto_bg_diff"):
+            bval = config_data.get(bool_key)
+            if isinstance(bval, str):
+                config_data[bool_key] = bval.strip().lower() not in ("false", "0", "no")
+
+        # Populate missing LLM defaults in memory so existing config.json users see them immediately
+        for llm_k, llm_v in DEFAULT_LLM_CONFIG.items():
+            if llm_k not in config_data:
+                config_data[llm_k] = copy.deepcopy(llm_v)
                 
         return config_data
 
@@ -1951,21 +2749,57 @@ class GIT4SWApp(tk.Tk):
         
         # Container to hold layout
         container = tk.Frame(card, bg="#ffffff")
-        container.pack(fill="both", expand=True, padx=16, pady=(0, 16))
-        
-        # Sub-frame for entry fields
-        self.config_fields_frame = tk.Frame(container, bg="#ffffff")
-        self.config_fields_frame.pack(fill="both", expand=True)
+        container.pack(fill="both", expand=True, padx=16, pady=(8, 12))
+
+        # Scrollable canvas wrapper so expanded Git + LLM config fields never clip off-screen
+        scroll_wrap = tk.Frame(container, bg="#ffffff")
+        scroll_wrap.pack(fill="both", expand=True)
+
+        self.config_canvas = tk.Canvas(scroll_wrap, bg="#ffffff", highlightthickness=0, bd=0)
+        cfg_vsb = ttk.Scrollbar(scroll_wrap, orient="vertical", command=self.config_canvas.yview)
+        self.config_canvas.configure(yscrollcommand=cfg_vsb.set)
+        cfg_vsb.pack(side="right", fill="y")
+        self.config_canvas.pack(side="left", fill="both", expand=True)
+
+        self.config_fields_frame = tk.Frame(self.config_canvas, bg="#ffffff")
+        self._config_canvas_window = self.config_canvas.create_window(
+            (0, 0), window=self.config_fields_frame, anchor="nw"
+        )
+
+        def _on_cfg_frame_configure(_e):
+            self.config_canvas.configure(scrollregion=self.config_canvas.bbox("all"))
+
+        def _on_cfg_canvas_configure(e):
+            self.config_canvas.itemconfigure(self._config_canvas_window, width=e.width)
+
+        self.config_fields_frame.bind("<Configure>", _on_cfg_frame_configure)
+        self.config_canvas.bind("<Configure>", _on_cfg_canvas_configure)
+
+        def _on_cfg_mousewheel(e):
+            try:
+                if self.config_canvas.winfo_ismapped():
+                    self.config_canvas.yview_scroll(int(-1 * (e.delta / 120)), "units")
+            except Exception:
+                pass
+
+        self.config_canvas.bind("<Enter>", lambda _e: self.config_canvas.bind_all("<MouseWheel>", _on_cfg_mousewheel))
+        self.config_canvas.bind("<Leave>", lambda _e: self.config_canvas.unbind_all("<MouseWheel>"))
         
         # Save Button Frame at bottom
         btn_frm = tk.Frame(container, bg="#ffffff")
-        btn_frm.pack(fill="x", side="bottom", pady=(16, 0))
+        btn_frm.pack(fill="x", side="bottom", pady=(12, 0))
         
         self.btn_save_config = ttk.Button(btn_frm, text="Save Configuration", style="Primary.TButton", command=self.save_config_from_view)
         self.btn_save_config.pack(side="left")
         
         self.btn_edit_config = ttk.Button(btn_frm, text="Edit", command=self.edit_config_file)
         self.btn_edit_config.pack(side="left", padx=(8, 0))
+
+        self.btn_edit_prompt = ttk.Button(btn_frm, text="Edit Prompt", command=self.edit_llm_prompt_file)
+        self.btn_edit_prompt.pack(side="left", padx=(8, 0))
+
+        self.btn_test_llm = ttk.Button(btn_frm, text="Test LLM", command=self.test_llm_connection_from_view)
+        self.btn_test_llm.pack(side="left", padx=(8, 0))
         
         self.config_entries = {}
         
@@ -1997,6 +2831,17 @@ class GIT4SWApp(tk.Tk):
             "git_token": "Git Token",
             "default_local_path": "Default Local Path",
             "organization_name": "Organization / Namespace",
+            "llm_provider": "LLM Provider",
+            "llm_api_style": "LLM API Style",
+            "llm_base_url": "LLM Base URL",
+            "llm_model": "LLM Model",
+            "llm_api_key": "LLM API Key (or .env)",
+            "llm_timeout_sec": "LLM Timeout (sec)",
+            "llm_verify_ssl": "LLM Verify SSL",
+            "llm_params": "LLM Extra Params (JSON)",
+            "llm_prompt_file": "LLM Prompt File",
+            "llm_custom_instructions": "LLM Custom Instructions",
+            "auto_bg_diff": "Auto Background Diff",
         }
         
         keys_order = [
@@ -2008,7 +2853,18 @@ class GIT4SWApp(tk.Tk):
             "gitea_url",
             "git_token",
             "default_local_path",
-            "organization_name"
+            "organization_name",
+            "llm_provider",
+            "llm_api_style",
+            "llm_base_url",
+            "llm_model",
+            "llm_api_key",
+            "llm_timeout_sec",
+            "llm_verify_ssl",
+            "llm_params",
+            "llm_prompt_file",
+            "llm_custom_instructions",
+            "auto_bg_diff",
         ]
         
         for k in config_data.keys():
@@ -2037,12 +2893,12 @@ class GIT4SWApp(tk.Tk):
             display_name = display_names.get(key, key.replace("_", " ").title())
             
             lbl = ttk.Label(self.config_fields_frame, text=f"{display_name}:", font=("TkDefaultFont", 10, "bold"), anchor="w", background="#ffffff")
-            lbl.grid(row=row_idx, column=0, padx=(0, 10), pady=1, sticky="w")
+            lbl.grid(row=row_idx, column=0, padx=(0, 10), pady=2, sticky="w")
             
             if key in find_targets:
                 cb = ttk.Combobox(self.config_fields_frame, state="readonly", width=60)
                 cb.set(str(val))
-                cb.grid(row=row_idx, column=1, padx=0, pady=1, sticky="ew")
+                cb.grid(row=row_idx, column=1, padx=0, pady=2, sticky="ew")
                 self.config_entries[key] = cb
                 self.config_combos[key] = cb
 
@@ -2059,15 +2915,29 @@ class GIT4SWApp(tk.Tk):
                 
                 btn = ttk.Button(self.config_fields_frame, text="Find", width=6,
                                  command=lambda k=key, t=find_targets[key]: self.find_executable(k, t))
-                btn.grid(row=row_idx, column=2, padx=(8, 0), pady=1, sticky="w")
+                btn.grid(row=row_idx, column=2, padx=(8, 0), pady=2, sticky="w")
                 self.config_find_btns[key] = btn
             elif key == "git_server_type":
                 cb = ttk.Combobox(self.config_fields_frame, state="readonly", width=20)
                 cb['values'] = ["github", "gitea"]
                 cb.set(str(val) if str(val) in ("github", "gitea") else "github")
-                cb.grid(row=row_idx, column=1, padx=0, pady=1, sticky="w")
+                cb.grid(row=row_idx, column=1, padx=0, pady=2, sticky="w")
                 self.config_entries[key] = cb
                 cb.bind("<<ComboboxSelected>>", self._on_git_server_type_changed)
+            elif key == "llm_api_style":
+                cb = ttk.Combobox(self.config_fields_frame, state="readonly", width=20)
+                cb['values'] = ["openai", "gemini", "anthropic", "disabled"]
+                cur_style = str(val).strip().lower()
+                cb.set(cur_style if cur_style in ("openai", "gemini", "anthropic", "disabled") else "openai")
+                cb.grid(row=row_idx, column=1, padx=0, pady=2, sticky="w")
+                self.config_entries[key] = cb
+            elif key in ("llm_verify_ssl", "auto_bg_diff"):
+                cb = ttk.Combobox(self.config_fields_frame, state="readonly", width=12)
+                cb['values'] = ["true", "false"]
+                b_str = "true" if (val is True or str(val).strip().lower() == "true") else "false"
+                cb.set(b_str)
+                cb.grid(row=row_idx, column=1, padx=0, pady=2, sticky="w")
+                self.config_entries[key] = cb
             elif key == "gitea_url":
                 ent = ttk.Entry(self.config_fields_frame)
                 server_type = config_data.get("git_server_type", "github")
@@ -2076,22 +2946,47 @@ class GIT4SWApp(tk.Tk):
                     ent.config(state="disabled", foreground="#9ca3af")
                 else:
                     ent.insert(0, str(val) if val else "")
-                ent.grid(row=row_idx, column=1, padx=0, pady=1, sticky="ew")
+                ent.grid(row=row_idx, column=1, padx=0, pady=2, sticky="ew")
                 self.config_entries[key] = ent
                 self._gitea_url_entry = ent
             elif key == "default_local_path":
                 ent = ttk.Entry(self.config_fields_frame)
                 ent.insert(0, str(val))
-                ent.grid(row=row_idx, column=1, padx=0, pady=1, sticky="ew")
+                ent.grid(row=row_idx, column=1, padx=0, pady=2, sticky="ew")
                 self.config_entries[key] = ent
                 btn = ttk.Button(self.config_fields_frame, text="Find", width=6,
                                  command=lambda: self._browse_directory("default_local_path"))
-                btn.grid(row=row_idx, column=2, padx=(8, 0), pady=1, sticky="w")
+                btn.grid(row=row_idx, column=2, padx=(8, 0), pady=2, sticky="w")
                 self.config_find_btns[key] = btn
+            elif key == "llm_prompt_file":
+                ent = ttk.Entry(self.config_fields_frame)
+                ent.insert(0, str(val))
+                ent.grid(row=row_idx, column=1, padx=0, pady=2, sticky="ew")
+                self.config_entries[key] = ent
+                btn = ttk.Button(self.config_fields_frame, text="Edit", width=6,
+                                 command=self.edit_llm_prompt_file)
+                btn.grid(row=row_idx, column=2, padx=(8, 0), pady=2, sticky="w")
+            elif key == "llm_params":
+                ent = ttk.Entry(self.config_fields_frame)
+                if isinstance(val, dict):
+                    ent.insert(0, json.dumps(val, ensure_ascii=False))
+                else:
+                    ent.insert(0, str(val))
+                ent.grid(row=row_idx, column=1, padx=0, pady=2, sticky="ew")
+                self.config_entries[key] = ent
+            elif key == "llm_api_key":
+                ent = ttk.Entry(self.config_fields_frame, show="*")
+                ent.insert(0, str(val) if val else "")
+                ent.grid(row=row_idx, column=1, padx=0, pady=2, sticky="ew")
+                self.config_entries[key] = ent
+                _, key_src = resolve_api_key(config_data, extra_search_dirs=[self.workspace_path])
+                src_text = f"({key_src})" if key_src != "none" else "(optional)"
+                lbl_src = ttk.Label(self.config_fields_frame, text=src_text, foreground="#6b7280", background="#ffffff")
+                lbl_src.grid(row=row_idx, column=2, padx=(8, 0), pady=2, sticky="w")
             else:
                 ent = ttk.Entry(self.config_fields_frame)
                 ent.insert(0, str(val))
-                ent.grid(row=row_idx, column=1, padx=0, pady=1, sticky="ew")
+                ent.grid(row=row_idx, column=1, padx=0, pady=2, sticky="ew")
                 self.config_entries[key] = ent
 
     def _on_git_server_type_changed(self, event=None):
@@ -2196,6 +3091,30 @@ class GIT4SWApp(tk.Tk):
             else:
                 val = ent.get().strip()
             original = config_data.get(key)
+            if key in ("llm_verify_ssl", "auto_bg_diff") or isinstance(original, bool):
+                config_data[key] = val.lower() in ("true", "1", "yes")
+                continue
+            if key == "llm_timeout_sec" or (isinstance(original, int) and not isinstance(original, bool)):
+                try:
+                    config_data[key] = int(val)
+                    continue
+                except ValueError:
+                    pass
+            if key == "llm_params" or (isinstance(original, dict) and val.startswith('{')):
+                if val.startswith('{'):
+                    try:
+                        parsed = json.loads(val)
+                        if isinstance(parsed, dict):
+                            config_data[key] = parsed
+                            continue
+                    except Exception:
+                        try:
+                            parsed = ast.literal_eval(val)
+                            if isinstance(parsed, dict):
+                                config_data[key] = parsed
+                                continue
+                        except Exception:
+                            pass
             if isinstance(original, list) and val.startswith('['):
                 try:
                     parsed = ast.literal_eval(val)
@@ -2219,6 +3138,8 @@ class GIT4SWApp(tk.Tk):
                 if os.path.isdir(ws):
                     if self.workspace_path != ws:
                         self.workspace_path = ws
+                        if hasattr(self, "bg_diff_worker"):
+                            self.bg_diff_worker.clear_queue()
                         self.write_log(f"Switched project workspace to: {ws}", "info")
             
             # Re-initialize GitService to apply git_path and git-lfs_path changes immediately
@@ -2247,6 +3168,71 @@ class GIT4SWApp(tk.Tk):
             self.write_log(f"Opened {os.path.basename(abs_config_path)} in Notepad.", "info")
         except Exception as e:
             self.write_log(f"Failed to open config file: {e}", "error")
+
+    def edit_llm_prompt_file(self):
+        """Open the configured LLM prompt template file in Notepad (auto-creating if missing)."""
+        try:
+            cfg = self.load_config_data()
+            if "llm_prompt_file" in getattr(self, "config_entries", {}):
+                ui_val = self.config_entries["llm_prompt_file"].get().strip()
+                if ui_val:
+                    cfg["llm_prompt_file"] = ui_val
+            prompt_path = ensure_prompt_file(cfg)
+            subprocess.Popen(["notepad.exe", os.path.abspath(prompt_path)])
+            self.write_log(f"Opened LLM prompt template: {prompt_path}", "info")
+        except Exception as e:
+            self.write_log(f"Failed to open LLM prompt file: {e}", "error")
+
+    def test_llm_connection_from_view(self):
+        """Test connectivity to the LLM configured in the Config screen."""
+        cfg = self.load_config_data()
+        # Pick up unsaved edits from the Config form so users can test before saving
+        for key in (
+            "llm_provider", "llm_api_style", "llm_base_url", "llm_model",
+            "llm_api_key", "llm_timeout_sec", "llm_verify_ssl", "llm_params",
+        ):
+            ent = getattr(self, "config_entries", {}).get(key)
+            if ent is not None:
+                val = ent.get().strip()
+                if key == "llm_params" and val.startswith("{"):
+                    try:
+                        cfg[key] = json.loads(val)
+                    except Exception:
+                        cfg[key] = val
+                elif key == "llm_verify_ssl":
+                    cfg[key] = val.lower() in ("true", "1", "yes")
+                elif key == "llm_timeout_sec":
+                    try:
+                        cfg[key] = int(val)
+                    except Exception:
+                        pass
+                else:
+                    cfg[key] = val
+
+        if hasattr(self, "btn_test_llm"):
+            self.btn_test_llm.state(["disabled"])
+            self.btn_test_llm.config(text="Testing...")
+        self.write_log(
+            f"Testing LLM connection: provider={cfg.get('llm_provider')} style={cfg.get('llm_api_style')} model={cfg.get('llm_model')}...",
+            "info",
+        )
+
+        def _worker():
+            ok, msg = test_llm_connection(cfg, extra_env_dirs=[self.workspace_path])
+
+            def _done():
+                if hasattr(self, "btn_test_llm"):
+                    self.btn_test_llm.config(text="Test LLM")
+                    self.btn_test_llm.state(["!disabled"])
+                self.write_log(f"[LLM Test] {msg}", "success" if ok else "error")
+                if ok:
+                    messagebox.showinfo("LLM Connection Test", msg, parent=self)
+                else:
+                    messagebox.showerror("LLM Connection Test Failed", msg, parent=self)
+
+            self.task_queue.put(('callback', None, _done))
+
+        threading.Thread(target=_worker, daemon=True).start()
 
     def create_help_view(self):
         view = ttk.Frame(self.content_frame)
@@ -2973,6 +3959,9 @@ a:hover {{ text-decoration: underline; }}
         self.btn_solidworks = ttk.Button(actions_frm, text="Solidworks", style="Primary.TButton", width=10, command=self.open_solidworks)
         self.btn_solidworks.pack(side="left", padx=4)
         
+        self.btn_orphan = ttk.Button(actions_frm, text="Orphan", style="Danger.TButton", width=8, command=self.open_orphan_dialog)
+        self.btn_orphan.pack(side="left", padx=4)
+
         self.btn_export = ttk.Button(actions_frm, text="EXPORT", style="BOM.TButton", width=8, command=self.open_export_dialog)
         self.btn_export.pack(side="left", padx=4)
         
@@ -2984,13 +3973,13 @@ a:hover {{ text-decoration: underline; }}
         self.btn_diff.state(["disabled"])
         self.btn_diff.pack(side="left", padx=4)
         
-        self.lbl_selected_count = ttk.Label(actions_frm, text="Selected files: 0", style="TLabel")
+        self.lbl_selected_count = ttk.Label(actions_frm, text="Selected: 0", style="TLabel")
         self.lbl_selected_count.pack(side="right", padx=8)
         
         # Bind tree selection event to update selected file count
         def update_selected_count(event=None):
             count = len(self.tree.selection())
-            self.lbl_selected_count.config(text=f"Selected files: {count}")
+            self.lbl_selected_count.config(text=f"Selected: {count}")
             self.on_file_selected_change()
             
         self.tree.treeview.bind("<<TreeviewSelect>>", update_selected_count)
@@ -2998,9 +3987,15 @@ a:hover {{ text-decoration: underline; }}
         # Save Version Card (Commit form)
         save_card = ttk.Frame(main_panel, style="Card.TFrame")
         save_card.pack(fill="x", pady=(6, 0))
-        
-        lbl_save_title = ttk.Label(save_card, text="Save Version & Upload (Check-in)", style="CardTitle.TLabel")
-        lbl_save_title.pack(anchor="w", padx=8, pady=(4, 2))
+
+        save_hdr_frm = tk.Frame(save_card, bg="#ffffff")
+        save_hdr_frm.pack(fill="x", padx=8, pady=(4, 2))
+
+        lbl_save_title = ttk.Label(save_hdr_frm, text="Save Version & Upload (Check-in) — 1-line Summary", style="CardTitle.TLabel")
+        lbl_save_title.pack(side="left")
+
+        self.lbl_ai_diff_status = ttk.Label(save_hdr_frm, text="", foreground="#6b7280", background="#ffffff", font=("TkDefaultFont", 8))
+        self.lbl_ai_diff_status.pack(side="right")
         
         self.txt_message = tk.Text(save_card, height=2, bg="#ffffff", fg="#1f2937", insertbackground="#000000", relief="solid", bd=1, highlightthickness=0, font="TkDefaultFont")
         self.txt_message.pack(fill="x", padx=8, pady=2)
@@ -3014,6 +4009,12 @@ a:hover {{ text-decoration: underline; }}
         
         self.btn_save_ver = ttk.Button(btn_save_frm, text="Upload Selected File Version", command=self.save_version)
         self.btn_save_ver.pack(side="right", padx=(0, 8))
+
+        self.btn_commit_desc = ttk.Button(btn_save_frm, text="Description", command=self.open_commit_description_editor)
+        self.btn_commit_desc.pack(side="right", padx=(0, 8))
+
+        self.btn_ai_draft = ttk.Button(btn_save_frm, text="AI Draft", command=self.generate_ai_commit_message)
+        self.btn_ai_draft.pack(side="right", padx=(0, 8))
         
         # Commit message selection combobox (stretched to the left end)
         self.cb_commit_msg = ttk.Combobox(btn_save_frm, state="readonly", postcommand=self.load_commit_messages)
@@ -3025,6 +4026,216 @@ a:hover {{ text-decoration: underline; }}
         self.load_commit_messages()
         
         return view
+
+    def _on_bg_diff_status_changed(self, ready, total, is_indexing):
+        """Update compact AI diff cache status pill on UI thread."""
+        def _update():
+            if not hasattr(self, "lbl_ai_diff_status"):
+                return
+            if total <= 0:
+                self.lbl_ai_diff_status.config(text="")
+            elif is_indexing:
+                self.lbl_ai_diff_status.config(
+                    text=f"AI Diff: analyzing ({ready}/{total})...",
+                    foreground="#2563eb",
+                )
+            elif ready >= total:
+                self.lbl_ai_diff_status.config(
+                    text=f"AI Diff Ready ({ready}/{total})",
+                    foreground="#059669",
+                )
+            else:
+                self.lbl_ai_diff_status.config(
+                    text=f"AI Diff Cached ({ready}/{total})",
+                    foreground="#6b7280",
+                )
+        try:
+            self.task_queue.put(('callback', None, _update))
+        except Exception:
+            pass
+
+    def _update_desc_button_label(self):
+        if not hasattr(self, "btn_commit_desc"):
+            return
+        body = (getattr(self, "commit_description_body", "") or "").strip()
+        if body:
+            line_cnt = sum(1 for ln in body.splitlines() if ln.strip())
+            self.btn_commit_desc.config(text=f"Description ({line_cnt})")
+        else:
+            self.btn_commit_desc.config(text="Description")
+
+    def open_commit_description_editor(self):
+        """Open modal dialog to edit the detailed bullet description for the pending commit."""
+        summary = self.txt_message.get("1.0", tk.END).strip().splitlines()
+        summary_line = summary[0].strip() if summary else ""
+        dlg = CommitDescriptionDialog(
+            self,
+            summary_text=summary_line,
+            description_text=getattr(self, "commit_description_body", ""),
+            readonly=False,
+        )
+        self.wait_window(dlg)
+        if dlg.result is not None:
+            self.commit_description_body = dlg.result
+            self._update_desc_button_label()
+
+    def _build_full_commit_message(self):
+        """Combine 1-line summary (txt_message) with detailed bullet description."""
+        raw_summary = self.txt_message.get("1.0", tk.END).strip()
+        if not raw_summary:
+            return ""
+        # Keep the check-in box clean as a single-line summary if newlines were pasted
+        summary_lines = [ln.strip() for ln in raw_summary.splitlines() if ln.strip()]
+        summary = summary_lines[0] if summary_lines else ""
+        extra_from_box = "\n".join(summary_lines[1:]).strip() if len(summary_lines) > 1 else ""
+
+        body_parts = []
+        if extra_from_box:
+            body_parts.append(extra_from_box)
+        desc = (getattr(self, "commit_description_body", "") or "").strip()
+        if desc:
+            body_parts.append(desc)
+
+        if body_parts:
+            return f"{summary}\n\n" + "\n".join(body_parts)
+        return summary
+
+    def _collect_ai_target_entries(self):
+        """Determine target changed files for AI commit message generation.
+        If changed files are selected in the File Manager table, target those;
+        otherwise target all changed files in the workspace.
+        """
+        status_by_lower = {}
+        for f in (getattr(self, "files_data", None) or []):
+            status_by_lower[f["file"].replace("\\", "/").lower()] = f
+
+        selected_items = self.tree.selection() if hasattr(self, "tree") else ()
+        selected_changed = []
+        for item in selected_items:
+            vals = self.tree.item(item, "values")
+            if not vals:
+                continue
+            rel = vals[0].replace("\\", "/")
+            info = status_by_lower.get(rel.lower())
+            if info and info.get("status") in ("modified", "untracked", "deleted"):
+                selected_changed.append({"file": info["file"], "status": info["status"]})
+
+        if selected_changed:
+            return selected_changed
+
+        # Fallback: all changed files from git status --porcelain (covers Upload Every Files Version)
+        all_entries = []
+        try:
+            status_out = self.git_service._run_lfs_cmd(["git", "-c", "core.quotepath=false", "status", "--porcelain", "-u"])
+            for line in status_out.splitlines():
+                if len(line) < 3:
+                    continue
+                code = line[:2]
+                fp = line[3:].strip().replace("\\", "/")
+                if (code.startswith("R") or code.startswith("C")) and " -> " in fp:
+                    fp = fp.split(" -> ", 1)[1].strip()
+                if "\t" in fp:
+                    fp = fp.split("\t")[0].replace("\\", "/")
+                if fp.startswith('"') and fp.endswith('"'):
+                    fp = fp[1:-1]
+                    try:
+                        import codecs
+                        b, _ = codecs.escape_decode(bytes(fp, "utf-8"))
+                        fp = b.decode("utf-8").replace("\\", "/")
+                    except Exception:
+                        pass
+                if "?" in code or code.startswith("A"):
+                    st = "untracked"
+                elif "D" in code:
+                    st = "deleted"
+                else:
+                    st = "modified"
+                all_entries.append({"file": fp, "status": st})
+        except Exception:
+            for f in (getattr(self, "files_data", None) or []):
+                if f.get("status") in ("modified", "untracked", "deleted"):
+                    all_entries.append({"file": f["file"], "status": f["status"]})
+        return all_entries
+
+    @queue_during_bg_tasks
+    def generate_ai_commit_message(self):
+        """Generate 1-line summary (txt_message) + file-by-file bullets ([Description]) via LLM."""
+        if not self.git_service.is_git_repo():
+            self.write_log("Not a valid Git repository.", "warning")
+            return
+
+        cfg = self.load_config_data()
+        if str(cfg.get("llm_api_style", "openai")).strip().lower() == "disabled":
+            self.write_log("LLM commit message generation is disabled in Config.", "warning")
+            return
+
+        selected_prefix = self.cb_commit_msg.get().strip() if hasattr(self, "cb_commit_msg") else ""
+        # Preserve trailing space from preset list if present (e.g. "상세설계 : ")
+        raw_preset_selected = self.cb_commit_msg.get() if hasattr(self, "cb_commit_msg") else ""
+        presets = [v for v in (self.cb_commit_msg["values"] if hasattr(self, "cb_commit_msg") else []) if str(v).strip()]
+
+        raw_hint = self.txt_message.get("1.0", tk.END).strip()
+        if raw_preset_selected and raw_hint.startswith(raw_preset_selected.strip()):
+            user_hint = raw_hint[len(raw_preset_selected.strip()):].strip()
+        else:
+            user_hint = raw_hint
+
+        self.btn_ai_draft.state(["disabled"])
+        self.btn_ai_draft.config(text="Generating...")
+        self.write_log("Preparing SolidWorks change summary for AI commit message...", "info")
+
+        def _worker():
+            self.increment_tasks()
+            try:
+                target_entries = self._collect_ai_target_entries()
+                if not target_entries:
+                    self.task_queue.put(('warning', "No modified, new, or deleted files found to summarize.", None))
+                    return
+
+                def _progress(msg):
+                    self.write_log(f"[AI Draft] {msg}", "info")
+
+                diffs = self.bg_diff_worker.prepare_diffs_for_commit(target_entries, progress_cb=_progress)
+                payload = build_llm_payload(diffs)
+
+                provider_name = cfg.get("llm_provider", "strata")
+                model_name = cfg.get("llm_model", "")
+                self.write_log(
+                    f"[AI Draft] Calling LLM ({provider_name} / {model_name}) for {len(diffs)} file(s)...",
+                    "info",
+                )
+
+                summary, description = generate_commit_message(
+                    diff_payload=payload,
+                    config=cfg,
+                    commit_presets=presets,
+                    selected_prefix=raw_preset_selected if selected_prefix else "",
+                    user_hint=user_hint,
+                    extra_env_dirs=[self.workspace_path],
+                )
+
+                def _apply_result():
+                    self.txt_message.delete("1.0", tk.END)
+                    self.txt_message.insert("1.0", summary)
+                    self.commit_description_body = description
+                    self._update_desc_button_label()
+                    self.write_log(
+                        f"AI commit message drafted ({len(diffs)} file(s)). Click [Description] to review/edit detailed bullets.",
+                        "success",
+                    )
+
+                self.task_queue.put(('callback', None, _apply_result))
+            except Exception as e:
+                self.task_queue.put(('error', f"AI Draft failed:\n{e}", None))
+            finally:
+                def _restore_btn():
+                    if hasattr(self, "btn_ai_draft"):
+                        self.btn_ai_draft.config(text="AI Draft")
+                        self.btn_ai_draft.state(["!disabled"])
+                self.task_queue.put(('callback', None, _restore_btn))
+                self.decrement_tasks()
+
+        threading.Thread(target=_worker, daemon=True).start()
 
     @queue_during_bg_tasks
     def refresh_file_list(self):
@@ -3081,6 +4292,8 @@ a:hover {{ text-decoration: underline; }}
                         self.cb_path_filter.set(current_filter)
                         
                     self.populate_file_table()
+                    if hasattr(self, "bg_diff_worker"):
+                        self.bg_diff_worker.schedule_files(files_data)
                             
                 self.task_queue.put(('callback', None, update_gui))
                 
@@ -3276,7 +4489,7 @@ a:hover {{ text-decoration: underline; }}
         # Update the selected count label
         if hasattr(self, 'lbl_selected_count'):
             count = len(self.tree.selection())
-            self.lbl_selected_count.config(text=f"Selected files: {count}")
+            self.lbl_selected_count.config(text=f"Selected: {count}")
  
         # Enable/disable buttons based on file list status
         self.update_button_states_by_file_list()
@@ -3345,6 +4558,57 @@ a:hover {{ text-decoration: underline; }}
         else:
             self.btn_save_ver.state(["disabled"])
             self.btn_save_all.state(["disabled"])
+
+    # ==========================================
+    # Orphan file cleanup
+    # ==========================================
+    @queue_during_bg_tasks
+    def open_orphan_dialog(self):
+        """Opens the Orphan Files dialog for the files currently shown in the table.
+
+        Orphan = a .sldprt that no .sldasm inside the current path filter references.
+        Drawings that only reference orphan parts are listed alongside them.
+        """
+        if not self.git_service.is_git_repo():
+            self.write_log("Not a Git repository.", "warning")
+            return
+
+        existing = getattr(self, "_orphan_dialog", None)
+        if existing is not None:
+            try:
+                if existing.winfo_exists():
+                    existing.deiconify()
+                    existing.lift()
+                    existing.focus_force()
+                    return
+            except Exception:
+                pass
+
+        scope_label = self.cb_path_filter.get() or "All Files"
+        parts, assemblies, drawings = [], [], []
+        for item in self.tree.get_children():
+            values = self.tree.item(item, 'values')
+            if not values:
+                continue
+            rel_path = values[0].replace("\\", "/")
+            lower = rel_path.lower()
+            if lower.endswith(".sldprt"):
+                parts.append(rel_path)
+            elif lower.endswith(".sldasm"):
+                assemblies.append(rel_path)
+            elif lower.endswith(".slddrw"):
+                drawings.append(rel_path)
+
+        if not parts:
+            self.write_log(
+                f"No .sldprt files in the current list to check for orphans "
+                f"(scope: '{scope_label}').", "warning")
+            return
+
+        self._orphan_dialog = OrphanFilesDialog(
+            self, self.git_service, self.workspace_path,
+            parts, assemblies, drawings, scope_label,
+        )
 
 
 
@@ -3604,7 +4868,7 @@ a:hover {{ text-decoration: underline; }}
             return
             
         files_to_save = [self.tree.item(item, 'values')[0].replace("\\", "/") for item in selected_items]
-        msg = self.txt_message.get("1.0", tk.END).strip()
+        msg = self._build_full_commit_message()
         if not msg:
             self.write_log("Please write a description of the version changes.", "warning")
             return
@@ -3819,6 +5083,8 @@ a:hover {{ text-decoration: underline; }}
                 def on_done():
                     self.txt_message.delete("1.0", tk.END)
                     self.cb_commit_msg.set("")
+                    self.commit_description_body = ""
+                    self._update_desc_button_label()
                     
                 self.task_queue.put(('success', f"Version saved and uploaded to server successfully for {len(files_to_commit)} files!", on_done))
                 success = True
@@ -3836,7 +5102,7 @@ a:hover {{ text-decoration: underline; }}
 
     @queue_during_bg_tasks
     def save_all_versions(self):
-        msg = self.txt_message.get("1.0", tk.END).strip()
+        msg = self._build_full_commit_message()
         if not msg:
             self.write_log("Please write a description of the version changes.", "warning")
             return
@@ -4090,6 +5356,8 @@ a:hover {{ text-decoration: underline; }}
                 def on_done():
                     self.txt_message.delete("1.0", tk.END)
                     self.cb_commit_msg.set("")
+                    self.commit_description_body = ""
+                    self._update_desc_button_label()
                     self.refresh_file_list()
                     self.refresh_history()
                     self.load_branches_in_combo()
@@ -4137,6 +5405,7 @@ a:hover {{ text-decoration: underline; }}
         bold_font.configure(weight="bold")
         self.hist_tree.tag_configure("current_commit", font=bold_font, foreground="#059669")
         self.hist_tree.bind("<Double-1>", self.on_history_double_click)
+        self.hist_tree.bind("<<TreeviewSelect>>", self.on_history_select)
         
         vsb = ttk.Scrollbar(table_frm, orient="vertical", command=self.hist_tree.yview)
         self.hist_tree.configure(yscrollcommand=vsb.set)
@@ -4152,6 +5421,10 @@ a:hover {{ text-decoration: underline; }}
         
         self.btn_restore_latest = ttk.Button(actions_frm, text="Return to Latest Version", command=self.restore_latest)
         self.btn_restore_latest.pack(side="left", padx=4)
+
+        self.btn_hist_desc = ttk.Button(actions_frm, text="Description", command=self.show_selected_history_description)
+        self.btn_hist_desc.state(["disabled"])
+        self.btn_hist_desc.pack(side="left", padx=4)
         
         self.btn_graph = ttk.Button(actions_frm, text="Graph", command=self.show_git_graph)
         self.btn_graph.pack(side="right", padx=4)
@@ -4747,6 +6020,10 @@ a:hover {{ text-decoration: underline; }}
     def refresh_history(self):
         for item in self.hist_tree.get_children():
             self.hist_tree.delete(item)
+        self._history_commit_map = {}
+        if hasattr(self, "btn_hist_desc"):
+            self.btn_hist_desc.config(text="Description")
+            self.btn_hist_desc.state(["disabled"])
             
         if not self.git_service.is_git_repo():
             return
@@ -4758,15 +6035,60 @@ a:hover {{ text-decoration: underline; }}
                 tags = ()
                 if current_hash and commit['hash'] == current_hash:
                     tags = ("current_commit",)
-                    
-                self.hist_tree.insert("", "end", values=(
+
+                summary_line = commit.get('summary')
+                if summary_line is None:
+                    summary_line, _ = GitService.split_commit_message(commit.get('message', ''))
+
+                item_id = self.hist_tree.insert("", "end", values=(
                     commit['hash'],
                     commit['author'],
                     commit['date'],
-                    commit['message']
+                    summary_line,
                 ), tags=tags)
+                self._history_commit_map[item_id] = commit
         except Exception as e:
             self.write_log(f"Failed to retrieve history: {e}", "error")
+
+    def on_history_select(self, event=None):
+        if not hasattr(self, "btn_hist_desc"):
+            return
+        sel = self.hist_tree.selection()
+        if not sel:
+            self.btn_hist_desc.config(text="Description")
+            self.btn_hist_desc.state(["disabled"])
+            return
+        self.btn_hist_desc.state(["!disabled"])
+        commit = self._history_commit_map.get(sel[0]) or {}
+        desc = (commit.get("description") or "").strip()
+        if desc:
+            line_cnt = sum(1 for ln in desc.splitlines() if ln.strip())
+            self.btn_hist_desc.config(text=f"Description ({line_cnt})")
+        else:
+            self.btn_hist_desc.config(text="Description")
+
+    def show_selected_history_description(self):
+        sel = self.hist_tree.selection()
+        if not sel:
+            self.write_log("Select a commit row to inspect its description.", "warning")
+            return
+        commit = self._history_commit_map.get(sel[0])
+        if not commit:
+            return
+        summary = commit.get("summary")
+        description = commit.get("description")
+        if summary is None:
+            summary, description = GitService.split_commit_message(commit.get("message", ""))
+        meta_text = f"Version: {commit.get('hash', '')}  |  Designer: {commit.get('author', '')}  |  Date: {commit.get('date', '')}"
+        dlg = CommitDescriptionDialog(
+            self,
+            summary_text=summary,
+            description_text=description or "",
+            readonly=True,
+            title=f"Commit Description — {commit.get('hash', '')}",
+            meta_text=meta_text,
+        )
+        self.wait_window(dlg)
 
     def on_history_double_click(self, event):
         item = self.hist_tree.identify_row(event.y)
@@ -5864,6 +7186,8 @@ a:hover {{ text-decoration: underline; }}
         if dir_path:
             self.workspace_path = os.path.normpath(dir_path)
             self.git_service = GitService(self.workspace_path, self.config_path)
+            if hasattr(self, "bg_diff_worker"):
+                self.bg_diff_worker.clear_queue()
             
             # Save workspace path to config.json
             self.save_workspace_to_config(self.workspace_path)
@@ -7835,6 +9159,8 @@ finally:
 
         # Check if this is a Git repository
         if not self.git_service.is_git_repo():
+            if hasattr(self, "bg_diff_worker"):
+                self.bg_diff_worker.stop()
             self.destroy()
             return
 
@@ -7846,6 +9172,8 @@ finally:
                     modified_count += 1
 
         if modified_count == 0:
+            if hasattr(self, "bg_diff_worker"):
+                self.bg_diff_worker.stop()
             self.destroy()
             return
 
@@ -7856,9 +9184,13 @@ finally:
 
         if dialog.result == "upload":
             self.is_closing = True
+            if hasattr(self, "bg_diff_worker"):
+                self.bg_diff_worker.stop()
             self._force_upload_on_exit()
         else:
             self.is_closing = True
+            if hasattr(self, "bg_diff_worker"):
+                self.bg_diff_worker.stop()
             self.destroy()
 
     def _force_upload_on_exit(self):
