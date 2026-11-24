@@ -1244,6 +1244,107 @@ class GitService:
             except Exception as e:
                 raise RuntimeError(f"Successfully saved locally, but server upload failed: {e}")
 
+    @staticmethod
+    def split_commit_message(message):
+        """Split a full Git commit message into (first_line_summary, remaining_description)."""
+        raw = (message or "").strip()
+        if not raw:
+            return "", ""
+        lines = raw.splitlines()
+        summary = lines[0].strip()
+        body_lines = lines[1:]
+        while body_lines and not body_lines[0].strip():
+            body_lines.pop(0)
+        description = "\n".join(line.rstrip() for line in body_lines).strip()
+        return summary, description
+
+    def get_file_head_oid(self, rel_path):
+        """Return a stable content identifier for HEAD:<rel_path> ('lfs_<sha256>' or 'blob_<sha1>'),
+        or None if the file does not exist in HEAD."""
+        if not self.is_git_repo():
+            return None
+        try:
+            if not self.repo.head.is_valid():
+                return None
+            norm_rel = self.get_correct_filepath_casing(rel_path).replace("\\", "/")
+            tree = self.repo.head.commit.tree
+            blob = tree / norm_rel
+        except Exception:
+            return None
+
+        try:
+            if blob.size < 256:
+                raw_bytes = blob.data_stream.read()
+                if raw_bytes.startswith(b"version https://git-lfs.github.com/spec/v1"):
+                    pointer_text = raw_bytes.decode("utf-8", errors="ignore")
+                    for pline in pointer_text.splitlines():
+                        pline = pline.strip()
+                        if pline.startswith("oid sha256:"):
+                            oid = pline.split("oid sha256:", 1)[1].strip()
+                            if oid:
+                                return f"lfs_{oid}"
+            return f"blob_{blob.hexsha}"
+        except Exception:
+            try:
+                return f"blob_{blob.hexsha}"
+            except Exception:
+                return None
+
+    def extract_head_version_to_file(self, rel_path, dest_path):
+        """Extract HEAD:<rel_path> to dest_path, automatically smudging Git LFS pointers."""
+        if not self.is_git_repo():
+            raise RuntimeError("Not a git repository.")
+        norm_rel = self.get_correct_filepath_casing(rel_path).replace("\\", "/")
+        git_exe = self.git_path if (self.git_path and os.path.exists(self.git_path)) else "git"
+
+        kwargs = {}
+        if sys.platform == "win32":
+            si = subprocess.STARTUPINFO()
+            si.dwFlags |= subprocess.STARTF_USESHOWWINDOW
+            si.wShowWindow = subprocess.SW_HIDE
+            kwargs["startupinfo"] = si
+            kwargs["creationflags"] = subprocess.CREATE_NO_WINDOW
+
+        res = subprocess.run(
+            [git_exe, "show", f"HEAD:{norm_rel}"],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            cwd=self.repo_path,
+            **kwargs,
+        )
+        if res.returncode != 0:
+            raise RuntimeError(f"git show HEAD:{norm_rel} failed: {res.stderr.decode('utf-8', errors='replace')}")
+
+        data = res.stdout
+        if data.startswith(b"version https://git-lfs"):
+            env = os.environ.copy()
+            if self.git_lfs_path and os.path.exists(self.git_lfs_path):
+                lfs_dir = os.path.dirname(self.git_lfs_path)
+                env["PATH"] = f"{lfs_dir}{os.pathsep}{env.get('PATH', '')}"
+            res_smudge = subprocess.run(
+                [git_exe, "lfs", "smudge"],
+                input=data,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                cwd=self.repo_path,
+                env=env,
+                **kwargs,
+            )
+            if res_smudge.returncode == 0 and res_smudge.stdout:
+                data = res_smudge.stdout
+            else:
+                raise RuntimeError(
+                    f"git lfs smudge failed for {norm_rel}: "
+                    f"{res_smudge.stderr.decode('utf-8', errors='replace')}"
+                )
+
+        parent_dir = os.path.dirname(dest_path)
+        if parent_dir:
+            os.makedirs(parent_dir, exist_ok=True)
+        with open(dest_path, "wb") as f:
+            f.write(data)
+        return dest_path
+
     def get_history(self):
         """Retrieves ALL commits across every branch (local + remote) sorted by time."""
         history = []
@@ -1271,11 +1372,15 @@ class GitService:
                     continue
                 seen.add(hexsha)
                 commit_date = datetime.datetime.fromtimestamp(commit.committed_date).strftime('%Y-%m-%d %H:%M')
+                full_msg = commit.message.strip() if commit.message else ""
+                summary, description = self.split_commit_message(full_msg)
                 history.append({
                     'hash': hexsha[:7],
                     'author': commit.author.name if commit.author else "Unknown",
                     'date': commit_date,
-                    'message': commit.message.strip() if commit.message else ""
+                    'message': full_msg,
+                    'summary': summary,
+                    'description': description,
                 })
         except Exception as e:
             print(f"Error walking commit logs globally: {e}")
@@ -1289,11 +1394,15 @@ class GitService:
                             continue
                         seen.add(hexsha)
                         commit_date = datetime.datetime.fromtimestamp(commit.committed_date).strftime('%Y-%m-%d %H:%M')
+                        full_msg = commit.message.strip() if commit.message else ""
+                        summary, description = self.split_commit_message(full_msg)
                         history.append({
                             'hash': hexsha[:7],
                             'author': commit.author.name if commit.author else "Unknown",
                             'date': commit_date,
-                            'message': commit.message.strip() if commit.message else ""
+                            'message': full_msg,
+                            'summary': summary,
+                            'description': description,
                         })
             except Exception:
                 pass

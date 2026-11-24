@@ -13,5 +13,23 @@
     "auto_backup_conflicts": false,
     "auto_lock": false,
     "commit_messages": "['사양설정 : ', '공학해석 : ', '대략설계 : ', '상세설계 : ', '설계리뷰 : ', '도면작성 : ', '프로토타입 : ', '시험평가 : ', '생산이관 : ']",
-    "column_order": ["Depth", "Type", "PartNumber", "Partname", "Qty", "Material", "Treatment", "Weight", "Description", "File Name", "Configuration", "File Path"]
+    "column_order": ["Depth", "Type", "PartNumber", "Partname", "Qty", "Material", "Treatment", "Weight", "Description", "File Name", "Configuration", "File Path"],
+    "llm_provider": "strata",
+    "llm_api_style": "openai",
+    "llm_base_url": "http://10.124.1.64:6006//v1",
+    "llm_model": "qwen3.8-flash-next-iq3_s",
+    "llm_api_key": "",
+    "llm_timeout_sec": 30,
+    "llm_verify_ssl": true,
+    "llm_params": {
+        "temperature": 0.2,
+        "max_tokens": 1024,
+        "top_p": 0.9,
+        "chat_template_kwargs": {
+            "enable_thinking": false
+        }
+    },
+    "llm_prompt_file": "template/llm_commit_prompt.md",
+    "llm_custom_instructions": "",
+    "auto_bg_diff": true
 }
