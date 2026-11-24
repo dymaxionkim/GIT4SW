@@ -46,6 +46,8 @@ gantt
     자동 Lock On/Off 설정 기능 추가 :active, milestone18, 2026-08-10, 2026-08-10
     section BOM 빈 출력 버그 수정
     대형 어셈블리 BOM 빈 출력(0부품) 원인 해결 :active, milestone19, 2026-08-19, 2026-08-19
+    section Orphan 정리 및 .backup 제외
+    미참조 파트 정리 다이얼로그 & .backup 목록 숨김 :active, milestone22, 2026-11-24, 2026-11-24
 ```
 
 ---
@@ -411,6 +413,32 @@ gantt
   - 다중 설정 모델(예: `기본`, `CONFIG1`)은 `Every Configurations`에서 각각 `<모델명>.step`, `<모델명>__CONFIG1.step`으로 저장되어 기존 파일명 체계를 유지합니다.
 * **문서**: `README.md` / `README_ko.md`의 EXPORT 절에 STEP/STEP_ASM 파일명 규칙(`<모델명>__<설정명>.step`, 기본 설정 `기본`/`Default`는 접미사 생략)을 명시했습니다.
 * **검증**: `_is_default_config_name` / `_export_dest_path` / `_clear_suffixed_default_config_export` 단위 시뮬레이션(기본, 공백 포함 기본, `Default`, 일반 설정, `None`, 유사 이름 `기본2`/`Default2`, 접미사 제거·유지, 잔여 파일 정리 시 무관 파일 보존) 전부 통과, `sw_export_runner.py` 컴파일 통과.
+
+---
+
+### 22단계: Orphan(미참조 파트) 정리 도구 및 `.backup/` 목록 제외 (Milestone 22 - 2026-11-24)
+* **요구 사항**:
+  - File Manager의 **[Solidworks]** 버튼 오른쪽에 **[Orphan]** 버튼(빨간 Danger 스타일)을 추가합니다.
+  - 버튼을 누르면 **현재 목록(경로 필터 적용 범위)** 에서 어떤 어셈블리도 참조하지 않는 파트(`.sldprt`) 목록을 팝업으로 표시하고, `Ctrl`/`Shift` + 마우스 왼쪽 버튼으로 여러 파일을 선택해 삭제할 수 있어야 합니다.
+  - 수정된(Modified) 파일 삭제 시 추가 경고를 표시하고, orphan 파트를 참조하는 도면도 목록에 함께 올려 경고와 함께 일괄 삭제할 수 있어야 합니다.
+  - `.backup/` 디렉터리는 완전히 gitignore 상태를 유지하고 File Manager 목록에도 나타나지 않아야 합니다.
+* **구현 — `sw_top_finder.py` (의존성 스캔 엔진 확장)**:
+  - `--mode orphans`와 `--assemblies-file` / `--parts-file` / `--drawings-file` 인자를 추가했습니다. 후보 목록을 임시 JSON 파일로 전달해 Windows 명령줄 길이 제한(32K)을 회피합니다.
+  - 기존 `GetDocumentDependencies2` 기반 `get_assembly_children()`을 `.slddrw`까지 처리하는 `get_document_dependencies()`로 일반화하고, 기존 이름은 wrapper로 유지해 Find Top 동작을 보존했습니다.
+  - 참조 집합(모든 어셈블리의 의존성)과 후보 파트 집합의 차집합으로 orphan을 계산하고, 참조 모델이 전부 orphan 파트인 도면을 `orphan_part_drawings`로 함께 반환합니다. 진행률은 `[PROGRESS] A i/N` / `[PROGRESS] D i/N`으로 스트리밍합니다.
+* **구현 — `ui_tk.py` (OrphanFilesDialog)**:
+  - 모달 팝업이 열리면 백그라운드 서브프로세스로 스캔을 시작하고 진행률/상태를 표시합니다.
+  - 결과 테이블은 `Treeview(selectmode="extended")`로 `Ctrl`/`Shift` 다중 선택과 `Ctrl+A`/**[Select All]** 을 지원하며, `Re-scan` / `Delete Selected` / `Close` 버튼을 제공합니다.
+  - 삭제 확인창은 수정 파일 경고, 도면 동반 삭제 경고, 필터 범위 경고를 표시합니다. SolidWorks에 열려 있거나 타인이 LFS 잠근 파일은 삭제를 차단하고 사유를 안내합니다.
+  - 삭제는 백그라운드에서 내 LFS 잠금 해제 → `git rm`(추적 파일) / `os.remove`(미추적 파일) 순으로 수행하고, 커밋은 기존 **Upload** 흐름에서 진행하도록 안내합니다.
+  - 툴바의 선택 개수 라벨을 `Selected: n`으로 축약해 1100px 폭에서 Orphan 버튼 추가 후에도 잘리지 않도록 조정했습니다.
+* **구현 — `git_service.py`**:
+  - `delete_workspace_files()`를 추가했습니다. 저장소 밖 경로 거부, tracked/untracked 분리, 인덱스에만 있는 신규 파일 자동 `-f`, 읽기 전용 속성 해제, 파일별 실패 수집을 처리합니다.
+  - `get_status()`에서 `.backup/` 하위 경로를 무조건 제외하도록 필터를 추가했습니다. (과거에 추적된 파일이 있어도 목록에 노출되지 않음)
+* **문서 및 스크린샷**: README(한/영)·Help(영/한/일)에 Orphan 사용법과 `.backup` 제외 규칙을 반영하고, Dashboard / File Manager / History / Maintainer / Config / About 스크린샷 6종을 현재 UI로 다시 캡처해 갱신했습니다.
+* **검증**:
+  - 스캐너 로직(orphan 판정, 사용 중 파트 제외, orphan 도면 연결), 삭제 API(추적/미추적/스테이징 신규 파일, 저장소 외부 거부), Tk 다이얼로그(행 구성·다중 선택·삭제 후 갱신), 스캔 서브프로세스 JSON/진행률 파싱 테스트 통과.
+  - 전체 모듈 `py_compile` 통과 및 실제 `D:\github\N42` 저장소를 워크스페이스로 사용한 GUI 캡처 검증 완료.
 
 ---
 

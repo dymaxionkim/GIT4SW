@@ -20,11 +20,11 @@ DEFAULT_LLM_CONFIG = {
     "llm_base_url": "http://10.124.1.64:6006//v1",
     "llm_model": "qwen3.8-flash-next-iq3_s",
     "llm_api_key": "",
-    "llm_timeout_sec": 30,
+    "llm_timeout_sec": 600,
     "llm_verify_ssl": True,
     "llm_params": {
         "temperature": 0.2,
-        "max_tokens": 1024,
+        "max_tokens": 16384,
         "top_p": 0.9,
         "chat_template_kwargs": {
             "enable_thinking": False,
@@ -465,7 +465,8 @@ def call_llm(system_prompt, user_prompt, config, extra_env_dirs=None):
         payload = {
             "model": model,
             "system": system_prompt,
-            "max_tokens": int(params.get("max_tokens", 1024)),
+            "max_tokens": int(params.get(
+                "max_tokens", DEFAULT_LLM_CONFIG["llm_params"]["max_tokens"])),
             "messages": [{"role": "user", "content": user_prompt}],
         }
         if "temperature" in params:
@@ -522,6 +523,14 @@ def test_llm_connection(config, extra_env_dirs=None):
     probe_params = _parse_llm_params(config)
     probe_params["max_tokens"] = min(int(probe_params.get("max_tokens", 64)), 64)
     probe_cfg["llm_params"] = probe_params
+    # Keep the connectivity probe snappy even though generation requests may
+    # legitimately run for several minutes with large max_tokens values.
+    try:
+        probe_timeout = float(config.get(
+            "llm_timeout_sec", DEFAULT_LLM_CONFIG["llm_timeout_sec"]))
+    except Exception:
+        probe_timeout = DEFAULT_LLM_CONFIG["llm_timeout_sec"]
+    probe_cfg["llm_timeout_sec"] = min(probe_timeout, 30.0)
 
     t0 = time.monotonic()
     try:

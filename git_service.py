@@ -966,6 +966,12 @@ class GitService:
                         pass
                 
                 rel_path = line.replace("\\", "/")
+                rel_path_lower = rel_path.lower()
+                # .backup/ is app-internal scratch space and must never appear in the
+                # File Manager list, even if some files were tracked before it was
+                # added to .gitignore. Exclude the directory at any nesting level.
+                if ".backup" in rel_path_lower.split("/"):
+                    continue
                 ext = os.path.splitext(rel_path)[1].lower()
                 if ext in [".sldprt", ".sldasm", ".slddrw"]:
                     if rel_path.lower() in ignored_files:
@@ -1703,6 +1709,125 @@ class GitService:
                 except Exception as e:
                     raise RuntimeError(f"Failed to delete untracked file {rel_path}: {e}")
         self._load_repo()
+
+    def delete_workspace_files(self, rel_paths, force=False):
+        """Deletes files from the working tree and stages the deletion in Git.
+
+        - Tracked files are removed with ``git rm`` (working tree + index). ``git rm -f``
+          is used only when ``force`` is True, so callers must warn the user about
+          uncommitted changes before requesting a forced removal.
+        - Untracked files are removed from disk only.
+
+        Returns a tuple ``(deleted, failed)`` where ``failed`` is a list of
+        ``(rel_path, reason)`` pairs.
+        """
+        import stat
+
+        deleted = []
+        failed = []
+        if not rel_paths:
+            return deleted, failed
+        if not self.is_git_repo():
+            raise RuntimeError("Not a git repository.")
+
+        repo_root = os.path.abspath(self.repo_path)
+        repo_root_norm = os.path.normcase(repo_root)
+        tracked_plain = []
+        tracked_force = []
+        untracked = []
+
+        for raw_path in rel_paths:
+            try:
+                rel_path = self.get_correct_filepath_casing(raw_path)
+            except Exception:
+                rel_path = str(raw_path).replace("\\", "/")
+            abs_path = os.path.abspath(os.path.join(repo_root, rel_path))
+            norm_abs = os.path.normcase(abs_path)
+            try:
+                if os.path.commonpath([repo_root_norm, norm_abs]) != repo_root_norm:
+                    failed.append((rel_path, "Path is outside the repository"))
+                    continue
+            except ValueError:
+                failed.append((rel_path, "Invalid path"))
+                continue
+
+            try:
+                is_tracked = (rel_path, 0) in self.repo.index.entries
+            except Exception:
+                is_tracked = False
+
+            if is_tracked:
+                # Files that exist only in the index (staged but never committed)
+                # need a forced removal even when the working-tree edits are intact.
+                if force or not self._is_in_head(rel_path):
+                    tracked_force.append(rel_path)
+                else:
+                    tracked_plain.append(rel_path)
+            else:
+                untracked.append(rel_path)
+
+        # Tracked files: git rm removes both the index entry and the working tree file.
+        chunk_size = 100
+        for tracked_paths, needs_force in ((tracked_plain, False), (tracked_force, True)):
+            rm_cmd = ["git", "rm", "-f", "--ignore-unmatch", "--"] if needs_force else \
+                     ["git", "rm", "--ignore-unmatch", "--"]
+            for i in range(0, len(tracked_paths), chunk_size):
+                chunk = tracked_paths[i:i + chunk_size]
+                # Clear read-only flags left by LFS locks so git rm can delete the files.
+                for rel_path in chunk:
+                    abs_path = os.path.join(repo_root, rel_path)
+                    try:
+                        if os.path.exists(abs_path):
+                            os.chmod(abs_path, os.stat(abs_path).st_mode | stat.S_IWRITE)
+                    except Exception:
+                        pass
+                try:
+                    self._run_lfs_cmd(rm_cmd + chunk)
+                    deleted.extend(chunk)
+                except Exception:
+                    # Retry one by one so a single problematic file cannot block the rest.
+                    deleted, failed = self._delete_tracked_individually(
+                        rm_cmd, chunk, deleted, failed)
+
+        # Untracked files: remove from disk only.
+        for rel_path in untracked:
+            abs_path = os.path.join(repo_root, rel_path)
+            try:
+                if os.path.exists(abs_path):
+                    try:
+                        os.chmod(abs_path, os.stat(abs_path).st_mode | stat.S_IWRITE)
+                    except Exception:
+                        pass
+                    os.remove(abs_path)
+                deleted.append(rel_path)
+            except Exception as e:
+                failed.append((rel_path, str(e)))
+
+        try:
+            self._load_repo()
+        except Exception:
+            pass
+        return deleted, failed
+
+    def _delete_tracked_individually(self, rm_cmd, chunk, deleted, failed):
+        """Helper for delete_workspace_files: retry ``git rm`` one file at a time."""
+        for rel_path in chunk:
+            try:
+                self._run_lfs_cmd(rm_cmd + [rel_path])
+                deleted.append(rel_path)
+            except Exception as e:
+                failed.append((rel_path, str(e)))
+        return deleted, failed
+
+    def _is_in_head(self, rel_path):
+        """True when rel_path exists in HEAD (False for staged-new files or no HEAD)."""
+        try:
+            if not self.repo.head.is_valid():
+                return False
+            tree = self.repo.head.commit.tree
+            return (tree / rel_path) is not None
+        except Exception:
+            return False
 
     def get_current_commit_hash(self):
         """Gets the short 7-character hash of the current checked-out commit."""

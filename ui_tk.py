@@ -1260,6 +1260,621 @@ class LfsCleanupWizardDialog(tk.Toplevel):
         self.destroy()
 
 
+class OrphanFilesDialog(tk.Toplevel):
+    """Lists .sldprt files that no assembly in the current file-list scope references.
+
+    Orphan drawings (drawings that only reference orphan parts) are listed as well so
+    the user can remove them together. Deleting removes the files from disk and stages
+    the deletion with ``git rm``; the commit itself is performed by the normal Upload
+    flow.
+    """
+
+    STATUS_DISPLAY = {
+        'modified': '🟢 Modified',
+        'untracked': '🔵 New File',
+        'deleted': '🔴 Deleted',
+        'unmodified': '⚪ Unmodified',
+    }
+
+    def __init__(self, parent, git_service, workspace_path, parts, assemblies,
+                 drawings, scope_label):
+        super().__init__(parent)
+        self.parent = parent
+        self.git_service = git_service
+        self.workspace_path = workspace_path
+        self.scope_label = scope_label or "All Files"
+        self.candidate_parts = list(parts or [])
+        self.scope_assemblies = list(assemblies or [])
+        self.scope_drawings = list(drawings or [])
+
+        self.rows = {}          # tree item id -> {'rel': str, 'kind': 'part'|'drawing'}
+        self.rel_items = {}     # normalized rel path -> tree item id
+        self.part_drawings = {} # orphan part rel -> [drawing rel]
+        self.scan_proc = None
+        self.is_scanning = False
+        self.is_deleting = False
+        self._closed = False
+
+        # Snapshot the git status / lock state of the file table for warnings.
+        self.status_map = {}
+        self.lock_map = {}
+        for entry in (getattr(parent, 'files_data', None) or []):
+            key = self._key(entry.get('file', ''))
+            if not key:
+                continue
+            self.status_map[key] = entry.get('status', 'unmodified')
+            self.lock_map[key] = {
+                'locked': entry.get('locked', False),
+                'locked_by': entry.get('locked_by'),
+                'is_our_lock': entry.get('is_our_lock', False),
+            }
+
+        self.title("Orphan Files")
+        self.geometry("860x560")
+        self.minsize(720, 420)
+        self.configure(bg="#f3f4f6")
+        self.transient(parent)
+        self.grab_set()
+
+        self.create_widgets()
+
+        # Center over the main window
+        self.update_idletasks()
+        try:
+            x = parent.winfo_rootx() + (parent.winfo_width() - self.winfo_width()) // 2
+            y = parent.winfo_rooty() + (parent.winfo_height() - self.winfo_height()) // 2
+            self.geometry(f"+{max(0, x)}+{max(0, y)}")
+        except Exception:
+            pass
+
+        self.protocol("WM_DELETE_WINDOW", self.on_close)
+        self.start_scan()
+
+    # ---------------------------------------------------------------- helpers
+    @staticmethod
+    def _key(rel_path):
+        return str(rel_path or "").replace("\\", "/").lower()
+
+    @staticmethod
+    def _format_size(size_bytes):
+        size = float(size_bytes)
+        if size < 1024:
+            return f"{int(size)} B"
+        if size < 1024 * 1024:
+            return f"{size / 1024:.1f} KB"
+        if size < 1024 * 1024 * 1024:
+            return f"{size / (1024 * 1024):.1f} MB"
+        return f"{size / (1024 * 1024 * 1024):.2f} GB"
+
+    def _ui(self, fn):
+        """Run fn on the GUI thread (callbacks may arrive after the dialog closes)."""
+        if self._closed:
+            return
+
+        def wrapped():
+            if self._closed:
+                return
+            try:
+                if not self.winfo_exists():
+                    return
+            except Exception:
+                return
+            try:
+                fn()
+            except tk.TclError:
+                pass
+
+        try:
+            self.parent.task_queue.put(('callback', None, wrapped))
+        except Exception:
+            pass
+
+    # ---------------------------------------------------------------- widgets
+    def create_widgets(self):
+        header = ttk.Frame(self)
+        header.pack(fill="x", padx=16, pady=(14, 2))
+
+        ttk.Label(
+            header,
+            text=("Orphan files are .sldprt files that no assembly in the current scope "
+                  "references. Drawings that only reference orphan parts are listed as well."),
+            wraplength=800, justify="left", style="TLabel",
+        ).pack(anchor="w")
+
+        scope_color = "#b45309" if self.scope_label != "All Files" else "#374151"
+        tk.Label(
+            header,
+            text=(f"Scope: {self.scope_label}   |   Candidates: {len(self.candidate_parts)} part(s), "
+                  f"{len(self.scope_assemblies)} assembly(ies), {len(self.scope_drawings)} drawing(s)"),
+            bg="#f3f4f6", fg=scope_color, font="TkDefaultFont", anchor="w", justify="left",
+        ).pack(anchor="w", pady=(6, 0))
+
+        if self.scope_label != "All Files":
+            tk.Label(
+                header,
+                text="⚠ References from files outside this filter were NOT checked.",
+                bg="#f3f4f6", fg="#b45309", font=("TkDefaultFont", 8, "bold"), anchor="w",
+            ).pack(anchor="w")
+        if not self.scope_assemblies:
+            tk.Label(
+                header,
+                text="⚠ No assemblies in scope: every listed part will be considered orphan.",
+                bg="#f3f4f6", fg="#b45309", font=("TkDefaultFont", 8, "bold"), anchor="w",
+            ).pack(anchor="w")
+
+        progress_frm = ttk.Frame(self)
+        progress_frm.pack(fill="x", padx=16, pady=(6, 4))
+        self.lbl_status = ttk.Label(progress_frm, text="Preparing scan...", style="TLabel")
+        self.lbl_status.pack(anchor="w")
+        self.progress = ttk.Progressbar(progress_frm, mode="indeterminate")
+        self.progress.pack(fill="x", pady=(4, 0))
+
+        table_frm = ttk.Frame(self)
+        table_frm.pack(fill="both", expand=True, padx=16, pady=4)
+
+        self.tree = ttk.Treeview(
+            table_frm,
+            columns=("path", "size", "status", "kind"),
+            show="headings",
+            selectmode="extended",
+        )
+        self.tree.heading("path", text="File Path", anchor="w")
+        self.tree.heading("size", text="Size", anchor="e")
+        self.tree.heading("status", text="Git Status", anchor="center")
+        self.tree.heading("kind", text="Type", anchor="center")
+        self.tree.column("path", anchor="w", width=470, stretch=True)
+        self.tree.column("size", anchor="e", width=90, stretch=False)
+        self.tree.column("status", anchor="center", width=110, stretch=False)
+        self.tree.column("kind", anchor="center", width=170, stretch=False)
+        vsb = ttk.Scrollbar(table_frm, orient="vertical", command=self.tree.yview)
+        self.tree.configure(yscrollcommand=vsb.set)
+        self.tree.pack(side="left", fill="both", expand=True)
+        vsb.pack(side="right", fill="y")
+
+        self.tree.tag_configure("part", foreground="#059669")
+        self.tree.tag_configure("drawing", foreground="#b45309")
+
+        self.tree.bind("<<TreeviewSelect>>", self._update_selected_label)
+        self.tree.bind("<Control-a>", self.select_all)
+        self.tree.bind("<Control-A>", self.select_all)
+
+        footer = ttk.Frame(self)
+        footer.pack(fill="x", padx=16, pady=(4, 14))
+
+        self.lbl_selected = ttk.Label(footer, text="Selected: 0", style="TLabel")
+        self.lbl_selected.pack(side="left")
+
+        self.btn_close = ttk.Button(footer, text="Close", command=self.on_close)
+        self.btn_close.pack(side="right", padx=(8, 0))
+
+        self.btn_delete = ttk.Button(
+            footer, text="Delete Selected", style="Danger.TButton",
+            command=self.on_delete_selected, state="disabled",
+        )
+        self.btn_delete.pack(side="right", padx=(8, 0))
+
+        self.btn_select_all = ttk.Button(
+            footer, text="Select All", command=self.select_all, state="disabled",
+        )
+        self.btn_select_all.pack(side="right", padx=(8, 0))
+
+        self.btn_rescan = ttk.Button(footer, text="Re-scan", command=self.start_scan)
+        self.btn_rescan.pack(side="right")
+
+    # ---------------------------------------------------------------- scanning
+    def start_scan(self):
+        if self.is_scanning or self.is_deleting:
+            return
+        self.is_scanning = True
+        self._clear_rows()
+        self.btn_delete.config(state="disabled")
+        self.btn_select_all.config(state="disabled")
+        self.btn_rescan.config(state="disabled")
+        self.lbl_status.config(text="Starting SolidWorks dependency scan...")
+        self.progress.config(mode="indeterminate")
+        self.progress.start(12)
+        self.parent.write_log(
+            f"Orphan scan started (scope: '{self.scope_label}', "
+            f"{len(self.scope_assemblies)} assembly(ies)).", "info"
+        )
+        threading.Thread(target=self.run_scan, daemon=True).start()
+
+    def run_scan(self):
+        """Worker thread: run sw_top_finder.py in orphan mode and parse its JSON result."""
+        import tempfile
+
+        tmp_paths = []
+        proc = None
+        try:
+            def write_list(items, prefix):
+                fd, path = tempfile.mkstemp(prefix=f"git4sw_{prefix}_", suffix=".json")
+                with os.fdopen(fd, "w", encoding="utf-8") as fh:
+                    json.dump(list(items or []), fh)
+                tmp_paths.append(path)
+                return path
+
+            assemblies_file = write_list(self.scope_assemblies, "asm")
+            parts_file = write_list(self.candidate_parts, "part")
+            drawings_file = write_list(self.scope_drawings, "drw")
+
+            script_dir = os.path.dirname(os.path.abspath(__file__))
+            runner_path = os.path.join(script_dir, "sw_top_finder.py")
+            sldworks_exe = self.parent.load_solidworks_path()
+            try:
+                sldworks_exe = os.path.abspath(os.path.expandvars(sldworks_exe))
+            except Exception:
+                pass
+
+            env_vars = os.environ.copy()
+            env_vars["PYTHONIOENCODING"] = "utf-8"
+            env_vars["GIT4SW_SOLIDWORKS_PATH"] = sldworks_exe
+
+            cmd = [
+                sys.executable, "-u", runner_path, self.workspace_path,
+                "--mode", "orphans",
+                "--assemblies-file", assemblies_file,
+                "--parts-file", parts_file,
+                "--drawings-file", drawings_file,
+                "--solidworks-path", sldworks_exe,
+            ]
+            proc = subprocess.Popen(
+                cmd,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT,
+                text=True,
+                bufsize=1,
+                encoding="utf-8",
+                errors="replace",
+                env=env_vars,
+            )
+            self.scan_proc = proc
+
+            json_result = None
+            for line in proc.stdout:
+                clean = line.strip()
+                if not clean:
+                    continue
+                if clean.startswith("{"):
+                    try:
+                        json_result = json.loads(clean)
+                    except Exception:
+                        pass
+                elif clean.startswith("[PROGRESS]"):
+                    tokens = clean.split()
+                    if len(tokens) >= 3 and "/" in tokens[2]:
+                        phase = tokens[1]
+                        done, total = tokens[2].split("/", 1)
+                        if phase == "A":
+                            self._ui(lambda d=done, t=total: self._update_progress(
+                                f"Scanning assemblies... {d}/{t}", d, t))
+                        elif phase == "D":
+                            self._ui(lambda d=done, t=total: self._update_progress(
+                                f"Checking drawings... {d}/{t}", d, t))
+                elif clean.lower().startswith("error"):
+                    self.parent.write_log(clean, "warning")
+
+            returncode = proc.wait()
+            self.scan_proc = None
+
+            if self._closed:
+                return
+            if json_result and json_result.get("error"):
+                self._ui(lambda: self.on_scan_failed(str(json_result["error"])))
+            elif json_result is not None:
+                self._ui(lambda: self.on_scan_done(json_result))
+            else:
+                self._ui(lambda: self.on_scan_failed(
+                    f"Scanner produced no result (exit code {returncode})."))
+        except Exception as e:
+            if not self._closed:
+                self._ui(lambda: self.on_scan_failed(str(e)))
+        finally:
+            self.scan_proc = None
+            for path in tmp_paths:
+                try:
+                    os.remove(path)
+                except Exception:
+                    pass
+
+    def _update_progress(self, text, done, total):
+        try:
+            total_int = max(int(total), 1)
+            done_int = max(min(int(done), total_int), 0)
+            self.progress.stop()
+            self.progress.config(mode="determinate", maximum=total_int, value=done_int)
+            self.lbl_status.config(text=text)
+        except Exception:
+            pass
+
+    def on_scan_done(self, result):
+        self.is_scanning = False
+        self.progress.stop()
+        self.progress.config(mode="determinate", value=0)
+        self.btn_rescan.config(state="normal")
+
+        orphans = list(result.get("orphans") or [])
+        self.part_drawings = {
+            str(part).replace("\\", "/"): [str(d).replace("\\", "/") for d in drawings]
+            for part, drawings in (result.get("orphan_part_drawings") or {}).items()
+        }
+        drawing_set = sorted({d for draws in self.part_drawings.values() for d in draws})
+
+        for rel in sorted(orphans):
+            self._add_row(rel, "part")
+        for rel in drawing_set:
+            self._add_row(rel, "drawing")
+
+        if not orphans and not drawing_set:
+            self.lbl_status.config(text="No orphan files found in the current list.")
+            self.btn_delete.config(state="disabled")
+            self.btn_select_all.config(state="disabled")
+            self.parent.write_log("Orphan scan complete: no orphan files found.", "info")
+            return
+
+        self.lbl_status.config(
+            text=(f"Scan complete: {len(orphans)} orphan part(s), "
+                  f"{len(drawing_set)} related drawing(s) found.")
+        )
+        self.btn_select_all.config(state="normal")
+        self._update_selected_label()
+        self.parent.write_log(
+            f"Orphan scan complete: {len(orphans)} orphan part(s), "
+            f"{len(drawing_set)} related drawing(s).", "info"
+        )
+
+    def on_scan_failed(self, message):
+        self.is_scanning = False
+        self.progress.stop()
+        self.progress.config(mode="determinate", value=0)
+        self.btn_rescan.config(state="normal")
+        self.lbl_status.config(text=f"Scan failed: {message}")
+        self.parent.write_log(f"Orphan scan failed: {message}", "error")
+
+    # ---------------------------------------------------------------- table rows
+    def _clear_rows(self):
+        for item in self.tree.get_children():
+            self.tree.delete(item)
+        self.rows.clear()
+        self.rel_items.clear()
+        self._update_selected_label()
+
+    def _add_row(self, rel_path, kind):
+        rel_path = rel_path.replace("\\", "/")
+        abs_path = os.path.join(self.workspace_path, rel_path)
+        try:
+            size_txt = self._format_size(os.path.getsize(abs_path))
+        except Exception:
+            size_txt = "-"
+        status = self.status_map.get(self._key(rel_path), "unmodified")
+        status_txt = self.STATUS_DISPLAY.get(status, status)
+        kind_txt = "Part" if kind == "part" else "Drawing (orphan part)"
+        item = self.tree.insert(
+            "", "end",
+            values=(rel_path.replace("/", "\\"), size_txt, status_txt, kind_txt),
+            tags=(kind,),
+        )
+        self.rows[item] = {"rel": rel_path, "kind": kind}
+        self.rel_items[self._key(rel_path)] = item
+
+    def select_all(self, event=None):
+        if self.tree.get_children():
+            self.tree.selection_set(self.tree.get_children())
+        self._update_selected_label()
+        return "break"
+
+    def _update_selected_label(self, event=None):
+        if self.is_scanning or self.is_deleting:
+            return
+        count = len(self.tree.selection())
+        self.lbl_selected.config(text=f"Selected: {count}")
+        self.btn_delete.config(state="normal" if count else "disabled")
+
+    # ---------------------------------------------------------------- deletion
+    def on_delete_selected(self):
+        if self.is_deleting or self.is_scanning:
+            return
+
+        selected_items = self.tree.selection()
+        if not selected_items:
+            self.lbl_status.config(text="Select at least one file to delete.")
+            return
+
+        targets = []
+        part_targets = []
+        for item in selected_items:
+            row = self.rows.get(item)
+            if not row:
+                continue
+            targets.append(row["rel"])
+            if row["kind"] == "part":
+                part_targets.append(row["rel"])
+
+        # Offer to include the orphan drawings of the selected parts.
+        related = []
+        for rel in part_targets:
+            for drawing in self.part_drawings.get(rel, []):
+                if drawing not in targets and drawing not in related:
+                    related.append(drawing)
+        if related:
+            preview = "\n".join(f"  - {rel}" for rel in related[:10])
+            if len(related) > 10:
+                preview += f"\n  ... and {len(related) - 10} more"
+            include = messagebox.askyesno(
+                "Include Drawings",
+                f"{len(related)} orphan drawing(s) reference the selected part(s):\n\n"
+                f"{preview}\n\nDelete them together with the selected part(s)?",
+                parent=self,
+            )
+            if include:
+                targets.extend(related)
+
+        # Block deletion of files that are open in SolidWorks or locked by others.
+        open_lower = {str(f).lower() for f in getattr(self.parent, "last_open_files", set())}
+        open_targets = [rel for rel in targets if rel.lower() in open_lower]
+        locked_targets = []
+        for rel in targets:
+            info = self.lock_map.get(self._key(rel))
+            if info and info.get("locked") and not info.get("is_our_lock"):
+                locked_targets.append(rel)
+        if open_targets or locked_targets:
+            blocks = []
+            if open_targets:
+                text = "Open in SolidWorks (close them first):\n" + "\n".join(
+                    f"  - {p}" for p in open_targets[:10])
+                if len(open_targets) > 10:
+                    text += f"\n  ... and {len(open_targets) - 10} more"
+                blocks.append(text)
+            if locked_targets:
+                text = "Locked by another user (unlock first):\n" + "\n".join(
+                    f"  - {p}" for p in locked_targets[:10])
+                if len(locked_targets) > 10:
+                    text += f"\n  ... and {len(locked_targets) - 10} more"
+                blocks.append(text)
+            messagebox.showwarning(
+                "Cannot Delete Orphan Files", "\n\n".join(blocks), parent=self)
+            self.lbl_status.config(text="Some selected files cannot be deleted. See the warning.")
+            return
+
+        modified = [rel for rel in targets if self.status_map.get(self._key(rel)) == "modified"]
+        drawing_count = sum(1 for rel in targets if rel.lower().endswith(".slddrw"))
+
+        preview = "\n".join(f"  - {rel}" for rel in targets[:15])
+        if len(targets) > 15:
+            preview += f"\n  ... and {len(targets) - 15} more"
+
+        warnings = []
+        if modified:
+            warnings.append(
+                f"⚠ WARNING: {len(modified)} selected file(s) have uncommitted changes. "
+                f"Their edits will be lost permanently.")
+        if drawing_count:
+            warnings.append(
+                f"⚠ WARNING: {drawing_count} drawing(s) of orphan parts are included in this deletion.")
+        if self.scope_label != "All Files":
+            warnings.append(
+                f"⚠ WARNING: Scan scope was '{self.scope_label}' only. References from files "
+                f"outside this filter were not checked.")
+        warnings.append(
+            "The files are deleted from disk and the deletion is staged with 'git rm'. "
+            "Use Upload to commit the deletion.")
+
+        message = (
+            f"Delete {len(targets)} file(s)?\n\n{preview}\n\n" + "\n\n".join(warnings)
+        )
+        if not messagebox.askyesno("Delete Orphan Files", message, icon="warning", parent=self):
+            return
+
+        self.is_deleting = True
+        self.btn_delete.config(state="disabled")
+        self.btn_select_all.config(state="disabled")
+        self.btn_rescan.config(state="disabled")
+        self.btn_close.config(state="disabled")
+        self.lbl_status.config(text=f"Deleting {len(targets)} file(s)...")
+        self.progress.config(mode="indeterminate")
+        self.progress.start(12)
+        threading.Thread(
+            target=self.run_delete, args=(targets, bool(modified)), daemon=True
+        ).start()
+
+    def run_delete(self, targets, force):
+        """Worker thread: release our LFS locks, then delete and stage the files."""
+        failed_unlock = []
+        try:
+            our_locks = [
+                rel for rel in targets
+                if self.lock_map.get(self._key(rel), {}).get("is_our_lock")
+            ]
+            if our_locks:
+                try:
+                    for rel_path, ok, result in self.git_service.batch_unlock_files(our_locks):
+                        if not ok:
+                            failed_unlock.append(f"{rel_path}: {result}")
+                except Exception as e:
+                    failed_unlock.append(str(e))
+            deleted, failed = self.git_service.delete_workspace_files(targets, force=force)
+        except Exception as e:
+            deleted, failed = [], [(rel, str(e)) for rel in targets]
+
+        self._ui(lambda: self.on_delete_done(deleted, failed, failed_unlock))
+
+    def on_delete_done(self, deleted, failed, failed_unlock):
+        self.is_deleting = False
+        self.progress.stop()
+        self.progress.config(mode="determinate", value=0)
+        self.btn_rescan.config(state="normal")
+        self.btn_close.config(state="normal")
+
+        for rel in deleted:
+            item = self.rel_items.get(self._key(rel))
+            if item is not None:
+                try:
+                    self.tree.delete(item)
+                except Exception:
+                    pass
+                self.rows.pop(item, None)
+                self.rel_items.pop(self._key(rel), None)
+
+        self._update_selected_label()
+        if deleted:
+            self.lbl_status.config(
+                text=f"Deleted {len(deleted)} file(s). Use Upload to commit the deletion.")
+            self.parent.write_log(
+                f"Orphan cleanup: deleted {len(deleted)} file(s) and staged the deletion. "
+                f"Use Upload to commit.", "success")
+        if failed_unlock:
+            self.parent.write_log(
+                f"Orphan cleanup: {len(failed_unlock)} LFS lock(s) could not be released "
+                f"(deletion continued).", "warning")
+
+        if failed:
+            detail = "\n".join(f"  - {rel}: {reason}" for rel, reason in failed[:12])
+            if len(failed) > 12:
+                detail += f"\n  ... and {len(failed) - 12} more"
+            self.lbl_status.config(text=f"{len(failed)} file(s) could not be deleted.")
+            messagebox.showwarning(
+                "Some Files Were Not Deleted",
+                f"{len(failed)} file(s) could not be deleted:\n\n{detail}",
+                parent=self,
+            )
+            self.parent.write_log(
+                f"Orphan cleanup failed for {len(failed)} file(s).", "error")
+
+        if not self.rows:
+            self.btn_select_all.config(state="disabled")
+            self.btn_delete.config(state="disabled")
+
+        # Keep the File Manager table and its "Deleted" staging status in sync.
+        try:
+            self.parent.refresh_file_list()
+        except Exception:
+            pass
+
+    # ---------------------------------------------------------------- closing
+    def on_close(self):
+        if self.is_deleting:
+            messagebox.showinfo(
+                "Please Wait", "A deletion is in progress. Please wait for it to finish.",
+                parent=self)
+            return
+        self._closed = True
+        proc = self.scan_proc
+        if proc is not None:
+            try:
+                proc.terminate()
+            except Exception:
+                pass
+        try:
+            self.grab_release()
+        except Exception:
+            pass
+        try:
+            if getattr(self.parent, "_orphan_dialog", None) is self:
+                self.parent._orphan_dialog = None
+        except Exception:
+            pass
+        self.destroy()
+
+
 def queue_during_bg_tasks(method):
     import functools
     @functools.wraps(method)
@@ -3344,6 +3959,9 @@ a:hover {{ text-decoration: underline; }}
         self.btn_solidworks = ttk.Button(actions_frm, text="Solidworks", style="Primary.TButton", width=10, command=self.open_solidworks)
         self.btn_solidworks.pack(side="left", padx=4)
         
+        self.btn_orphan = ttk.Button(actions_frm, text="Orphan", style="Danger.TButton", width=8, command=self.open_orphan_dialog)
+        self.btn_orphan.pack(side="left", padx=4)
+
         self.btn_export = ttk.Button(actions_frm, text="EXPORT", style="BOM.TButton", width=8, command=self.open_export_dialog)
         self.btn_export.pack(side="left", padx=4)
         
@@ -3355,13 +3973,13 @@ a:hover {{ text-decoration: underline; }}
         self.btn_diff.state(["disabled"])
         self.btn_diff.pack(side="left", padx=4)
         
-        self.lbl_selected_count = ttk.Label(actions_frm, text="Selected files: 0", style="TLabel")
+        self.lbl_selected_count = ttk.Label(actions_frm, text="Selected: 0", style="TLabel")
         self.lbl_selected_count.pack(side="right", padx=8)
         
         # Bind tree selection event to update selected file count
         def update_selected_count(event=None):
             count = len(self.tree.selection())
-            self.lbl_selected_count.config(text=f"Selected files: {count}")
+            self.lbl_selected_count.config(text=f"Selected: {count}")
             self.on_file_selected_change()
             
         self.tree.treeview.bind("<<TreeviewSelect>>", update_selected_count)
@@ -3871,7 +4489,7 @@ a:hover {{ text-decoration: underline; }}
         # Update the selected count label
         if hasattr(self, 'lbl_selected_count'):
             count = len(self.tree.selection())
-            self.lbl_selected_count.config(text=f"Selected files: {count}")
+            self.lbl_selected_count.config(text=f"Selected: {count}")
  
         # Enable/disable buttons based on file list status
         self.update_button_states_by_file_list()
@@ -3940,6 +4558,57 @@ a:hover {{ text-decoration: underline; }}
         else:
             self.btn_save_ver.state(["disabled"])
             self.btn_save_all.state(["disabled"])
+
+    # ==========================================
+    # Orphan file cleanup
+    # ==========================================
+    @queue_during_bg_tasks
+    def open_orphan_dialog(self):
+        """Opens the Orphan Files dialog for the files currently shown in the table.
+
+        Orphan = a .sldprt that no .sldasm inside the current path filter references.
+        Drawings that only reference orphan parts are listed alongside them.
+        """
+        if not self.git_service.is_git_repo():
+            self.write_log("Not a Git repository.", "warning")
+            return
+
+        existing = getattr(self, "_orphan_dialog", None)
+        if existing is not None:
+            try:
+                if existing.winfo_exists():
+                    existing.deiconify()
+                    existing.lift()
+                    existing.focus_force()
+                    return
+            except Exception:
+                pass
+
+        scope_label = self.cb_path_filter.get() or "All Files"
+        parts, assemblies, drawings = [], [], []
+        for item in self.tree.get_children():
+            values = self.tree.item(item, 'values')
+            if not values:
+                continue
+            rel_path = values[0].replace("\\", "/")
+            lower = rel_path.lower()
+            if lower.endswith(".sldprt"):
+                parts.append(rel_path)
+            elif lower.endswith(".sldasm"):
+                assemblies.append(rel_path)
+            elif lower.endswith(".slddrw"):
+                drawings.append(rel_path)
+
+        if not parts:
+            self.write_log(
+                f"No .sldprt files in the current list to check for orphans "
+                f"(scope: '{scope_label}').", "warning")
+            return
+
+        self._orphan_dialog = OrphanFilesDialog(
+            self, self.git_service, self.workspace_path,
+            parts, assemblies, drawings, scope_label,
+        )
 
 
 

@@ -19,7 +19,7 @@
 * **자동 Lock 및 모니터링**: 백그라운드 스레드가 SolidWorks COM API로 열린 파일을 추적하여, CAD 파일 열면 LFS Lock 획득, 닫으면 자동 해제. 대시보드에 실시간 저장소 용량 표시.
 * **LFS 캐시 정리 마법사**: `.git/lfs/objects/` 내 미사용 캐시를 안전하게 삭제하는 GUI 도구. 현재 인덱스 + 최근 2개 커밋만 보존.
 * **작업 안전성**: 파일이 SolidWorks에 열려 있거나 타인이 Lock한 경우 업로드 차단. 브랜치 전환 시 미저장 변경사항 경고. SolidWorks 버튼만 LFS Lock 관리; eDrawings/EXPORT/BOM은 ReadOnly 모드 사용.
-* **색상 구분 파일 목록**: 파트 초록 `#059669`, 어셈블리 주황 `#d97706`, 도면 빨강 `#dc2626`. 이름/확장자/상태/SW 열림/Lock 여부로 정렬 가능.
+* **색상 구분 파일 목록**: 파트 초록 `#059669`, 어셈블리 주황 `#d97706`, 도면 빨강 `#dc2626`. 이름/확장자/상태/SW 열림/Lock 여부로 정렬 가능. `.gitignore` 대상 파일과 앱 내부 `.backup/` 디렉터리는 목록에 표시되지 않습니다.
 * **CAD 썸네일 미리보기**: 선택한 CAD 파일의 4:3 썸네일 자동 표시; 클릭 시 클립보드에 복사.
 * **브랜치 관리**: "Make my branch"로 개인 원격 브랜치 자동 생성. "Merge all branches into main"으로 일괄 병합 및 충돌 해결(Ours/Theirs).
 * **순차 작업 큐**: 백그라운드 작업은 자동 큐잉; Terminate 버튼으로 멈춘 Git 프로세스 강제 종료.
@@ -33,6 +33,7 @@
 * **버전 이력 및 그래프**: 커밋 더블클릭으로 워크스페이스 복원. ASCII 그래프(cmd) 또는 GitHub Network 브라우저.
 * **멀티 서버 지원**: `github.com` 및 Gitea 기반 원격 저장소를 모두 지원합니다. config의 `git_server_type`으로 선택 가능. GitHub는 PyGithub API, Gitea는 REST API v1을 사용.
 * **Find Top (최상위 어셈블리 스캐너)**: `.sldasm` 의존성 그래프를 분석하여 최상위 어셈블리(다른 어셈블리에서 참조되지 않은 파일)를 식별. `GetDocumentDependencies2` COM API 사용—파일을 열지 않고 메타데이터만 읽어 `OpenDoc6` 방식보다 수배에서 수십 배 빠름.
+* **Orphan 정리**: 현재 경로 필터 범위에서 어떤 어셈블리도 참조하지 않는 `.sldprt`와, 그 고아 부품만 참조하는 도면을 찾아 목록으로 보여줍니다. `Ctrl`/`Shift`로 다중 선택해 삭제할 수 있으며, 삭제는 `git rm`으로 스테이징되고 이후 Upload에서 커밋됩니다.
 * **성능 최적화**: EXPORT/BOM 중 자동 Lock 억제 (ReadOnly 파일은 Lock 불필요). 모든 안정화 대기 시간 50% 단축.
 * **Config 편집기**: "Edit" 버튼으로 현재 로드된 설정 파일을 메모장에서 직접 편집. `--config` CLI 인자로 설정 파일 경로 지정 가능 (예: `--config config_codeberg.json`).
 * **다국어 Help**: Help 뷰에 언어 선택 콤보박스 추가로 영어(`help_en.txt`)와 한국어(`help_ko.txt`) 전환 가능. 모든 GUI 용어에 영어 원문 병기.
@@ -160,6 +161,11 @@ uv run main.py --config config_codeberg.json
     - File Manager 툴바의 **[Find Top]** 버튼(Refresh 우측)을 클릭하여 워크스페이스의 `.sldasm` 의존성 그래프를 스캔합니다.
     - SolidWorks `GetDocumentDependencies2` API를 사용하여 파일을 열지 않고 의존성 메타데이터만 읽으므로 기존 `OpenDoc6` 방식보다 매우 빠릅니다.
     - 식별된 최상위 어셈블리는 파일 목록에서 빨간색 굵게 `#dc2626` "TOP" 태그로 강조 표시됩니다. "최상위"란 워크스페이스 내 다른 `.sldasm`에서 참조되지 않은 파일을 의미합니다.
+
+11. **Orphan 파일 정리 (Orphan)**:
+    - File Manager에서 경로 필터를 선택해 스캔 범위를 좁힌 뒤, **Solidworks** 우측의 **[Orphan]** 버튼을 클릭합니다.
+    - 선택한 범위의 어셈블리 의존성만 스캔하여 어떤 어셈블리도 참조하지 않는 `.sldprt`와, 해당 고아 부품만 참조하는 도면을 함께 목록에 표시합니다.
+    - `Ctrl+클릭` / `Shift+클릭`으로 여러 파일을 선택하고 **[Delete Selected]**를 누릅니다. 수정된 파일이 포함되어 있으면 추가 경고가 표시되며, 삭제된 파일은 디스크에서 제거되고 `git rm`으로 스테이징되어 Upload 시 커밋됩니다.
 
 
 ### 4.3 관리자 기능 (Maintainer Mode)
