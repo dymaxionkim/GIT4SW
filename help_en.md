@@ -15,11 +15,12 @@ Central control panel for repository setup, sync, and real-time status.
 - **Active Branch** — Dropdown showing the current branch. Select another branch to check it out.
 - **Make my branch** — Creates & switches to a personal developer branch under your username, isolating work from `main`.
 - **README.md** — Opens the repo's README.md in Notepad. On save, auto runs `git add`, `commit`, `push`. Creates from template if missing.
-- **Get Latest Version (Sync)** — Pulls the latest remote changes. Detects merge conflicts and, if **Backup** is ON, auto-backups conflicted files to `.backup/` before resolving. Skips if already up-to-date.
+- **Get Latest Version (Sync)** — Pulls the latest remote changes. Detects merge conflicts and, if **Backup** is ON, auto-backups conflicted files to `.backup/` before resolving. Skips if already up-to-date. The configured SolidWorks template/library repository is synchronised as well (remote version wins on conflicts, local edits are kept in a `git stash`).
 - **Merge main branch into current branch** — Merges `main` into your branch, commits, pushes, and switches back to your branch. Auto-backups local changes (if **Backup** is ON) before merging. Skips if already merged.
+- **SolidWorks library (status / Pull Library)** — The line under the sync buttons shows the local path of the SolidWorks template/library repository and the result of the last sync. **[Pull Library]** synchronises that repository immediately, regardless of the Sync checkbox.
 - **Cleanup LFS Cache** — Opens a wizard to scan & purge unused `.git/lfs/objects/` (excluding HEAD and HEAD~1), freeing disk space.
-- **Sync** — Checkbox. When ON, auto-runs "Sync" then "Merge main" on startup or workspace change.
-- **Backup** — Checkbox. When ON, conflicted files are automatically copied to `.backup/` as `_OURS`/`_THEIRS` suffixed copies before the conflict resolution dialog appears (during merge/pull). Saved to the `auto_backup_conflicts` key in `config.json`.
+- **Sync** — Checkbox. When ON, auto-runs "Sync" then "Merge main" on startup or workspace change, and always pulls the SolidWorks template/library repository to its latest version.
+- **Backup** — Checkbox. When ON, conflicted files are automatically copied to `.backup/` as `_OURS`/`_THEIRS` suffixed copies before the conflict resolution dialog appears (during merge/pull). Saved to the `auto_backup_conflicts` key in `config.json`. The `.backup/` folder is added to `.gitignore` and `.git/info/exclude` automatically so it is never tracked; `.backup` files that were already committed are removed from the index on the next upload.
 - **Lock** — Checkbox. When ON, files opened in SolidWorks are automatically LFS-locked on open and released on close, and assembly components are auto-locked when their parent assembly is opened. Manual Lock/Unlock buttons always work. Saved to the `auto_lock` key in `config.json`.
 - **Live Monitor** — Real-time panel showing: SolidWorks status (Active/Inactive), total tracked files, open files, locked files, and repository size.
 
@@ -70,9 +71,14 @@ For project administrators to oversee integration and initialize repositories.
 
 ## 5. Config Mode
 
-Configure system paths for Git, SolidWorks, and integrations.
+Configure system paths for Git, SolidWorks, and integrations. The inputs are grouped by purpose, so you only need to look at the section you are interested in (the mouse wheel scrolls the view from any field).
 
-- **Path Configurations** — Set paths for Git, Git LFS, SolidWorks, eDrawings, Git Token, Git Server Type, Git Server URL, default local directory, and default GitHub org. Path fields have "Find" buttons to scan the C: drive. "Git Server Type" toggles the server URL field. `auto_sync`, `auto_backup_conflicts`, and `auto_lock` are managed via the Dashboard checkboxes.
+- **🧰 Executables & Paths** — Paths of the Git / Git LFS / SolidWorks / eDrawings executables. **[Find]** scans the C: drive; invalid paths are shown in red.
+- **🔗 Git Server & Repository** — Git server type/URL, Git Token, default local directory and GitHub organization. With the `github` server type the URL field is fixed to `https://github.com`.
+- **📚 SolidWorks Templates / Library** — **Repo URL** and **Local Path** of the dedicated Git repository that holds SolidWorks templates, design libraries and settings. Defaults are `https://github.com/mech-higenmotor/SOLIDWORKS.git` and `D:\github\SOLIDWORKS`. When the local path has no repository and the remote is reachable, the repository is cloned automatically during sync; on every later sync the remote version is preferred on conflicts (local edits are preserved in a `git stash`). Clearing the URL disables the automatic library management.
+- **🤖 LLM Assist (Commit Messages)** — Provider, API Style, Base URL, Model, API Key, Timeout, Verify SSL, Extra Params, Prompt File and Custom Instructions used to draft version descriptions. **[Test LLM]** checks the connection before saving.
+- **⚙️ Advanced** — Background behaviour such as Auto Background Diff. List-style values (commit message presets `commit_messages`, BOM column order `column_order`) are edited in `config.json` through the **[Edit]** button instead of a single-line field.
+- **Note** — `auto_sync`, `auto_backup_conflicts` and `auto_lock` are managed by the Dashboard checkboxes and are not shown here.
 - **Save Configuration** — Saves all values to `config.json` and re-initializes connections.
 - **Edit** — Opens `config.json` directly in Notepad for manual editing.
 

@@ -24,7 +24,7 @@
 * **브랜치 관리**: "Make my branch"로 개인 원격 브랜치 자동 생성. "Merge all branches into main"으로 일괄 병합 및 충돌 해결(Ours/Theirs).
 * **순차 작업 큐**: 백그라운드 작업은 자동 큐잉; Terminate 버튼으로 멈춘 Git 프로세스 강제 종료.
 * **자동 동기화 (Auto Sync)**: 시작/저장소 변경 시 자동 fetch 및 병합; 이미 최신이면 생략.
-* **충돌 자동 백업 (Auto Backup Conflicts)**: 병합/풀 충돌 시 충돌 해결 팝업 전에 충돌 파일을 `.backup/`에 `_OURS`/`_THEIRS` 복사본으로 자동 백업합니다. 대시보드 체크박스 또는 `auto_backup_conflicts` 설정 키(기본 OFF)로 On/Off 전환 가능.
+* **충돌 자동 백업 (Auto Backup Conflicts)**: 병합/풀 충돌 시 충돌 해결 팝업 전에 충돌 파일을 `.backup/`에 `_OURS`/`_THEIRS` 복사본으로 자동 백업합니다. 대시보드 체크박스 또는 `auto_backup_conflicts` 설정 키(기본 OFF)로 On/Off 전환 가능. `.backup/`은 `.gitignore`·`.git/info/exclude`에 자동 등록되어 Git 추적에서 제외되며, 이미 커밋된 `.backup` 파일은 다음 업로드 시 저장소에서 제거됩니다.
 * **자동 잠금 (Auto Lock)**: SolidWorks에서 파일이 열리면 자동으로 LFS Lock이 획득되고 닫으면 해제되며, 어셈블리를 열면 해당 컴포넌트들도 자동으로 잠깁니다. 대시보드 체크박스 또는 `auto_lock` 설정 키(기본 OFF)로 On/Off 전환 가능. 수동 Lock/Unlock 버튼은 항상 동작합니다.
 * **충돌 해결**: 다중 파일 선택 대화상자, 충돌 파일 자동 `.backup/` 백업. LFS 포인터 오류 처리.
 * **EXPORT (일괄 변환)**: `.sldprt`/`.sldasm`/`.slddrw` → PDF, DXF, STEP(AP214 컬러). 다중 포맷 동시 선택. Watchdog(180초)가 멈춘 SolidWorks 자동 재시작. 파일 기준(설정 기준 아님) 진행률.
@@ -82,7 +82,7 @@ uv run main.py --config config_codeberg.json
 
 ![](GIT4SW_05.png)
 
-프로그램을 최초로 실행한 후, 좌측 사이드바 메뉴 맨 하단의 **Config** 버튼을 눌러 설정 화면에서 필수 환경 설정을 먼저 진행해야 합니다. 각 입력 필드에 알맞은 경로와 값을 입력한 후 하단의 **[Save Configuration]** 버튼을 클릭하면 설정 파일에 저장되고 앱에 즉시 반영됩니다. 또한 **[Edit]** 버튼을 클릭하면 설정 파일을 메모장에서 직접 편집할 수 있습니다.
+프로그램을 최초로 실행한 후, 좌측 사이드바 메뉴 맨 하단의 **Config** 버튼을 눌러 설정 화면에서 필수 환경 설정을 먼저 진행해야 합니다. 입력 항목은 성격별로 **🧰 Executables & Paths**, **🔗 Git Server & Repository**, **📚 SolidWorks Templates / Library**, **🤖 LLM Assist (Commit Messages)**, **⚙️ Advanced** 5개 그룹으로 묶여 표시되며, 마우스 휠로 어느 입력란에서든 스크롤할 수 있습니다. 각 입력 필드에 알맞은 경로와 값을 입력한 후 하단의 **[Save Configuration]** 버튼을 클릭하면 설정 파일에 저장되고 앱에 즉시 반영됩니다. 또한 **[Edit]** 버튼을 클릭하면 설정 파일을 메모장에서 직접 편집할 수 있습니다.
 
 각 설정 항목의 상세 내용 및 예시는 다음과 같습니다:
 
@@ -104,6 +104,10 @@ uv run main.py --config config_codeberg.json
   - *예*: `C:\Users\dhkima\github`
 * **Organization Name**: 관리자 모드에서 신규 비공개 저장소를 자동 개설할 대상 GitHub 조직(Organization)의 이름입니다.
   - *예*: `mech-higenmotor`
+* **Solidworks Repo URL** (📚 SolidWorks Templates / Library 그룹의 **Repo URL**): SolidWorks의 template, library 및 설정을 보관하는 별도의 Git 저장소 원격 주소입니다. Dashboard의 Sync가 ON이면 이 저장소도 함께 최신 버전으로 자동 pull 됩니다. 값을 비우면 자동 관리가 비활성화됩니다.
+  - *기본값*: `https://github.com/mech-higenmotor/SOLIDWORKS.git`
+* **Solidworks Library Local Path** (📚 SolidWorks Templates / Library 그룹의 **Local Path**): 위 SolidWorks 관리용 저장소를 clone/보관할 로컬 경로입니다. 저장소가 없고 원격 접근이 확인되면 동기화 시 자동으로 clone 합니다.
+  - *기본값*: `D:\github\SOLIDWORKS`
 * **Auto Sync**: 프로그램 구동 시 또는 저장소 스위칭/클론/신규 생성 작업 완료 시 자동으로 원격 동기화(Get Latest Version) 및 메인 브랜치 병합(Merge main branch)을 순차 실행할지 여부를 결정하는 Boolean 설정 변수입니다. 대시보드의 Sync 체크박스로 제어되며 Config 화면의 수동 편집 목록에서는 제외됩니다.
   - *예*: `true` 또는 `false`
 * **Auto Backup Conflicts**: 병합(Merge)/풀(Pull) 중 충돌이 발생했을 때, 충돌 해결 다이얼로그가 표시되기 직전에 충돌 파일들을 `.backup/` 디렉토리에 `_OURS`/`_THEIRS` 접미사 파일로 자동 백업할지 여부를 결정하는 Boolean 설정 변수입니다. 대시보드의 Backup 체크박스로 제어되며 Config 화면의 수동 편집 목록에서는 제외됩니다.

@@ -15,11 +15,12 @@ Git 워크플로우와 Git LFS 잠금을 통합하여 3D CAD 모델의 동시 �
 - **Active Branch** — 현재 브랜치를 표시하는 드롭다운. 다른 브랜치를 선택하면 체크아웃합니다.
 - **Make my branch** — 사용자 이름으로 개인 개발자 브랜치를 생성 및 전환하여 `main`과 작업을 분리합니다.
 - **README.md** — README.md를 메모장으로 엽니다. 저장 시 `git add`, `commit`, `push`가 자동 실행됩니다. 파일이 없으면 템플릿으로 생성합니다.
-- **Get Latest Version (Sync)** — 원격 변경사항을 pull합니다. 충돌 시 (**Backup** ON일 때) `.backup/`에 자동 백업 후 해결합니다. 최신 상태면 건너뜁니다.
+- **Get Latest Version (Sync)** — 원격 변경사항을 pull합니다. 충돌 시 (**Backup** ON일 때) `.backup/`에 자동 백업 후 해결합니다. 최신 상태면 건너뜁니다. 설정된 SolidWorks template/library 저장소도 함께 최신 버전으로 동기화됩니다 (충돌 시 원격 버전 우선, 로컬 수정은 `git stash`로 보존).
 - **Merge main branch into current branch** — `main`을 현재 브랜치에 병합, 커밋, 푸시 후 원래 브랜치로 복귀합니다. 병합 전 (**Backup** ON일 때) 자동 백업하며, 이미 병합된 경우 건너뜁니다.
+- **SolidWorks library (status / Pull Library)** — 동기화 카드 하단에 template/library 저장소의 로컬 경로와 최근 동기화 결과를 표시합니다. **[Pull Library]** 버튼은 Sync 체크박스 상태와 무관하게 해당 저장소를 즉시 동기화합니다.
 - **Cleanup LFS Cache** — 사용하지 않는 `.git/lfs/objects/`를 스캔 및 삭제하는 위저드를 열어 디스크 공간을 확보합니다.
-- **Sync** — 체크박스. ON이면 시작 또는 작업공간 변경 시 "동기화" 후 "main 병합"을 자동 실행합니다.
-- **Backup** — 체크박스. ON이면 병합/풀 중 충돌 발생 시 충돌 해결 팝업 전에 충돌 파일을 `.backup/`에 `_OURS`/`_THEIRS` 접미사 복사본으로 자동 백업합니다. `config.json`의 `auto_backup_conflicts` 키에 저장됩니다.
+- **Sync** — 체크박스. ON이면 시작 또는 작업공간 변경 시 "동기화" 후 "main 병합"을 자동 실행합니다. SolidWorks template/library 저장소도 함께 최신 버전으로 pull 됩니다.
+- **Backup** — 체크박스. ON이면 병합/풀 중 충돌 발생 시 충돌 해결 팝업 전에 충돌 파일을 `.backup/`에 `_OURS`/`_THEIRS` 접미사 복사본으로 자동 백업합니다. `config.json`의 `auto_backup_conflicts` 키에 저장됩니다. `.backup/` 폴더는 앱이 `.gitignore`와 `.git/info/exclude`에 자동 등록하여 Git 추적 대상에서 확실히 제외하며, 이전에 이미 커밋된 `.backup` 파일은 다음 업로드 시 인덱스에서 제거됩니다.
 - **Lock** — 체크박스. ON이면 SolidWorks에서 파일이 열리면 자동으로 LFS Lock을 획득하고 닫으면 해제하며, 어셈블리를 열면 해당 컴포넌트들도 자동으로 잠급니다. 수동 Lock/Unlock 버튼은 항상 동작합니다. `config.json`의 `auto_lock` 키에 저장됩니다.
 - **Live Monitor** — SolidWorks 상태(Active/Inactive), 총 파일 수, 열린 파일, 잠긴 파일, 저장소 크기를 실시간 표시합니다.
 
@@ -70,9 +71,14 @@ Git 워크플로우와 Git LFS 잠금을 통합하여 3D CAD 모델의 동시 �
 
 ## 5. 설정 모드
 
-Git, SolidWorks 및 통합 관련 시스템 경로를 구성합니다.
+Git, SolidWorks 및 통합 관련 시스템 경로를 구성합니다. 입력 항목은 성격별로 아래 그룹으로 묶여 표시되므로, 스크롤하면서 필요한 그룹만 확인하면 됩니다 (마우스 휠은 어느 입력란 위에서도 동작합니다).
 
-- **Path Configurations** — Git, Git LFS, SolidWorks, eDrawings, Git Token, 서버 타입/URL, 기본 디렉토리, GitHub 조직명 경로 설정. 각 필드에 "찾기" 버튼이 있어 C 드라이브를 스캔합니다. `auto_sync`, `auto_backup_conflicts`, `auto_lock`은 대시보드 체크박스로 관리됩니다.
+- **🧰 Executables & Paths** — Git / Git LFS / SolidWorks / eDrawings 실행 파일 경로. 각 필드의 **[Find]** 버튼이 C 드라이브를 스캔하며, 경로가 유효하지 않으면 빨간색으로 표시됩니다.
+- **🔗 Git Server & Repository** — Git 서버 타입/URL, Git Token, 기본 로컬 경로, GitHub 조직명. 서버 타입을 `github`로 두면 서버 URL은 `https://github.com`으로 고정됩니다.
+- **📚 SolidWorks Templates / Library** — SolidWorks의 template, library 및 설정을 관리하는 별도 Git 저장소의 **Repo URL**과 **Local Path**. 기본값은 각각 `https://github.com/mech-higenmotor/SOLIDWORKS.git` 와 `D:\github\SOLIDWORKS` 입니다. 로컬 경로에 저장소가 없고 원격 저장소 접근이 확인되면 동기화 시 자동으로 clone 하여 설치하며, 이후 동기화에서 충돌이 발생하면 항상 원격 버전을 선택해 자동 병합합니다 (로컬 수정은 `git stash`로 보존). URL을 비우면 자동 관리가 비활성화됩니다.
+- **🤖 LLM Assist (Commit Messages)** — 커밋 메시지 초안 생성에 사용할 Provider, API Style, Base URL, Model, API Key, Timeout, Verify SSL, Extra Params, Prompt File, Custom Instructions. **[Test LLM]** 으로 저장 전 연결을 확인할 수 있습니다.
+- **⚙️ Advanced** — Auto Background Diff 등 배경 동작 옵션. 커밋 메시지 프리셋(`commit_messages`)·BOM 컬럼 순서(`column_order`)처럼 목록형 값은 입력란을 나열하지 않고 **[Edit]** 버튼으로 `config.json`에서 편집합니다.
+- **참고** — `auto_sync`, `auto_backup_conflicts`, `auto_lock`은 대시보드 체크박스로 관리되므로 설정 화면에는 표시되지 않습니다.
 - **Save Configuration** — 설정을 `config.json`에 저장하고 연결을 재초기화합니다.
 - **Edit** — `config.json`을 메모장으로 직접 열어 수동 편집합니다.
 

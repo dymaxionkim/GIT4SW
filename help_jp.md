@@ -15,11 +15,12 @@ GitワークフローとGit LFSロックを統合し、3D CADモデルの同時�
 - **Active Branch** — 現在のブランチを表示するドロップダウン。別のブランチを選択するとチェックアウトします。
 - **Make my branch** — ユーザー名で個人開発者ブランチを作成・切り替え、`main`から分離して作業します。
 - **README.md** — README.mdをメモ帳で開きます。保存時に`git add`、`commit`、`push`が自動実行されます。ファイルがなければテンプレートから作成します。
-- **Get Latest Version (Sync)** — リモートの変更をpullします。競合検出時は（**Backup**がONの場合）`.backup/`に自動バックアップ後、解決します。最新状態の場合はスキップします。
+- **Get Latest Version (Sync)** — リモートの変更をpullします。競合検出時は（**Backup**がONの場合）`.backup/`に自動バックアップ後、解決します。最新状態の場合はスキップします。設定されたSolidWorksテンプレート/ライブラリリポジトリも同時に同期されます（競合時はリモート優先、ローカル変更は`git stash`に保持）。
 - **Merge main branch into current branch** — `main`を現在のブランチにマージ、コミット、プッシュ後、元のブランチに復帰します。マージ前に（**Backup**がONの場合）自動バックアップ。既存マージ済みの場合はスキップします。
+- **SolidWorks library (status / Pull Library)** — 同期ボタンの下に、SolidWorksテンプレート/ライブラリリポジトリのローカルパスと直近の同期結果を表示します。**[Pull Library]** はSyncチェックボックスの状態に関わらず、そのリポジトリを即座に同期します。
 - **Cleanup LFS Cache** — 未使用の`.git/lfs/objects/`をスキャン・削除するウィザードを開き、ディスク容量を解放します。
-- **Sync** — チェックボックス。ON時、起動またはワークスペース変更時に「同期」→「mainマージ」を自動実行します。
-- **Backup** — チェックボックス。ON時、マージ/pull中の競合発生時、競合解決ポップアップ表示前に競合ファイルを`.backup/`に`_OURS`/`_THEIRS`サフィックス付きコピーとして自動バックアップします。`config.json`の`auto_backup_conflicts`キーに保存されます。
+- **Sync** — チェックボックス。ON時、起動またはワークスペース変更時に「同期」→「mainマージ」を自動実行し、SolidWorksテンプレート/ライブラリリポジトリも常に最新版へpullします。
+- **Backup** — チェックボックス。ON時、マージ/pull中の競合発生時、競合解決ポップアップ表示前に競合ファイルを`.backup/`に`_OURS`/`_THEIRS`サフィックス付きコピーとして自動バックアップします。`config.json`の`auto_backup_conflicts`キーに保存されます。`.backup/`フォルダは`.gitignore`と`.git/info/exclude`に自動登録されGitの追跡対象から確実に除外され、既にコミット済みの`.backup`ファイルは次回アップロード時にインデックスから削除されます。
 - **Lock** — チェックボックス。ON時、SolidWorksでファイルが開かれると自動的にLFS Lockを取得し、閉じると解除します。アセンブリを開くとそのコンポーネントも自動ロックされます。手動のLock/Unlockボタンは常に機能します。`config.json`の`auto_lock`キーに保存されます。
 - **Live Monitor** — SolidWorks状態(Active/Inactive)、総ファイル数、開かれているファイル、ロック済みファイル、リポジトリサイズをリアルタイム表示します。
 
@@ -70,9 +71,14 @@ GitワークフローとGit LFSロックを統合し、3D CADモデルの同時�
 
 ## 5. 設定モード
 
-Git、SolidWorks、および統合に関するシステムパスを構成します。
+Git、SolidWorks、および統合に関するシステムパスを構成します。入力項目は性格別にグループ化されているため、必要なグループだけを確認できます（マウスホイールはどの入力欄の上でも動作します）。
 
-- **Path Configurations** — Git、Git LFS、SolidWorks、eDrawings、Git Token、サーバータイプ/URL、デフォルトディレクトリ、GitHub組織名のパス設定。各フィールドに「検索」ボタンがありCドライブをスキャン。`auto_sync`と`auto_backup_conflicts`と`auto_lock`はダッシュボードのチェックボックスで管理。
+- **🧰 Executables & Paths** — Git / Git LFS / SolidWorks / eDrawings 実行ファイルのパス。「検索」ボタンでCドライブをスキャンし、無効なパスは赤色で表示されます。
+- **🔗 Git Server & Repository** — Gitサーバータイプ/URL、Git Token、デフォルトローカルディレクトリ、GitHub組織名。サーバータイプが`github`の場合はURL欄が`https://github.com`に固定されます。
+- **📚 SolidWorks Templates / Library** — SolidWorksのテンプレート・ライブラリ・設定を管理する専用Gitリポジトリの **Repo URL** と **Local Path**。既定値は `https://github.com/mech-higenmotor/SOLIDWORKS.git` と `D:\github\SOLIDWORKS`。ローカルパスにリポジトリが無く、リモートに到達できる場合は同期時に自動cloneして導入し、以降の同期で競合が発生した場合は常にリモート版を優先します（ローカル変更は`git stash`に保存）。URLを空にすると自動管理が無効になります。
+- **🤖 LLM Assist (Commit Messages)** — コミットメッセージ草案生成に使うProvider、API Style、Base URL、Model、API Key、Timeout、Verify SSL、Extra Params、Prompt File、Custom Instructions。**[Test LLM]** で保存前に接続を確認できます。
+- **⚙️ Advanced** — Auto Background Diff などのバックグラウンド動作。コミットメッセージのプリセット（`commit_messages`）やBOM列順（`column_order`）のようなリスト値は入力欄に並べず、**[Edit]** ボタンで`config.json`を編集します。
+- **備考** — `auto_sync`、`auto_backup_conflicts`、`auto_lock` はダッシュボードのチェックボックスで管理されるため、この画面には表示されません。
 - **Save Configuration** — 設定を`config.json`に保存し、接続を再初期化します。
 - **Edit** — `config.json`をメモ帳で直接開き手動編集。
 

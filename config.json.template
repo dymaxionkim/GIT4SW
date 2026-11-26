@@ -9,6 +9,8 @@
     "gitea_url": "",
     "default_local_path": "D:\\github",
     "organization_name": "",
+    "sw_library_repo_url": "https://github.com/mech-higenmotor/SOLIDWORKS.git",
+    "sw_library_local_path": "D:\\github\\SOLIDWORKS",
     "auto_sync": false,
     "auto_backup_conflicts": false,
     "auto_lock": false,

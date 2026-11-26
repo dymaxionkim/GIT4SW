@@ -576,6 +576,25 @@ def parse_lfs_pointer_errors(err_str):
     return files
 
 
+# ---------------------------------------------------------------------------
+# App-internal backup folder
+# ---------------------------------------------------------------------------
+# GIT4SW writes conflict / diff scratch copies into "<repo>/.backup/".  They are
+# local working files and must never be tracked, so every code path that lists
+# or stages files filters this folder out.
+
+BACKUP_DIR_NAME = ".backup"
+BACKUP_IGNORE_LINES = (".backup/", "**/.backup/")
+
+
+def is_backup_path(path):
+    """True when `path` lives inside an app-internal .backup folder (any depth)."""
+    if not path:
+        return False
+    parts = str(path).replace("\\", "/").split("/")
+    return any(part.lower() == BACKUP_DIR_NAME for part in parts if part)
+
+
 class MergeConflictError(Exception):
     """Raised when git merge results in one or more conflicts."""
     def __init__(self, message, conflicted_files):
@@ -595,7 +614,16 @@ class GitService:
         self._apply_git_paths()
         self.repo = None
         self._default_branch_cached = None
+        self.last_purged_backups = []
         self._load_repo()
+
+        # Keep the app-internal .backup folder out of Git from the very first run,
+        # including repositories created/cloned before the ignore rule existed.
+        try:
+            if self.repo is not None:
+                self.ensure_backup_ignored()
+        except Exception as e:
+            print(f"DEBUG: Failed to enforce .backup ignore rule on load: {e}")
     
     def _load_config_paths(self):
         config_path = get_config_file_path()
@@ -725,6 +753,162 @@ class GitService:
         self._load_repo()
         return self.repo is not None
 
+    # -- app-internal .backup folder -------------------------------------
+    def ensure_backup_ignored(self):
+        """Guarantee that `.backup/` is never tracked by Git.
+
+        The pattern is written to the workspace `.gitignore` (so the whole team
+        inherits it) and to the repository-local exclude file (a safety net that
+        works even when `.gitignore` is not committed or gets reverted).
+        Existing rules are left untouched. Returns True when a file was updated.
+        """
+        if not self.is_git_repo():
+            return False
+
+        changed = False
+
+        # 1) Workspace .gitignore (tracked, shared with the team).
+        gitignore_path = os.path.join(self.repo_path, ".gitignore")
+        try:
+            existing = ""
+            if os.path.exists(gitignore_path):
+                with open(gitignore_path, "r", encoding="utf-8", errors="ignore") as f:
+                    existing = f.read()
+            present = {line.strip() for line in existing.splitlines()}
+            missing = [line for line in BACKUP_IGNORE_LINES if line not in present]
+            if missing:
+                block = "" if (not existing or existing.endswith("\n")) else "\n"
+                block += "\n# GIT4SW: app-internal backup folder (never commit)\n"
+                block += "\n".join(missing) + "\n"
+                with open(gitignore_path, "a", encoding="utf-8") as f:
+                    f.write(block)
+                changed = True
+        except Exception as e:
+            print(f"DEBUG: Failed to add .backup rule to .gitignore: {e}")
+
+        # 2) Repository-local exclude file (never committed).
+        try:
+            exclude_arg = self._run_lfs_cmd(["git", "rev-parse", "--git-path", "info/exclude"]).strip()
+            exclude_path = exclude_arg.replace("/", os.sep)
+            if exclude_path and not os.path.isabs(exclude_path):
+                exclude_path = os.path.join(self.repo_path, exclude_path)
+            if exclude_path:
+                exclude_path = os.path.normpath(exclude_path)
+                existing = ""
+                if os.path.exists(exclude_path):
+                    with open(exclude_path, "r", encoding="utf-8", errors="ignore") as f:
+                        existing = f.read()
+                present = {line.strip() for line in existing.splitlines()}
+                missing = [line for line in BACKUP_IGNORE_LINES if line not in present]
+                if missing:
+                    os.makedirs(os.path.dirname(exclude_path), exist_ok=True)
+                    block = "" if (not existing or existing.endswith("\n")) else "\n"
+                    block += "\n# GIT4SW: app-internal backup folder\n"
+                    block += "\n".join(missing) + "\n"
+                    with open(exclude_path, "a", encoding="utf-8") as f:
+                        f.write(block)
+                    changed = True
+        except Exception as e:
+            print(f"DEBUG: Failed to add .backup rule to the local exclude file: {e}")
+
+        return changed
+
+    def purge_tracked_backups(self):
+        """Remove already committed `.backup` entries from the Git index.
+
+        The files stay on disk (they are local scratch copies); the removal is
+        staged so the next commit drops them from the repository. Returns the
+        workspace-relative paths that were untracked.
+        """
+        self.last_purged_backups = []
+        if not self.is_git_repo():
+            return []
+
+        try:
+            out = self._run_lfs_cmd(["git", "-c", "core.quotepath=false", "ls-files"])
+        except Exception as e:
+            print(f"DEBUG: Failed to list tracked files while purging .backup: {e}")
+            return []
+
+        tracked = []
+        for line in out.splitlines():
+            rel = line.strip().replace("\\", "/")
+            if not rel:
+                continue
+            if rel.startswith('"') and rel.endswith('"'):
+                rel = rel[1:-1]
+                try:
+                    import codecs
+                    b, _ = codecs.escape_decode(bytes(rel, "utf-8"))
+                    rel = b.decode("utf-8").replace("\\", "/")
+                except Exception:
+                    pass
+            if is_backup_path(rel):
+                tracked.append(rel)
+
+        if not tracked:
+            return []
+
+        for i in range(0, len(tracked), 100):
+            chunk = tracked[i:i + 100]
+            try:
+                self._run_lfs_cmd(["git", "rm", "--cached", "--ignore-unmatch", "--"] + chunk)
+            except Exception as e:
+                print(f"DEBUG: Failed to untrack .backup file(s) {chunk[:3]}: {e}")
+
+        self.last_purged_backups = tracked
+        return tracked
+
+    def stage_for_commit(self, file_paths, log=None):
+        """Stage workspace-relative paths for a commit.
+
+        `.backup` scratch paths are always skipped and previously committed
+        `.backup` entries are dropped from the index, so uploads can never
+        re-introduce them. Returns (added, removed, skipped_backup).
+        """
+        if not self.is_git_repo():
+            raise RuntimeError("Not a git repository.")
+
+        purged = self.purge_tracked_backups()
+        if purged and log:
+            try:
+                log(f"🧹 Removed {len(purged)} .backup file(s) from Git tracking.", "warning")
+            except Exception:
+                pass
+
+        candidates = []
+        skipped = []
+        seen = set()
+        for fp in file_paths or []:
+            rel = str(fp).replace("\\", "/")
+            while rel.startswith("./"):
+                rel = rel[2:]
+            rel = rel.lstrip("/")
+            if not rel or rel in seen:
+                continue
+            seen.add(rel)
+            if is_backup_path(rel):
+                skipped.append(rel)
+                continue
+            candidates.append(rel)
+
+        files_to_add = []
+        files_to_rm = []
+        for rel in candidates:
+            abs_path = os.path.join(self.repo_path, *rel.split("/"))
+            if os.path.exists(abs_path):
+                files_to_add.append(rel)
+            else:
+                files_to_rm.append(rel)
+
+        chunk_size = 100
+        for i in range(0, len(files_to_add), chunk_size):
+            self._run_lfs_cmd(["git", "add", "--"] + files_to_add[i:i + chunk_size])
+        for i in range(0, len(files_to_rm), chunk_size):
+            self._run_lfs_cmd(["git", "rm", "--ignore-unmatch", "--"] + files_to_rm[i:i + chunk_size])
+
+        return files_to_add, files_to_rm, skipped
+
     def clone_repository(self, remote_url):
         """Clones a remote repository into self.repo_path."""
         parent_dir = os.path.dirname(self.repo_path)
@@ -804,6 +988,12 @@ class GitService:
         if ignore_to_add:
             with open(gitignore_path, "a", encoding="utf-8") as f:
                 f.writelines(ignore_to_add)
+
+        # Never track the app-internal .backup folder in newly created repositories.
+        try:
+            self.ensure_backup_ignored()
+        except Exception as e:
+            print(f"DEBUG: Failed to add .backup ignore rule on init: {e}")
 
         # Commit initial configurations
         try:
@@ -928,7 +1118,10 @@ class GitService:
                             filepath = b.decode("utf-8").replace("\\", "/")
                         except Exception:
                             pass
-                    
+
+                    if is_backup_path(filepath):
+                        continue
+
                     is_unmerged = status_code in {'DD', 'AA', 'UU', 'AU', 'UD', 'UA', 'DU'}
                     if is_unmerged:
                         is_new = False
@@ -966,11 +1159,10 @@ class GitService:
                         pass
                 
                 rel_path = line.replace("\\", "/")
-                rel_path_lower = rel_path.lower()
                 # .backup/ is app-internal scratch space and must never appear in the
                 # File Manager list, even if some files were tracked before it was
                 # added to .gitignore. Exclude the directory at any nesting level.
-                if ".backup" in rel_path_lower.split("/"):
+                if is_backup_path(rel_path):
                     continue
                 ext = os.path.splitext(rel_path)[1].lower()
                 if ext in [".sldprt", ".sldasm", ".slddrw"]:
@@ -1202,20 +1394,12 @@ class GitService:
             rel_paths.append(rel_path)
             
         try:
-            files_to_add = []
-            files_to_rm = []
-            for fp in rel_paths:
-                abs_path = os.path.join(self.repo_path, fp)
-                if os.path.exists(abs_path):
-                    files_to_add.append(fp)
-                else:
-                    files_to_rm.append(fp)
-            
-            chunk_size = 100
-            for i in range(0, len(files_to_add), chunk_size):
-                self._run_lfs_cmd(["git", "add", "--"] + files_to_add[i:i + chunk_size])
-            for i in range(0, len(files_to_rm), chunk_size):
-                self._run_lfs_cmd(["git", "rm", "--ignore-unmatch", "--"] + files_to_rm[i:i + chunk_size])
+            files_to_add, files_to_rm, skipped_backups = self.stage_for_commit(rel_paths)
+            if skipped_backups and not files_to_add and not files_to_rm:
+                raise RuntimeError(
+                    "The selected file(s) live inside the app-internal .backup folder "
+                    "and can never be committed."
+                )
         except Exception as e:
             raise RuntimeError(f"Failed to stage/remove files: {e}")
             
@@ -1553,7 +1737,10 @@ class GitService:
                         except Exception:
                             pass
                     filepath_norm = filepath.replace("\\", "/")
-                         
+
+                    if is_backup_path(filepath_norm):
+                        continue
+
                     abs_path = os.path.join(self.repo_path, filepath_norm)
                     if not os.path.exists(abs_path):
                         continue
@@ -2080,4 +2267,371 @@ class GitService:
                         print(f"DEBUG: Configured local credential.https://{domain}.username to {username}")
                     except Exception as e:
                         print(f"DEBUG: Failed to configure local git credentials: {e}")
+
+
+# ===========================================================================
+# SolidWorks template / library / settings repository
+# ===========================================================================
+# SolidWorks templates, design libraries and user settings are kept in a
+# separate Git repository so they can be shared by the whole team.  The local
+# clone of that repository is treated as a managed mirror of the remote: it is
+# created automatically when missing and is always brought up to date, with the
+# remote revision winning whenever a conflict occurs.
+
+DEFAULT_SW_LIBRARY_REPO_URL = "https://github.com/mech-higenmotor/SOLIDWORKS.git"
+DEFAULT_SW_LIBRARY_LOCAL_PATH = os.path.normpath(r"D:\github\SOLIDWORKS")
+
+
+def resolve_sw_library_local_path(config):
+    """Return the local clone path of the SolidWorks template/library repository.
+
+    `sw_library_local_path` wins when configured (relative paths are resolved
+    against the workspace's parent folder).  When it is empty the documented
+    default path is used.
+    """
+    config = config or {}
+
+    configured = str(config.get("sw_library_local_path") or "").strip()
+    if configured:
+        expanded = os.path.expandvars(os.path.expanduser(configured))
+        if not os.path.isabs(expanded):
+            workspace = str(config.get("workspace_path") or "").strip()
+            base = os.path.dirname(os.path.normpath(workspace)) if workspace else os.getcwd()
+            expanded = os.path.join(base, expanded)
+        return os.path.normpath(expanded)
+
+    return DEFAULT_SW_LIBRARY_LOCAL_PATH
+
+
+class SolidWorksLibraryService:
+    """Synchronises the separate SolidWorks template/library/settings repository.
+
+    Guarantees:
+      * The repository is cloned automatically when the local folder is missing.
+      * Every sync fetches first and pulls the checked-out branch, then merges the
+        remote default branch so the published templates/library/settings are
+        always present locally.
+      * Whenever a merge conflicts - or uncommitted local changes block it - the
+        remote revision is preferred automatically (``merge -X theirs``), with a
+        hard reset to ``origin/<branch>`` as the final fallback.  Local
+        modifications are kept in a Git stash so nothing is silently lost.
+    """
+
+    def __init__(self, repo_url, local_path, config_path=None):
+        self.repo_url = (repo_url or "").strip()
+        if local_path:
+            self.local_path = os.path.normpath(os.path.abspath(local_path))
+        else:
+            self.local_path = ""
+        self.config_path = config_path
+
+    # -- basic helpers ---------------------------------------------------
+    def is_configured(self):
+        return bool(self.repo_url and self.local_path)
+
+    def is_cloned(self):
+        if not self.local_path:
+            return False
+        git_dir = os.path.join(self.local_path, ".git")
+        # A missing or half-initialised ".git" folder counts as "not cloned yet".
+        return os.path.isdir(git_dir) and os.path.exists(os.path.join(git_dir, "HEAD"))
+
+    def _git(self, args, cwd=None):
+        """Run a git command, returning (returncode, stdout, stderr)."""
+        if self.config_path:
+            set_config_file_path(self.config_path)
+        cmd = [get_configured_git_exe()] + list(args)
+        return run_git_subprocess(cmd, cwd or self.local_path, check=False)
+
+    def _git_ok(self, args, cwd=None):
+        code, out, err = self._git(args, cwd=cwd)
+        return code == 0, (out or "").strip(), (err or "").strip()
+
+    def _rev_parse(self, *args):
+        ok, out, _ = self._git_ok(["rev-parse", *args])
+        return out if ok else ""
+
+    def _is_ancestor(self, ancestor, descendant):
+        if not ancestor or not descendant:
+            return False
+        code, _, _ = self._git(["merge-base", "--is-ancestor", ancestor, descendant])
+        return code == 0
+
+    # -- remote / branch resolution --------------------------------------
+    def _ensure_origin(self):
+        """Point 'origin' at the URL configured in the app."""
+        ok, current, _ = self._git_ok(["remote", "get-url", "origin"])
+        if ok and current:
+            if current == self.repo_url:
+                return
+            self._git(["remote", "set-url", "origin", self.repo_url])
+        else:
+            self._git(["remote", "add", "origin", self.repo_url])
+
+    def _remote_default_branch(self):
+        """Return the remote's default branch name ('main'/'master'), or ''."""
+        candidates = []
+
+        ok, out, _ = self._git_ok(["symbolic-ref", "--quiet", "--short", "refs/remotes/origin/HEAD"])
+        if ok and out:
+            candidates.append(out.split("/", 1)[-1])
+
+        candidates.extend(["main", "master"])
+
+        seen = set()
+        for name in candidates:
+            if not name or name in seen:
+                continue
+            seen.add(name)
+            if self._remote_tip(name):
+                return name
+        return ""
+
+    def _remote_tip(self, branch_name):
+        """Return the commit hash of origin/<branch_name>, or '' when absent."""
+        if not branch_name:
+            return ""
+        return self._rev_parse("--verify", f"origin/{branch_name}^{{commit}}")
+
+    # -- clone / hard reset ----------------------------------------------
+    def _remote_is_reachable(self, cwd):
+        """Verify that the configured remote repository actually exists."""
+        code, out, err = self._git(["ls-remote", "--heads", self.repo_url], cwd=cwd)
+        if code == 0:
+            return True, out
+        return False, (err or out)
+
+    def _clone(self, emit):
+        """Clone the remote repository into the configured local path."""
+        if not self.local_path:
+            raise RuntimeError("SolidWorks library local path is not configured.")
+
+        parent = os.path.dirname(self.local_path) or os.getcwd()
+        try:
+            os.makedirs(parent, exist_ok=True)
+        except Exception as e:
+            raise RuntimeError(
+                f"Cannot create the SolidWorks library folder '{parent}': {e}"
+            )
+
+        if os.path.isdir(self.local_path) and os.listdir(self.local_path):
+            raise RuntimeError(
+                f"Cannot clone the SolidWorks library repository into '{self.local_path}': "
+                "the folder already exists and is not a Git repository. "
+                "Please move or empty that folder and try again."
+            )
+
+        # Verify that the remote repository really exists (and is reachable with the
+        # configured credentials) before touching the local folder.
+        emit(f"Checking SolidWorks library repository {self.repo_url} ...")
+        reachable, detail = self._remote_is_reachable(parent)
+        if not reachable:
+            raise RuntimeError(
+                f"SolidWorks library repository is not accessible: {self.repo_url}\n{detail}"
+            )
+
+        emit(f"Remote repository verified. Cloning into {self.local_path} ...")
+        code, out, err = self._git(["clone", self.repo_url, self.local_path], cwd=parent)
+        if code != 0:
+            raise RuntimeError(
+                f"git clone failed for {self.repo_url}: {err or out}"
+            )
+
+        self._ensure_origin()
+        # Make sure the LFS filters are active for the fresh clone (best effort).
+        self._git(["lfs", "install", "--local"])
+        emit(f"SolidWorks library repository cloned: {self.local_path}", "success")
+        return f"cloned into {self.local_path}"
+
+    # -- merge / discard helpers -----------------------------------------
+    def _shelve_local_changes(self, emit, label):
+        """Set uncommitted local changes aside so the remote version can be applied."""
+        if not self._git_ok(["status", "--porcelain"])[1]:
+            return
+        stamp = datetime.datetime.now().strftime("%Y%m%d-%H%M%S")
+        message = f"git4sw-sw-library-{label}-{stamp}"
+        code, out, err = self._git(["stash", "push", "--include-untracked", "-m", message])
+        if code != 0:
+            emit(
+                f"Could not stash local changes ({err or out}); discarding them instead.",
+                "warning",
+            )
+            self._git(["reset", "--hard", "HEAD"])
+            return
+        emit(
+            f"Local changes were stashed as '{message}' so the remote version could be applied.",
+            "warning",
+        )
+
+    def _hard_reset(self, branch, remote_ref):
+        """Discard local work and mirror the remote revision (remote wins)."""
+        self._git(["merge", "--abort"])
+        self._git(["rebase", "--abort"])
+
+        ok, out, err = self._git_ok(["reset", "--hard", remote_ref])
+        if not ok:
+            raise RuntimeError(f"git reset --hard {remote_ref} failed: {err or out}")
+
+        current = self._rev_parse("--abbrev-ref", "HEAD")
+        if branch and current != branch:
+            ok, out, err = self._git_ok(["checkout", "-f", "-B", branch, remote_ref])
+            if not ok:
+                raise RuntimeError(f"git checkout -f -B {branch} failed: {err or out}")
+
+    def _merge_remote(self, remote_ref, label, emit, allow_hard_reset=True):
+        """Bring HEAD up to date with `remote_ref`, preferring the remote on conflicts.
+
+        Returns one of: 'up-to-date', 'fast-forward', 'merge-remote-preferred',
+        'hard-reset', 'no-remote-branch', 'failed'.
+        """
+        remote_tip = self._rev_parse("--verify", f"{remote_ref}^{{commit}}")
+        if not remote_tip:
+            return "no-remote-branch"
+
+        if self._rev_parse("HEAD") == remote_tip:
+            return "up-to-date"
+
+        def attempt():
+            if self._is_ancestor(self._rev_parse("HEAD"), remote_tip):
+                ok, out, err = self._git_ok(["merge", "--ff-only", "--no-edit", remote_ref])
+                return ok, out, err, "fast-forward"
+            emit(
+                f"Local and remote revisions of '{label}' diverged; "
+                "merging with the remote version taking precedence.",
+                "warning",
+            )
+            ok, out, err = self._git_ok(["merge", "--no-edit", "-X", "theirs", remote_ref])
+            return ok, out, err, "merge-remote-preferred"
+
+        ok, out, err, kind = attempt()
+        if not ok:
+            # Most likely uncommitted local changes are blocking the merge: set them
+            # aside (they stay recoverable via "git stash list") and retry.
+            emit(
+                f"Updating from '{label}' was blocked ({err or out}). "
+                "Setting local modifications aside and preferring the remote version.",
+                "warning",
+            )
+            self._git(["merge", "--abort"])
+            self._git(["rebase", "--abort"])
+            self._shelve_local_changes(emit, "autosync")
+            ok, out, err, kind = attempt()
+            if not ok:
+                self._git(["merge", "--abort"])
+                if not allow_hard_reset:
+                    emit(f"Could not merge '{label}' automatically ({err or out}).", "warning")
+                    return "failed"
+                emit(
+                    f"Automatic merge of '{label}' failed ({err or out}); "
+                    "resetting the local branch to the remote revision.",
+                    "warning",
+                )
+                self._hard_reset(self._rev_parse("--abbrev-ref", "HEAD"), remote_ref)
+                return "hard-reset"
+
+        if self._git_ok(["diff", "--name-only", "--diff-filter=U"])[1]:
+            self._git(["merge", "--abort"])
+            if not allow_hard_reset:
+                emit(f"Unresolved conflicts remained while merging '{label}'.", "warning")
+                return "failed"
+            emit("Unresolved conflicts detected; taking the remote version.", "warning")
+            self._hard_reset(self._rev_parse("--abbrev-ref", "HEAD"), remote_ref)
+            return "hard-reset"
+        return kind
+
+    # -- public API -------------------------------------------------------
+    def sync(self, log=None):
+        """Bring the local library repository up to date with the remote.
+
+        Must be called from a background thread when used by the GUI.  `log` is
+        an optional ``callable(message, level)`` used for progress messages.
+        Returns a short human readable status string.
+        """
+        def emit(message, level="info"):
+            if log:
+                try:
+                    log(message, level)
+                except Exception:
+                    pass
+
+        if not self.is_configured():
+            return "not configured"
+
+        if not self.is_cloned():
+            return self._clone(emit)
+
+        self._ensure_origin()
+
+        emit("Fetching SolidWorks templates/library repository ...")
+        ok, out, err = self._git_ok(["fetch", "origin", "--prune", "--tags"])
+        if not ok:
+            raise RuntimeError(f"git fetch failed for {self.repo_url}: {err or out}")
+
+        default_branch = self._remote_default_branch()
+        current = self._rev_parse("--abbrev-ref", "HEAD")
+        detached = (not current) or current.upper() == "HEAD"
+
+        if detached:
+            if not default_branch:
+                return "remote repository has no commits yet"
+            emit(f"Detached HEAD detected; switching to the remote branch '{default_branch}' ...")
+            ok, out, err = self._git_ok(["checkout", "-f", "-B", default_branch, f"origin/{default_branch}"])
+            if not ok:
+                self._hard_reset(default_branch, f"origin/{default_branch}")
+            head = self._rev_parse("HEAD")
+            return f"switched to '{default_branch}' @ {head[:7]} (remote version)"
+
+        branch = current
+        if not self._remote_tip(branch) and not default_branch:
+            return "remote repository has no commits yet"
+
+        updates = []
+
+        # 1) Plain pull of the branch that is currently checked out.
+        branch_tip = self._remote_tip(branch)
+        if branch_tip:
+            updates.append(
+                (branch, self._merge_remote(f"origin/{branch}", branch, emit, allow_hard_reset=True))
+            )
+        else:
+            emit(f"Branch '{branch}' does not exist on the remote; pull skipped.", "info")
+
+        # 2) The remote default branch holds the published templates/library/settings,
+        #    so its latest revision is always merged into the working branch as well.
+        if default_branch and default_branch != branch:
+            default_tip = self._remote_tip(default_branch)
+            if default_tip:
+                if self._is_ancestor(default_tip, self._rev_parse("HEAD")):
+                    updates.append((default_branch, "up-to-date"))
+                else:
+                    emit(f"Merging the latest '{default_branch}' content into '{branch}' ...")
+                    updates.append(
+                        (
+                            default_branch,
+                            self._merge_remote(
+                                f"origin/{default_branch}", default_branch, emit, allow_hard_reset=False
+                            ),
+                        )
+                    )
+
+        head = self._rev_parse("HEAD")
+        changed = [(name, kind) for name, kind in updates if kind != "up-to-date"]
+        if not changed:
+            return f"already up-to-date ({branch} @ {head[:7]})"
+
+        parts = []
+        for name, kind in changed:
+            if kind == "fast-forward":
+                parts.append(f"fast-forwarded from origin/{name}")
+            elif kind == "merge-remote-preferred":
+                parts.append(f"merged origin/{name} (remote preferred)")
+            elif kind == "hard-reset":
+                parts.append(f"reset to origin/{name} (remote version)")
+            elif kind == "failed":
+                parts.append(f"could not merge origin/{name}")
+            elif kind == "no-remote-branch":
+                parts.append(f"origin/{name} missing")
+            else:
+                parts.append(f"{kind} from origin/{name}")
+        return f"{'; '.join(parts)} -> {branch} @ {head[:7]}"
 

@@ -442,6 +442,63 @@ gantt
 
 ---
 
+### 23단계: SolidWorks 템플릿/라이브러리 전용 저장소 자동 관리 (Milestone 23 - 2026-11-26)
+* **요구 사항**:
+  - Config 카테고리에 SolidWorks의 **template, library, 설정**을 보관하는 별도 Git 저장소의 **원격 주소**(기본값 `https://github.com/mech-higenmotor/SOLIDWORKS.git`)와 **로컬 경로**(기본값 `D:\github\SOLIDWORKS`) 설정을 추가합니다.
+  - Dashboard의 **Sync** 체크박스가 ON이면 해당 저장소도 함께 최신 버전으로 자동 `git pull` 되고, 충돌 시 로컬보다 **원격 버전을 선택**해 자동 병합되어야 합니다. **[Get Latest Version (Sync)]** 버튼에서도 동일하게 동작해야 합니다.
+  - 로컬 경로에 저장소가 없고 원격 저장소 접근이 확인되면 동기화 시 **자동 clone** 하여 설치합니다.
+* **구현 — `git_service.py` (`SolidWorksLibraryService`)**:
+  - `DEFAULT_SW_LIBRARY_REPO_URL` / `DEFAULT_SW_LIBRARY_LOCAL_PATH` 상수와 `resolve_sw_library_local_path()`를 추가했습니다. 상대 경로는 워크스페이스 상위 폴더 기준으로 해석합니다.
+  - `sync()`는 ① clone 여부 확인(없으면 `git ls-remote`로 원격 존재/인증을 먼저 검증한 뒤 `git clone`, 실패 시 폴더를 건드리지 않고 사유 반환) → ② `git fetch origin --prune --tags` → ③ 현재 브랜치 pull(로컬이 조상이면 `--ff-only`, 갈라졌으면 `merge -X theirs`) → ④ 원격 기본 브랜치(`origin/HEAD`→`main`/`master`)를 현재 브랜치에 병합 순으로 수행합니다.
+  - 병합이 미커밋 변경 때문에 차단되면 `git stash push -u`로 로컬 수정을 **보존**한 뒤 재시도하고, 그래도 실패하면 최종적으로 `git reset --hard origin/<branch>`로 원격 버전을 선택합니다. detached HEAD는 원격 기본 브랜치로 재부착합니다.
+  - `run_git_subprocess()`를 그대로 사용해 설정된 `git_path`/`git_token`/GCM 억제 환경과 자격 증명 주입을 공유하며, clone 후 `git lfs install --local`을 best-effort로 실행합니다.
+* **구현 — `ui_tk.py`**:
+  - Config 뷰에 `sw_library_repo_url` / `sw_library_local_path` 행을 Organization 항목 뒤에 추가했습니다. Local Path 행에는 **[Find]** 폴더 선택 버튼이 있고, 키가 없는 기존 `config.json`에는 기본값이 메모리에서 자동 주입됩니다(URL을 비우면 자동 관리 비활성화).
+  - `sync_repository()`의 백그라운드 `run()` **Step 0**에서 라이브러리 저장소를 항상 먼저 동기화하므로 **[Get Latest Version (Sync)]** 와 Auto Sync 양쪽에 동일하게 적용됩니다. 워크스페이스가 Git 저장소가 아니어도 Sync ON이면 라이브러리만 동기화합니다.
+  - Sync 체크박스를 ON으로 전환하면 즉시 1회 동기화를 트리거하도록 했습니다.
+  - Dashboard 동기화 카드 하단에 저장소 경로와 최근 동기화 결과를 표시하는 상태 라벨과 **[Pull Library]** 버튼을 추가했습니다. `threading.Lock` + 60초 스로틀로 중복 동기화를 방지하고, 라이브러리 경로가 워크스페이스와 겹치면 안전을 위해 동기화를 건너뜁니다.
+* **문서**: `config.json.template`에 신규 키를 추가하고, README(한/영)·Help(한/영/일)에 두 설정과 자동 clone/원격 우선 병합 규칙, 상태 라벨 및 **[Pull Library]** 버튼을 명시했습니다.
+* **검증**:
+  - 로컬 bare 원격 저장소 기반 통합 테스트 26건 통과: 자동 clone(중첩 폴더 생성 포함), up-to-date 스킵, fast-forward, 갈라진 이력의 원격 우선 병합, 미커밋 변경 차단 시 stash 후 재시도, 개인 브랜치 유지 + 기본 브랜치 병합, detached HEAD 재부착, origin URL 갱신, 미도달 원격 거부, 비어 있지 않은 폴더 거부, 기본 경로 해석.
+  - 임시 config를 사용한 GUI 스모크 테스트 13건 통과: 기본값 주입, Config 행/Find 버튼 렌더링, 저장 시 키 지속, URL 비우기 시 비활성화, 대시보드 상태 라벨 갱신.
+  - 실제 `https://github.com/mech-higenmotor/SOLIDWORKS.git` 대상 읽기 전용 점검(`ls-remote`, 기본 브랜치=main, 로컬 클론 존재) 및 전체 모듈 `py_compile` 통과.
+
+### 24단계: Config 화면 입력 항목 그룹화 (Milestone 24 - 2026-11-26)
+* **요구 사항**:
+  - Config 카테고리의 입력 위젯이 단순히 나열되어 있어 직관성이 떨어지므로, 변수 성격별로 분류해 사용자가 쉽게 구분할 수 있도록 합니다.
+* **구현 — `ui_tk.py` (Config 뷰 재구성)**:
+  - `CONFIG_SECTIONS` 메타데이터(제목·설명·키 목록)를 도입해 그룹 정의와 렌더링을 분리했습니다: **🧰 Executables & Paths** / **🔗 Git Server & Repository** / **📚 SolidWorks Templates / Library** / **🤖 LLM Assist (Commit Messages)** / **⚙️ Advanced**.
+  - 각 그룹은 에메랄드 액센트 바 + 연한 헤더 + 한 줄 설명 + 1px 테두리 패널로 구분하고, 라벨 칼럼 최소 폭(210px)을 공통 적용해 그룹 간 입력란 시작 위치를 정렬했습니다.
+  - 필드 생성 로직을 `_render_config_field()`로 분리해 Combobox/Entry/Find/Edit 위젯 규칙을 한 곳에 모았고, 그룹에 속하지 않은 키는 자동으로 **⚙️ Advanced** 로 배치합니다.
+  - 목록형 내부 값(`commit_messages`, `column_order`)은 한 줄 입력란으로 노출하지 않고 `CONFIG_HIDDEN_KEYS`로 숨겨 [Edit] 버튼(config.json 직접 편집)으로 안내합니다.
+  - 캔버스 스크롤이 라벨/입력란 위에서도 동작하도록 마우스휠을 모든 하위 위젯에 라우팅(`_bind_config_mousewheel`)하되, 휠로 값이 바뀔 수 있는 Combobox는 제외했습니다.
+  - 그룹 제목과 중복되는 라벨은 **Repo URL** / **Local Path** 로 축약했습니다.
+* **문서**: README(한/영)·Help(한/영/일)의 설정 모드 절을 그룹 설명 중심으로 개편하고, Config 스크린샷(`GIT4SW_05.png`)을 새 레이아웃으로 교체했습니다.
+* **검증**:
+  - 임시 config 기반 GUI 테스트 25건 통과: 그룹/키 매핑(중복·누락 없음), 숨김 키 제외, 재렌더링 안정성, 서버 타입 전환 시 URL 필드 활성/비활성, 저장 후 그룹 값과 숨김 키 보존, 스크롤 영역 확장.
+  - 실제 렌더링 스크린샷(PrintWindow, 상/하단)으로 그룹 구분·정렬·잘림 여부를 확인했습니다.
+
+### 25단계: `.backup/` 저장소 추적 완전 차단 (Milestone 25 - 2026-11-26)
+* **요구 사항**:
+  - `.backup/` 디렉토리와 그 하위 파일이 여전히 Git 관리 대상에 포함되는 것처럼 보이므로 확실히 제외합니다.
+* **원인 분석**:
+  - 앱이 새로 만드는 저장소는 `template/_gitignore`에 `.backup/` 규칙이 있지만, **기존에 클론/생성된 저장소**(예: `D:\github\N60`)의 `.gitignore`에는 규칙이 없어 `.backup` 파일이 untracked 상태로 `git status`에 노출되었습니다.
+  - "Upload Every Files Version"과 종료 시 업로드는 `git status --porcelain`의 **모든** 변경 파일을 스테이징하므로 `.backup` 파일이 그대로 커밋되어 추적 대상이 되었습니다. (확인 결과 N60에 `.backup/*.SLDASM`, `.backup/*.SLDDRW` 3건이 실제 추적 중)
+* **구현 — `git_service.py`**:
+  - `is_backup_path()`(경로 구성요소 기준·대소문자 무시·중첩 포함)와 `BACKUP_IGNORE_LINES`(`.backup/`, `**/.backup/`)를 추가했습니다.
+  - `ensure_backup_ignored()`: 워크스페이스 `.gitignore`와 `.git/info/exclude`(워크트리 대응 `git rev-parse --git-path`)에 규칙이 없을 때만 추가하며, `GitService` 생성 시와 저장소 초기화 시 자동 호출됩니다.
+  - `purge_tracked_backups()`: 이미 커밋된 `.backup` 항목을 `git rm --cached`로 인덱스에서 제거합니다(파일은 디스크에 보존, 다음 커밋에서 저장소에서 삭제).
+  - `stage_for_commit()`: 모든 업로드 경로가 공유하는 단일 스테이징 API로, `.backup` 경로를 항상 건너뛰고 purge를 선행합니다.
+  - `get_status()` / `clean_fake_modified_files()`의 필터를 `is_backup_path()`로 통일하고, `save_version()`이 `.backup`만 선택된 경우 명확한 오류를 반환하도록 했습니다.
+* **구현 — `ui_tk.py`**:
+  - "Upload Selected", "Upload Every Files Version", 종료 시 업로드에 중복 구현돼 있던 스테이징 코드를 `stage_for_commit()`으로 통합했습니다.
+  - `git status` 결과에서 `.backup` 경로를 먼저 제거하고, 제외된 개수를 로그로 안내합니다.
+* **검증**:
+  - 추적된 `.backup` + 미추적 `.backup` + 정상 파트로 구성한 임시 저장소 통합 테스트 **30건 통과**: 자동 ignore 등록/멱등성, `check-ignore` 확인, 추적 해제 및 스테이징 삭제, 중첩 `sub/.backup` 처리, `.gitignore`가 없는 저장소 자동 생성, `save_version` 거부, 파일 목록 비노출.
+  - 전체 모듈 `py_compile` 통과.
+
+---
+
 1. **동기화 시 충돌 파일 시각적 차이 비교 (CAD Diff)**: eDrawings 뷰어 등을 활용하여 충돌이 발생한 로컬 도면과 원격 도면의 썸네일을 좌우로 배치해 변경 이력을 한눈에 대조해 볼 수 있는 시각화 인터페이스 제공안 고려 권장.
 2. **다중 사용자 LFS Locks 시각화 고도화**: 현재 Locks 정보는 텍스트 리스트 형태로 표시되나, 네트워크 토폴로지 맵 또는 디자이너 프로필과 매칭하여 동시 협업 중인 파일 간의 종속성을 시각적으로 경고해 주는 협업 뷰 제공 검토 권장.
 

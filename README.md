@@ -19,7 +19,7 @@ When designing with SolidWorks, CAD binary files—drawings (`.slddrw`), parts (
 ### CAD Collaboration & Safety
 * **Auto Lock & Real-Time Monitor**: A background monitor tracks open documents via the SolidWorks COM API, automatically acquiring a Git LFS lock when a file (or assembly component) is opened and releasing it when closed. Toggleable via the Dashboard **Lock** checkbox (`auto_lock` in config).
 * **Work Safety Guards**: Blocks uploads if target files are still open in SolidWorks or locked by another user. Warns before switching branches with unsaved changes. Preview/batch tools (**eDrawings**, **EXPORT**, **BOM**) open files in `ReadOnly` mode without interfering with locks.
-* **Conflict Resolution & Auto Backup**: Detects merge/pull conflicts (including Git LFS pointer conflicts) and presents a multi-file **Ours / Theirs** resolution dialog. Before resolving, conflicted files are backed up to `.backup/` as `<filename>_OURS.<ext>` and `<filename>_THEIRS.<ext>` (toggleable via **Backup** / `auto_backup_conflicts`).
+* **Conflict Resolution & Auto Backup**: Detects merge/pull conflicts (including Git LFS pointer conflicts) and presents a multi-file **Ours / Theirs** resolution dialog. Before resolving, conflicted files are backed up to `.backup/` as `<filename>_OURS.<ext>` and `<filename>_THEIRS.<ext>` (toggleable via **Backup** / `auto_backup_conflicts`). `.backup/` is registered in `.gitignore` and `.git/info/exclude` automatically so it is never tracked; previously committed `.backup` files are dropped from the repository on the next upload.
 
 ### Git & Multi-Server Workflow
 * **GitHub & Gitea Support**: Supports both `github.com` (via PyGithub) and self-hosted Gitea servers such as Codeberg (via Gitea REST API v1). Configured via `git_server_type` and `gitea_url`.
@@ -86,7 +86,7 @@ Copy `config.json.template` to `config.json` (if not already present) or configu
 
 ![](GIT4SW_05.png)
 
-Open the **Config** tab from the bottom of the left sidebar, fill in your local tool paths and credentials, and click **[Save Configuration]**. You can also click **[Edit]** to open the active JSON file in Notepad.
+Open the **Config** tab from the bottom of the left sidebar, fill in your local tool paths and credentials, and click **[Save Configuration]**. Inputs are grouped by purpose — **🧰 Executables & Paths**, **🔗 Git Server & Repository**, **📚 SolidWorks Templates / Library**, **🤖 LLM Assist (Commit Messages)** and **⚙️ Advanced** — and the mouse wheel scrolls the view from any field. You can also click **[Edit]** to open the active JSON file in Notepad.
 
 | Setting | Config Key | Description & Example |
 | :--- | :--- | :--- |
@@ -99,6 +99,8 @@ Open the **Config** tab from the bottom of the left sidebar, fill in your local 
 | **Git Server URL** | `gitea_url` | Base URL for Gitea (e.g., `https://codeberg.org`); auto-set for `github` |
 | **Default Local Path** | `default_local_path` | Default parent directory for cloning or creating new repositories (e.g., `D:\github`) |
 | **Organization Name** | `organization_name` | Target GitHub/Gitea organization for new repositories |
+| **Repo URL** (📚 SolidWorks Templates / Library) | `sw_library_repo_url` | Separate Git repository holding SolidWorks templates, design libraries and settings (default `https://github.com/mech-higenmotor/SOLIDWORKS.git`). Leave empty to disable automatic library management |
+| **Local Path** (📚 SolidWorks Templates / Library) | `sw_library_local_path` | Local clone of the SolidWorks library repository (default `D:\github\SOLIDWORKS`); cloned automatically during sync when the folder has no repository and the remote is reachable |
 | **Auto Sync** | `auto_sync` | Controlled via Dashboard **Sync** checkbox (`true` / `false`) |
 | **Auto Backup Conflicts** | `auto_backup_conflicts` | Controlled via Dashboard **Backup** checkbox (`true` / `false`, default `false`) |
 | **Auto Lock** | `auto_lock` | Controlled via Dashboard **Lock** checkbox (`true` / `false`, default `false`) |

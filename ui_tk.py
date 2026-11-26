@@ -15,7 +15,16 @@ import time
 import markdown
 from tkinterweb import HtmlFrame
 
-from git_service import GitService, MergeConflictError, run_git_subprocess, get_configured_git_exe
+from git_service import (
+    GitService,
+    MergeConflictError,
+    run_git_subprocess,
+    get_configured_git_exe,
+    SolidWorksLibraryService,
+    DEFAULT_SW_LIBRARY_REPO_URL,
+    resolve_sw_library_local_path,
+    is_backup_path,
+)
 from git_provider import (
     GitHubProvider, GiteaProvider, create_provider, detect_provider,
     parse_remote_url, load_config_for_token
@@ -1981,6 +1990,11 @@ class GIT4SWApp(tk.Tk):
         self.auto_sync_var = tk.BooleanVar(value=config_data.get("auto_sync", False))
         self.auto_backup_conflicts_var = tk.BooleanVar(value=config_data.get("auto_backup_conflicts", False))
         self.auto_lock_var = tk.BooleanVar(value=config_data.get("auto_lock", False))
+
+        # SolidWorks templates/library repository synchronization state
+        self._sw_library_sync_lock = threading.Lock()
+        self._last_sw_library_sync = 0.0
+        self._sw_library_status_text = ""
         
         self.setup_styles()
         self.init_ui()
@@ -2738,7 +2752,15 @@ class GIT4SWApp(tk.Tk):
         for llm_k, llm_v in DEFAULT_LLM_CONFIG.items():
             if llm_k not in config_data:
                 config_data[llm_k] = copy.deepcopy(llm_v)
-                
+
+        # SolidWorks templates/library repository (kept in a dedicated Git repo).
+        # The key is only defaulted when it is completely absent, so that clearing
+        # the URL explicitly disables the automatic library management.
+        if "sw_library_repo_url" not in config_data:
+            config_data["sw_library_repo_url"] = DEFAULT_SW_LIBRARY_REPO_URL
+        if not str(config_data.get("sw_library_local_path") or "").strip():
+            config_data["sw_library_local_path"] = resolve_sw_library_local_path(config_data)
+
         return config_data
 
     def create_config_view(self):
@@ -2805,22 +2827,206 @@ class GIT4SWApp(tk.Tk):
         
         return view
 
+    # Grouping of the Config view fields.  Each entry is
+    # (section title, one-line description, tuple of config keys).
+    CONFIG_SECTIONS = (
+        (
+            "🧰 Executables & Paths",
+            "Programs launched by GIT4SW: the Git/Git-LFS binaries and the CAD viewers.",
+            ("git_path", "git-lfs_path", "solidworks_path", "edrawings_path"),
+        ),
+        (
+            "🔗 Git Server & Repository",
+            "Remote server type and credentials, plus the default folder used when cloning or creating repositories.",
+            ("git_server_type", "gitea_url", "git_token", "default_local_path", "organization_name"),
+        ),
+        (
+            "📚 SolidWorks Templates / Library",
+            "Separate Git repository holding SolidWorks templates, design libraries and settings. "
+            "It is cloned automatically when missing and kept up to date on every Sync.",
+            ("sw_library_repo_url", "sw_library_local_path"),
+        ),
+        (
+            "🤖 LLM Assist (Commit Messages)",
+            "Model endpoint used to draft version descriptions from the CAD changes that were made.",
+            (
+                "llm_provider", "llm_api_style", "llm_base_url", "llm_model", "llm_api_key",
+                "llm_timeout_sec", "llm_verify_ssl", "llm_params", "llm_prompt_file",
+                "llm_custom_instructions",
+            ),
+        ),
+    )
+
+    # Keys that are edited elsewhere (Dashboard checkboxes) or intentionally hidden.
+    # `commit_messages` and `column_order` are internal list values used by the
+    # version-description combo box and the BOM exporter; they are edited through
+    # the raw config.json ("Edit" button) instead of a single-line text field.
+    CONFIG_HIDDEN_KEYS = (
+        "workspace_path", "auto_sync", "auto_backup_conflicts", "auto_lock",
+        "imagemagick_path", "commit_messages", "column_order",
+    )
+
+    # Keys that belong to the "Advanced" catch-all section and are shown first there.
+    CONFIG_ADVANCED_KEYS = ("auto_bg_diff",)
+
+    def _build_config_section(self, title, description):
+        """Create a titled group panel inside the Config view and return its field grid."""
+        section = tk.Frame(self.config_fields_frame, bg="#ffffff", bd=0,
+                           highlightthickness=1, highlightbackground="#e5e7eb")
+
+        header = tk.Frame(section, bg="#f9fafb")
+        header.pack(fill="x")
+        tk.Frame(header, bg="#059669", width=4).pack(side="left", fill="y")
+        tk.Label(
+            header, text=title, bg="#f9fafb", fg="#059669", anchor="w",
+            font=("TkDefaultFont", 10, "bold"),
+        ).pack(side="left", padx=(8, 0), pady=(6, 5))
+
+        if description:
+            tk.Label(
+                section, text=description, bg="#ffffff", fg="#6b7280", anchor="w",
+                justify="left", font=("TkDefaultFont", 8), wraplength=820,
+            ).pack(fill="x", padx=12, pady=(6, 0))
+
+        body = tk.Frame(section, bg="#ffffff")
+        body.pack(fill="x", padx=12, pady=(4, 10))
+        # A shared minimum label width keeps the input fields aligned across sections.
+        body.columnconfigure(0, weight=0, minsize=210)
+        body.columnconfigure(1, weight=1)
+        body.columnconfigure(2, weight=0)
+
+        section.pack(fill="x", expand=False, pady=(0, 10))
+        return body
+
+    def _render_config_field(self, parent, key, val, row, config_data, display_names, find_targets):
+        """Render a single label + input (+ optional action button) row."""
+        display_name = display_names.get(key, key.replace("_", " ").title())
+
+        lbl = ttk.Label(parent, text=f"{display_name}:", font=("TkDefaultFont", 9, "bold"),
+                        anchor="w", background="#ffffff")
+        lbl.grid(row=row, column=0, padx=(0, 10), pady=2, sticky="w")
+
+        if key in find_targets:
+            cb = ttk.Combobox(parent, state="readonly", width=60)
+            cb.set(str(val))
+            cb.grid(row=row, column=1, padx=0, pady=2, sticky="ew")
+            self.config_entries[key] = cb
+            self.config_combos[key] = cb
+
+            if val and not os.path.exists(str(val)):
+                cb.configure(foreground="#ef4444")
+            else:
+                cb.configure(foreground="#1f2937")
+            def _on_select(_e, c=cb):
+                if c.get() and os.path.exists(c.get()):
+                    c.configure(foreground="#1f2937")
+                else:
+                    c.configure(foreground="#ef4444")
+            cb.bind("<<ComboboxSelected>>", _on_select)
+
+            btn = ttk.Button(parent, text="Find", width=6,
+                             command=lambda k=key, t=find_targets[key]: self.find_executable(k, t))
+            btn.grid(row=row, column=2, padx=(8, 0), pady=2, sticky="w")
+            self.config_find_btns[key] = btn
+        elif key == "git_server_type":
+            cb = ttk.Combobox(parent, state="readonly", width=20)
+            cb['values'] = ["github", "gitea"]
+            cb.set(str(val) if str(val) in ("github", "gitea") else "github")
+            cb.grid(row=row, column=1, padx=0, pady=2, sticky="w")
+            self.config_entries[key] = cb
+            cb.bind("<<ComboboxSelected>>", self._on_git_server_type_changed)
+        elif key == "llm_api_style":
+            cb = ttk.Combobox(parent, state="readonly", width=20)
+            cb['values'] = ["openai", "gemini", "anthropic", "disabled"]
+            cur_style = str(val).strip().lower()
+            cb.set(cur_style if cur_style in ("openai", "gemini", "anthropic", "disabled") else "openai")
+            cb.grid(row=row, column=1, padx=0, pady=2, sticky="w")
+            self.config_entries[key] = cb
+        elif key in ("llm_verify_ssl", "auto_bg_diff"):
+            cb = ttk.Combobox(parent, state="readonly", width=12)
+            cb['values'] = ["true", "false"]
+            b_str = "true" if (val is True or str(val).strip().lower() == "true") else "false"
+            cb.set(b_str)
+            cb.grid(row=row, column=1, padx=0, pady=2, sticky="w")
+            self.config_entries[key] = cb
+        elif key == "gitea_url":
+            ent = ttk.Entry(parent)
+            server_type = config_data.get("git_server_type", "github")
+            if server_type == "github":
+                ent.insert(0, "https://github.com")
+                ent.config(state="disabled", foreground="#9ca3af")
+            else:
+                ent.insert(0, str(val) if val else "")
+            ent.grid(row=row, column=1, padx=0, pady=2, sticky="ew")
+            self.config_entries[key] = ent
+            self._gitea_url_entry = ent
+        elif key in ("default_local_path", "sw_library_local_path"):
+            ent = ttk.Entry(parent)
+            ent.insert(0, str(val))
+            ent.grid(row=row, column=1, padx=0, pady=2, sticky="ew")
+            self.config_entries[key] = ent
+            btn = ttk.Button(parent, text="Find", width=6,
+                             command=lambda k=key: self._browse_directory(k))
+            btn.grid(row=row, column=2, padx=(8, 0), pady=2, sticky="w")
+            self.config_find_btns[key] = btn
+        elif key == "llm_prompt_file":
+            ent = ttk.Entry(parent)
+            ent.insert(0, str(val))
+            ent.grid(row=row, column=1, padx=0, pady=2, sticky="ew")
+            self.config_entries[key] = ent
+            btn = ttk.Button(parent, text="Edit", width=6,
+                             command=self.edit_llm_prompt_file)
+            btn.grid(row=row, column=2, padx=(8, 0), pady=2, sticky="w")
+        elif key == "llm_params":
+            ent = ttk.Entry(parent)
+            if isinstance(val, dict):
+                ent.insert(0, json.dumps(val, ensure_ascii=False))
+            else:
+                ent.insert(0, str(val))
+            ent.grid(row=row, column=1, padx=0, pady=2, sticky="ew")
+            self.config_entries[key] = ent
+        elif key == "llm_api_key":
+            ent = ttk.Entry(parent, show="*")
+            ent.insert(0, str(val) if val else "")
+            ent.grid(row=row, column=1, padx=0, pady=2, sticky="ew")
+            self.config_entries[key] = ent
+            _, key_src = resolve_api_key(config_data, extra_search_dirs=[self.workspace_path])
+            src_text = f"({key_src})" if key_src != "none" else "(optional)"
+            lbl_src = ttk.Label(parent, text=src_text, foreground="#6b7280", background="#ffffff")
+            lbl_src.grid(row=row, column=2, padx=(8, 0), pady=2, sticky="w")
+        else:
+            ent = ttk.Entry(parent)
+            ent.insert(0, str(val))
+            ent.grid(row=row, column=1, padx=0, pady=2, sticky="ew")
+            self.config_entries[key] = ent
+
+    def _bind_config_mousewheel(self, widget):
+        """Route the mouse wheel over any Config field to the scrollable canvas."""
+        if not isinstance(widget, ttk.Combobox):
+            widget.bind("<MouseWheel>", self._on_config_mousewheel)
+        for child in widget.winfo_children():
+            self._bind_config_mousewheel(child)
+
+    def _on_config_mousewheel(self, event):
+        try:
+            if self.config_canvas.winfo_ismapped():
+                self.config_canvas.yview_scroll(int(-1 * (event.delta / 120)), "units")
+        except Exception:
+            pass
+
     def refresh_config_view(self):
         for widget in self.config_fields_frame.winfo_children():
             widget.destroy()
-            
+
         self.config_entries.clear()
         self.config_combos = {}
         self.config_find_btns = {}
-        
+        self._config_section_map = {}
+
         config_data = self.load_config_data()
         if not config_data:
             return
-            
-        self.config_fields_frame.columnconfigure(0, weight=0)
-        self.config_fields_frame.columnconfigure(1, weight=1)
-        self.config_fields_frame.columnconfigure(2, weight=0)
-        
+
         display_names = {
             "git_path": "Git Path",
             "git-lfs_path": "Git-Lfs Path",
@@ -2831,6 +3037,8 @@ class GIT4SWApp(tk.Tk):
             "git_token": "Git Token",
             "default_local_path": "Default Local Path",
             "organization_name": "Organization / Namespace",
+            "sw_library_repo_url": "Repo URL",
+            "sw_library_local_path": "Local Path",
             "llm_provider": "LLM Provider",
             "llm_api_style": "LLM API Style",
             "llm_base_url": "LLM Base URL",
@@ -2843,151 +3051,56 @@ class GIT4SWApp(tk.Tk):
             "llm_custom_instructions": "LLM Custom Instructions",
             "auto_bg_diff": "Auto Background Diff",
         }
-        
-        keys_order = [
-            "git_path",
-            "git-lfs_path",
-            "solidworks_path",
-            "edrawings_path",
-            "git_server_type",
-            "gitea_url",
-            "git_token",
-            "default_local_path",
-            "organization_name",
-            "llm_provider",
-            "llm_api_style",
-            "llm_base_url",
-            "llm_model",
-            "llm_api_key",
-            "llm_timeout_sec",
-            "llm_verify_ssl",
-            "llm_params",
-            "llm_prompt_file",
-            "llm_custom_instructions",
-            "auto_bg_diff",
-        ]
-        
-        for k in config_data.keys():
-            if k not in ("workspace_path", "auto_sync", "auto_backup_conflicts", "auto_lock", "imagemagick_path") and k not in keys_order:
-                keys_order.append(k)
-        
+
         find_targets = {
             "git_path": "git.exe",
             "git-lfs_path": "git-lfs.exe",
             "solidworks_path": "SLDWORKS.exe",
             "edrawings_path": "eDrawings.exe",
         }
-        
+
         if "github_token" in config_data and "git_token" not in config_data:
             config_data["git_token"] = config_data["github_token"]
 
         self._gitea_url_entry = None
+        rendered = set()
 
-        for row_idx, key in enumerate(keys_order):
-            if key not in config_data:
+        # 1) Render the well-known groups.
+        for title, description, keys in self.CONFIG_SECTIONS:
+            present = [k for k in keys if k in config_data]
+            if not present:
                 continue
-            if key == "imagemagick_path":
-                continue
-                
-            val = config_data[key]
-            display_name = display_names.get(key, key.replace("_", " ").title())
-            
-            lbl = ttk.Label(self.config_fields_frame, text=f"{display_name}:", font=("TkDefaultFont", 10, "bold"), anchor="w", background="#ffffff")
-            lbl.grid(row=row_idx, column=0, padx=(0, 10), pady=2, sticky="w")
-            
-            if key in find_targets:
-                cb = ttk.Combobox(self.config_fields_frame, state="readonly", width=60)
-                cb.set(str(val))
-                cb.grid(row=row_idx, column=1, padx=0, pady=2, sticky="ew")
-                self.config_entries[key] = cb
-                self.config_combos[key] = cb
+            body = self._build_config_section(title, description)
+            for row, key in enumerate(present):
+                self._render_config_field(
+                    body, key, config_data[key], row, config_data, display_names, find_targets
+                )
+                rendered.add(key)
+            self._config_section_map[title] = present
 
-                if val and not os.path.exists(str(val)):
-                    cb.configure(foreground="#ef4444")
-                else:
-                    cb.configure(foreground="#1f2937")
-                def _on_select(_e, c=cb):
-                    if c.get() and os.path.exists(c.get()):
-                        c.configure(foreground="#1f2937")
-                    else:
-                        c.configure(foreground="#ef4444")
-                cb.bind("<<ComboboxSelected>>", _on_select)
-                
-                btn = ttk.Button(self.config_fields_frame, text="Find", width=6,
-                                 command=lambda k=key, t=find_targets[key]: self.find_executable(k, t))
-                btn.grid(row=row_idx, column=2, padx=(8, 0), pady=2, sticky="w")
-                self.config_find_btns[key] = btn
-            elif key == "git_server_type":
-                cb = ttk.Combobox(self.config_fields_frame, state="readonly", width=20)
-                cb['values'] = ["github", "gitea"]
-                cb.set(str(val) if str(val) in ("github", "gitea") else "github")
-                cb.grid(row=row_idx, column=1, padx=0, pady=2, sticky="w")
-                self.config_entries[key] = cb
-                cb.bind("<<ComboboxSelected>>", self._on_git_server_type_changed)
-            elif key == "llm_api_style":
-                cb = ttk.Combobox(self.config_fields_frame, state="readonly", width=20)
-                cb['values'] = ["openai", "gemini", "anthropic", "disabled"]
-                cur_style = str(val).strip().lower()
-                cb.set(cur_style if cur_style in ("openai", "gemini", "anthropic", "disabled") else "openai")
-                cb.grid(row=row_idx, column=1, padx=0, pady=2, sticky="w")
-                self.config_entries[key] = cb
-            elif key in ("llm_verify_ssl", "auto_bg_diff"):
-                cb = ttk.Combobox(self.config_fields_frame, state="readonly", width=12)
-                cb['values'] = ["true", "false"]
-                b_str = "true" if (val is True or str(val).strip().lower() == "true") else "false"
-                cb.set(b_str)
-                cb.grid(row=row_idx, column=1, padx=0, pady=2, sticky="w")
-                self.config_entries[key] = cb
-            elif key == "gitea_url":
-                ent = ttk.Entry(self.config_fields_frame)
-                server_type = config_data.get("git_server_type", "github")
-                if server_type == "github":
-                    ent.insert(0, "https://github.com")
-                    ent.config(state="disabled", foreground="#9ca3af")
-                else:
-                    ent.insert(0, str(val) if val else "")
-                ent.grid(row=row_idx, column=1, padx=0, pady=2, sticky="ew")
-                self.config_entries[key] = ent
-                self._gitea_url_entry = ent
-            elif key == "default_local_path":
-                ent = ttk.Entry(self.config_fields_frame)
-                ent.insert(0, str(val))
-                ent.grid(row=row_idx, column=1, padx=0, pady=2, sticky="ew")
-                self.config_entries[key] = ent
-                btn = ttk.Button(self.config_fields_frame, text="Find", width=6,
-                                 command=lambda: self._browse_directory("default_local_path"))
-                btn.grid(row=row_idx, column=2, padx=(8, 0), pady=2, sticky="w")
-                self.config_find_btns[key] = btn
-            elif key == "llm_prompt_file":
-                ent = ttk.Entry(self.config_fields_frame)
-                ent.insert(0, str(val))
-                ent.grid(row=row_idx, column=1, padx=0, pady=2, sticky="ew")
-                self.config_entries[key] = ent
-                btn = ttk.Button(self.config_fields_frame, text="Edit", width=6,
-                                 command=self.edit_llm_prompt_file)
-                btn.grid(row=row_idx, column=2, padx=(8, 0), pady=2, sticky="w")
-            elif key == "llm_params":
-                ent = ttk.Entry(self.config_fields_frame)
-                if isinstance(val, dict):
-                    ent.insert(0, json.dumps(val, ensure_ascii=False))
-                else:
-                    ent.insert(0, str(val))
-                ent.grid(row=row_idx, column=1, padx=0, pady=2, sticky="ew")
-                self.config_entries[key] = ent
-            elif key == "llm_api_key":
-                ent = ttk.Entry(self.config_fields_frame, show="*")
-                ent.insert(0, str(val) if val else "")
-                ent.grid(row=row_idx, column=1, padx=0, pady=2, sticky="ew")
-                self.config_entries[key] = ent
-                _, key_src = resolve_api_key(config_data, extra_search_dirs=[self.workspace_path])
-                src_text = f"({key_src})" if key_src != "none" else "(optional)"
-                lbl_src = ttk.Label(self.config_fields_frame, text=src_text, foreground="#6b7280", background="#ffffff")
-                lbl_src.grid(row=row_idx, column=2, padx=(8, 0), pady=2, sticky="w")
-            else:
-                ent = ttk.Entry(self.config_fields_frame)
-                ent.insert(0, str(val))
-                ent.grid(row=row_idx, column=1, padx=0, pady=2, sticky="ew")
-                self.config_entries[key] = ent
+        # 2) Everything else (plus background options) goes into "Advanced".
+        leftovers = [k for k in self.CONFIG_ADVANCED_KEYS if k in config_data and k not in rendered]
+        for key in config_data.keys():
+            if key in rendered or key in self.CONFIG_HIDDEN_KEYS or key in leftovers:
+                continue
+            leftovers.append(key)
+
+        if leftovers:
+            title = "⚙️ Advanced"
+            body = self._build_config_section(
+                title,
+                "Background behaviour. Less common values (e.g. commit message presets, "
+                "BOM column order) are edited with the [Edit] button.",
+            )
+            for row, key in enumerate(leftovers):
+                self._render_config_field(
+                    body, key, config_data[key], row, config_data, display_names, find_targets
+                )
+            self._config_section_map[title] = leftovers
+
+        # Let the mouse wheel scroll the view from any field (comboboxes keep their own
+        # wheel behaviour, which would otherwise change their value).
+        self._bind_config_mousewheel(self.config_fields_frame)
 
     def _on_git_server_type_changed(self, event=None):
         cb = self.config_entries.get("git_server_type")
@@ -3526,6 +3639,30 @@ a:hover {{ text-decoration: underline; }}
         self.btn_cleanup_lfs = ttk.Button(sync_btn_frm, text="Cleanup LFS Cache", command=self.show_lfs_cleanup_wizard, width=18)
         self.btn_cleanup_lfs.pack(side="right")
 
+        # SolidWorks templates/library repository (separate Git repository)
+        lib_frm = tk.Frame(sync_card, bg="#ffffff")
+        lib_frm.pack(fill="x", padx=12, pady=(0, 8))
+
+        self.lbl_sw_library = tk.Label(
+            lib_frm,
+            text="",
+            bg="#ffffff",
+            fg="#6b7280",
+            anchor="w",
+            justify="left",
+            wraplength=760,
+            font=("TkDefaultFont", 9),
+        )
+        self.lbl_sw_library.pack(side="left", fill="x", expand=True)
+
+        self.btn_sw_library_sync = ttk.Button(
+            lib_frm,
+            text="Pull Library",
+            command=self.pull_sw_library,
+            width=14,
+        )
+        self.btn_sw_library_sync.pack(side="right", padx=(8, 0))
+
         # SolidWorks Monitor Card
         sw_card = ttk.Frame(view, style="Card.TFrame")
         sw_card.pack(fill="x", padx=16, pady=4)
@@ -3563,6 +3700,7 @@ a:hover {{ text-decoration: underline; }}
 
     def refresh_dashboard(self):
         self.update_repo_branch_info()
+        self.refresh_sw_library_status()
         self.ent_local_dir.delete(0, tk.END)
         self.ent_local_dir.insert(0, os.path.normpath(self.workspace_path))
         # Reset cached first-commit info so it's re-fetched for the new repository
@@ -4946,27 +5084,15 @@ a:hover {{ text-decoration: underline; }}
                             return
                 
                 import git
-                # 1. Stage selected files
+                # 1. Stage selected files (.backup scratch files are always excluded,
+                #    and any already-tracked .backup entries are dropped from the index).
                 rel_paths = []
                 for fp in files_to_commit:
                     rel_path = self.git_service.get_correct_filepath_casing(fp)
                     rel_paths.append(rel_path)
                 
                 try:
-                    files_to_add = []
-                    files_to_rm = []
-                    for f in rel_paths:
-                        abs_f = os.path.join(self.workspace_path, f)
-                        if os.path.exists(abs_f):
-                            files_to_add.append(f)
-                        else:
-                            files_to_rm.append(f)
-                            
-                    chunk_size = 100
-                    for i in range(0, len(files_to_add), chunk_size):
-                        self.git_service._run_lfs_cmd(["git", "add", "--"] + files_to_add[i:i + chunk_size])
-                    for i in range(0, len(files_to_rm), chunk_size):
-                        self.git_service._run_lfs_cmd(["git", "rm", "--ignore-unmatch", "--"] + files_to_rm[i:i + chunk_size])
+                    self.git_service.stage_for_commit(rel_paths, log=self.write_log)
                 except Exception as e:
                     raise RuntimeError(f"Failed to stage/remove files in index: {e}")
                 
@@ -5138,6 +5264,15 @@ a:hover {{ text-decoration: underline; }}
                 except Exception as e:
                     self.task_queue.put(('error', f"Failed to get repository status: {e}", None))
                     return
+
+                # .backup/ is app-internal scratch space; never stage it.
+                backup_changed = [f for f in all_changed if is_backup_path(f)]
+                if backup_changed:
+                    all_changed = [f for f in all_changed if not is_backup_path(f)]
+                    self.write_log(
+                        f"Excluded {len(backup_changed)} app-internal .backup file(s) from the upload.",
+                        "info",
+                    )
                 
                 if not all_changed:
                     res_q = queue.Queue()
@@ -5220,23 +5355,9 @@ a:hover {{ text-decoration: underline; }}
                     raise RuntimeError("Not a git repository.")
                 repo = self.git_service.repo
                 
-                # 1. Stage the files
+                # 1. Stage the files (.backup scratch files are always excluded)
                 self.write_log("Staging changes via Git CLI...", "info")
-                files_to_add = []
-                files_to_rm = []
-                for f in files_to_stage:
-                    abs_f = os.path.join(self.workspace_path, f)
-                    if os.path.exists(abs_f):
-                        files_to_add.append(f)
-                    else:
-                        files_to_rm.append(f)
-                
-                if files_to_add:
-                    for chunk in [files_to_add[i:i+100] for i in range(0, len(files_to_add), 100)]:
-                        self.git_service._run_lfs_cmd(["git", "add", "--"] + chunk)
-                if files_to_rm:
-                    for chunk in [files_to_rm[i:i+100] for i in range(0, len(files_to_rm), 100)]:
-                        self.git_service._run_lfs_cmd(["git", "rm", "--ignore-unmatch", "--"] + chunk)
+                self.git_service.stage_for_commit(files_to_stage, log=self.write_log)
                 
                 orig_head = self.git_service.get_branch_tip_commit("HEAD") or "HEAD~1"
 
@@ -6614,6 +6735,17 @@ a:hover {{ text-decoration: underline; }}
         def run():
             self.increment_tasks()
             try:
+                # --- Step 0: keep the separate SolidWorks template/library/settings
+                # repository up to date as well.  Conflicts there are resolved
+                # automatically in favour of the remote version.
+                try:
+                    lib_url, _lib_path = self._sw_library_settings()
+                    if lib_url:
+                        # Skipped silently when the library was synced moments ago.
+                        self.sync_sw_library(force=False)
+                except Exception as lib_e:
+                    self.write_log(f"SolidWorks library sync failed: {lib_e}", "warning")
+
                 try:
                     self.git_service._run_lfs_cmd(["git", "fetch", "origin"])
                     branch = self.git_service.get_current_branch()
@@ -6699,6 +6831,134 @@ a:hover {{ text-decoration: underline; }}
                 
         threading.Thread(target=run, daemon=True).start()
 
+    # ------------------------------------------------------------------
+    # SolidWorks templates / library / settings repository
+    # ------------------------------------------------------------------
+    def _sw_library_settings(self):
+        """Return (remote_url, local_path) of the SolidWorks library repository."""
+        config_data = self.load_config_data()
+        url = str(config_data.get("sw_library_repo_url") or "").strip()
+        path = str(config_data.get("sw_library_local_path") or "").strip()
+        if not path:
+            path = resolve_sw_library_local_path(config_data)
+        return url, path
+
+    def refresh_sw_library_status(self, status_text=None):
+        """Update the dashboard line describing the SolidWorks library repository."""
+        if not hasattr(self, "lbl_sw_library"):
+            return
+        if status_text:
+            self._sw_library_status_text = status_text
+
+        url, path = self._sw_library_settings()
+        if not url or not path:
+            self.lbl_sw_library.config(
+                text="📚 SolidWorks library: not configured (Config → Solidworks Repo URL).",
+                fg="#9ca3af",
+            )
+            return
+
+        cloned = os.path.isdir(os.path.join(path, ".git")) and os.path.exists(os.path.join(path, ".git", "HEAD"))
+        state = (self._sw_library_status_text or "").strip()
+        if not state:
+            state = "clone ready" if cloned else "not cloned yet - cloned automatically on the next Sync"
+        self.lbl_sw_library.config(
+            text=f"📚 SolidWorks library: {path}  ({state})",
+            fg="#1f2937" if cloned else "#b45309",
+        )
+
+    def sync_sw_library(self, force=False, min_interval=60, log=None):
+        """Keep the SolidWorks templates/library repository up to date.
+
+        Must be called from a background thread. Returns a short status string,
+        None when the library repository is not configured, or a "skipped (...)"
+        string when another sync is running or a recent sync is still fresh.
+        """
+        url, path = self._sw_library_settings()
+        if not url or not path:
+            return None
+
+        # Safety: never run repository-mirroring commands on the CAD workspace itself.
+        try:
+            ws_norm = os.path.normcase(os.path.normpath(os.path.abspath(self.workspace_path)))
+            lib_norm = os.path.normcase(os.path.normpath(os.path.abspath(path)))
+            if lib_norm == ws_norm or ws_norm.startswith(lib_norm + os.sep):
+                self.write_log(
+                    "SolidWorks library path overlaps the project workspace. "
+                    "Set a separate folder in Config to avoid touching the CAD repository.",
+                    "warning",
+                )
+                return "skipped (library path overlaps the workspace)"
+        except Exception:
+            pass
+
+        if not self._sw_library_sync_lock.acquire(blocking=False):
+            return "skipped (already running)"
+        try:
+            if not force and (time.time() - self._last_sw_library_sync) < min_interval:
+                return "skipped (synced recently)"
+
+            emit = log or self.write_log
+            service = SolidWorksLibraryService(url, path, self.config_path)
+            status = service.sync(log=emit)
+            if status == "not configured":
+                return None
+
+            self._last_sw_library_sync = time.time()
+            self._sw_library_status_text = status
+            emit(f"SolidWorks library ({path}): {status}", "success")
+            return status
+        finally:
+            self._sw_library_sync_lock.release()
+
+    @queue_during_bg_tasks
+    def pull_sw_library(self):
+        """'Pull Library' button: synchronise the SolidWorks library repository now."""
+        url, path = self._sw_library_settings()
+        if not url or not path:
+            self.write_log(
+                "SolidWorks library repository is not configured. Set the URL in Config first.",
+                "warning",
+            )
+            return
+
+        self.btn_sw_library_sync.config(text="Pulling...")
+        self.btn_sw_library_sync.state(["disabled"])
+
+        def run():
+            self.increment_tasks()
+            try:
+                status = self.sync_sw_library(force=True)
+                if status and status.startswith("skipped"):
+                    self.write_log(
+                        f"SolidWorks library sync {status[len('skipped '):]}.",
+                        "warning",
+                    )
+
+                def on_done():
+                    self.btn_sw_library_sync.config(text="Pull Library")
+                    self.btn_sw_library_sync.state(["!disabled"])
+                    self.refresh_sw_library_status()
+                self.task_queue.put(('callback', None, on_done))
+            except Exception as e:
+                def on_fail():
+                    self.btn_sw_library_sync.config(text="Pull Library")
+                    self.btn_sw_library_sync.state(["!disabled"])
+                self.task_queue.put(('error', f"SolidWorks library sync failed:\n{e}", on_fail))
+            finally:
+                self.decrement_tasks()
+
+        threading.Thread(target=run, daemon=True).start()
+
+    def _auto_sync_sw_library_worker(self):
+        """Background worker for the library-only automatic sync."""
+        try:
+            self.sync_sw_library(force=False, min_interval=60)
+        except Exception as e:
+            self.write_log(f"SolidWorks library auto sync failed: {e}", "warning")
+        finally:
+            self.task_queue.put(('callback', None, self.refresh_sw_library_status))
+
     def on_auto_sync_changed(self):
         val = self.auto_sync_var.get()
         config_path = self.config_path
@@ -6716,6 +6976,12 @@ a:hover {{ text-decoration: underline; }}
             self.write_log(f"Auto Sync set to {'ON' if val else 'OFF'}", "info")
         except Exception as e:
             self.write_log(f"Failed to save auto sync state: {e}", "error")
+            return
+
+        # Turning Sync ON should immediately bring the SolidWorks library (and the
+        # workspace) up to date instead of waiting for the next app start.
+        if val:
+            self.after(100, self.trigger_auto_sync_if_enabled)
 
     def on_auto_backup_conflicts_changed(self):
         val = self.auto_backup_conflicts_var.get()
@@ -6757,10 +7023,15 @@ a:hover {{ text-decoration: underline; }}
         if not self.auto_sync_var.get():
             return
         if not self.git_service or not self.git_service.is_git_repo():
+            # The workspace itself is not a Git repository, but the separate
+            # SolidWorks templates/library repository can still be kept current.
+            url, _path = self._sw_library_settings()
+            if url:
+                threading.Thread(target=self._auto_sync_sw_library_worker, daemon=True).start()
             return
         if self.btn_sync.instate(['disabled']):
             return
-            
+
         self.write_log("🤖 Auto Sync triggered...", "info")
         self.sync_repository(on_success_callback=lambda: self.merge_main_branch(confirm=False), silent=True)
 
@@ -9226,6 +9497,12 @@ finally:
                     self.task_queue.put(('callback', None, self.destroy))
                     return
 
+                # .backup/ is app-internal scratch space; never stage it on exit.
+                backup_changed = [f for f in all_changed if is_backup_path(f)]
+                if backup_changed:
+                    all_changed = [f for f in all_changed if not is_backup_path(f)]
+                    print(f"Excluded {len(backup_changed)} app-internal .backup file(s) from the exit upload.")
+
                 # 2. Exclude files currently open in SolidWorks
                 try:
                     open_docs = self.sw_service.get_all_open_documents()
@@ -9264,22 +9541,8 @@ finally:
                     self.task_queue.put(('callback', None, self.destroy))
                     return
 
-                # 4. Stage files
-                files_to_add = []
-                files_to_rm = []
-                for f in files_to_stage:
-                    abs_f = os.path.join(self.workspace_path, f)
-                    if os.path.exists(abs_f):
-                        files_to_add.append(f)
-                    else:
-                        files_to_rm.append(f)
-                
-                if files_to_add:
-                    for chunk in [files_to_add[i:i+100] for i in range(0, len(files_to_add), 100)]:
-                        self.git_service._run_lfs_cmd(["git", "add", "--"] + chunk)
-                if files_to_rm:
-                    for chunk in [files_to_rm[i:i+100] for i in range(0, len(files_to_rm), 100)]:
-                        self.git_service._run_lfs_cmd(["git", "rm", "--ignore-unmatch", "--"] + chunk)
+                # 4. Stage files (.backup scratch files are always excluded)
+                self.git_service.stage_for_commit(files_to_stage, log=self.write_log)
 
                 orig_head = self.git_service.get_branch_tip_commit("HEAD") or "HEAD~1"
 
