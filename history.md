@@ -497,6 +497,40 @@ gantt
   - 추적된 `.backup` + 미추적 `.backup` + 정상 파트로 구성한 임시 저장소 통합 테스트 **30건 통과**: 자동 ignore 등록/멱등성, `check-ignore` 확인, 추적 해제 및 스테이징 삭제, 중첩 `sub/.backup` 처리, `.gitignore`가 없는 저장소 자동 생성, `save_version` 거부, 파일 목록 비노출.
   - 전체 모듈 `py_compile` 통과.
 
+### 26단계: UI 폰트 정리 — 라이브러리 상태 문구 통일 · Config 소제목 확대 (Milestone 26 - 2026-11-26)
+* **요구 사항**:
+  - Dashboard의 **[Pull Library]** 버튼 왼쪽 상태 문구가 다른 UI 요소와 다른 글꼴로 보이므로 동일한 폰트로 통일합니다.
+  - Config 카테고리의 녹색 소제목(섹션 헤더) 폰트 크기를 기존보다 1.2배 키웁니다.
+  - Config 카테고리의 굵은 검정 변수 이름 라벨 폰트 크기도 기존보다 1.2배 키웁니다.
+* **원인**:
+  - Tk에서 `font=("TkDefaultFont", 9)`는 "9pt의 기본 폰트"가 아니라 **family 이름이 `TkDefaultFont`인 폰트**로 해석됩니다. 존재하지 않는 family이므로 Tk가 무관한 대체 글꼴(크기 9)로 폴백해 본문(Noto Sans KR Medium 10)과 다르게 보였습니다.
+* **구현 — `ui_tk.py`**:
+  - `lbl_sw_library`의 폰트를 `tkfont.nametofont("TkDefaultFont")`(앱 기본 UI 폰트)로 지정해 카드 설명·Live Monitor 등 다른 텍스트와 동일하게 맞췄습니다.
+  - `_build_config_section()`의 소제목 폰트를 10pt → **12pt**(10 × 1.2) 굵은 글씨로 키워, 본문 라벨보다 확실히 큰 계층 구조를 갖도록 했습니다.
+  - `_render_config_field()`의 변수 이름 라벨 폰트를 9pt → **11pt**(9 × 1.2, 반올림) 굵은 글씨로 키웠습니다. 라벨 최대 폭(189px)이 공통 라벨 칼럼(210px) 안에 들어와 그룹 간 입력란 정렬은 그대로 유지됩니다.
+* **검증**:
+  - Dashboard: GUI 스모크 테스트 5건 통과 — family/size/weight가 `TkDefaultFont` 및 같은 카드의 `Card.TLabel` 설명과 일치, 대체 폴백(Arial 등) 미사용 확인. 실제 렌더링 스크린샷 확대 비교.
+  - Config 소제목: GUI 검증 5건 통과 — 5개 헤더 모두 12pt·bold, 렌더링 줄 높이 증가율 1.19배(≈1.2배), 본문 라벨(9pt)보다 큼을 확인.
+  - Config 변수 이름: GUI 검증 7건 통과 — 22개 라벨 모두 11pt·bold, 줄 높이 증가율 **정확히 1.20배**, 라벨 폭이 칼럼 내에 수용, 그룹 간 입력란 x 좌표 동일, Find 버튼/스크롤 영역 정상. 스크린샷으로 계층(12pt 소제목 > 11pt 변수명 > 10pt 입력값) 확인.
+
+### 27단계: Dashboard `Pull Library` 버튼 폭 정렬 (Milestone 27 - 2026-11-26)
+* **요구 사항**: **[Pull Library]** 버튼의 폭을 바로 위에 있는 **[Cleanup LFS Cache]** 버튼과 동일하게 통일합니다.
+* **구현 — `ui_tk.py`**: `btn_sw_library_sync`의 `width`를 14 → **18**로 맞춰(위 버튼과 같은 값) 두 버튼의 요청 폭·좌우 모서리가 정확히 일치하도록 했습니다.
+* **검증**: GUI 검증 6건 통과 — 두 버튼의 `winfo_reqwidth()`·`winfo_width()` 동일(140px), 좌/우 모서리 x 좌표 일치, 버튼 텍스트 유지. 확대 스크린샷으로 정렬 확인.
+
+### 28단계: Help 문서 폰트 sans-serif 통일 (Milestone 28 - 2026-11-26)
+* **요구 사항**: Help 카테고리에 표시되는 폰트를 고정폭(monospace)이 아닌 시스템 기본 sans 폰트로 모두 통일합니다.
+* **원인**:
+  - Help 뷰는 tkinterweb(Tkhtml)으로 마크다운을 렌더링하는데, Tkhtml의 UA 스타일시트는 `PRE, TT, CODE, KBD, SAMP { font-family: monospace }`로 고정폭을 강제합니다. 도움말 문서에는 인라인 코드(백틱)가 많아(`help_ko.md` 기준 45곳) 화면 대부분이 고정폭으로 보였습니다.
+  - 문서 CSS의 `font-family: system-ui, -apple-system, ...` 역시 Tkhtml이 해석하지 못하는 키워드가 섞여 있어 시스템 기본 폰트와 일치하지 않았습니다.
+* **구현 — `ui_tk.py`**:
+  - `_help_font_stack()`: `TkDefaultFont`의 family를 첫 항목으로 하고 `'Segoe UI'`, `'Malgun Gothic'`, `'Noto Sans KR'`, `Arial`, `sans-serif`를 폴백으로 하는 CSS 폰트 스택을 생성합니다(monospace 미포함).
+  - `_render_help_html()`: 마크다운→HTML 변환과 스타일 주입을 메서드로 분리하고, `body`뿐 아니라 `code/kbd/samp/tt`, `pre`, `pre code`, `table`에도 동일한 sans 스택을 적용해 문서 내 모든 텍스트가 같은 계열 폰트로 렌더링되도록 했습니다.
+  - `create_help_view()`는 새 메서드를 호출하도록 정리했습니다.
+* **검증**:
+  - GUI 검증 16건 통과: 폰트 스택이 앱 기본 폰트로 시작하고 `sans-serif`로 끝나며 monospace/courier/fixed 미포함, 생성된 HTML의 font-family 선언 5곳 모두 동일 스택, `code`/`pre`/`table`/`body` 규칙 적용, 마크다운 제목·인라인 코드·펜스 코드 블록 변환 정상.
+  - Help 뷰를 실제 렌더링해 인라인 코드까지 sans로 표시됨을 스크린샷으로 확인했습니다.
+
 ---
 
 1. **동기화 시 충돌 파일 시각적 차이 비교 (CAD Diff)**: eDrawings 뷰어 등을 활용하여 충돌이 발생한 로컬 도면과 원격 도면의 썸네일을 좌우로 배치해 변경 이력을 한눈에 대조해 볼 수 있는 시각화 인터페이스 제공안 고려 권장.

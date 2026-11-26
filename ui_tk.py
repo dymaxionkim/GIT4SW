@@ -2879,7 +2879,8 @@ class GIT4SWApp(tk.Tk):
         tk.Frame(header, bg="#059669", width=4).pack(side="left", fill="y")
         tk.Label(
             header, text=title, bg="#f9fafb", fg="#059669", anchor="w",
-            font=("TkDefaultFont", 10, "bold"),
+            # Section headers: previous size (10) scaled by 1.2.
+            font=("TkDefaultFont", 12, "bold"),
         ).pack(side="left", padx=(8, 0), pady=(6, 5))
 
         if description:
@@ -2902,7 +2903,9 @@ class GIT4SWApp(tk.Tk):
         """Render a single label + input (+ optional action button) row."""
         display_name = display_names.get(key, key.replace("_", " ").title())
 
-        lbl = ttk.Label(parent, text=f"{display_name}:", font=("TkDefaultFont", 9, "bold"),
+        lbl = ttk.Label(parent, text=f"{display_name}:",
+                        # Variable names: previous size (9) scaled by 1.2.
+                        font=("TkDefaultFont", 11, "bold"),
                         anchor="w", background="#ffffff")
         lbl.grid(row=row, column=0, padx=(0, 10), pady=2, sticky="w")
 
@@ -3347,6 +3350,52 @@ class GIT4SWApp(tk.Tk):
 
         threading.Thread(target=_worker, daemon=True).start()
 
+    # Markdown extensions used to render the Help documents.
+    HELP_MD_EXTENSIONS = ["extra", "codehilite", "toc", "sane_lists", "pymdownx.magiclink", "pymdownx.betterem"]
+
+    def _help_font_stack(self):
+        """CSS font stack for the Help view, built from the application's default font.
+
+        Only sans-serif families are listed so the rendered text matches the rest of
+        the GUI; Tkhtml has no usable default font of its own and falls back to a
+        fixed-width one when a family cannot be resolved.
+        """
+        try:
+            family = str(tkfont.nametofont("TkDefaultFont").actual("family") or "").strip()
+        except Exception:
+            family = ""
+
+        families = []
+        if family:
+            families.append("'" + family.replace("'", "").replace('"', "") + "'")
+        families.extend(["'Segoe UI'", "'Malgun Gothic'", "'Noto Sans KR'", "Arial", "sans-serif"])
+        return ", ".join(families)
+
+    def _render_help_html(self, markdown_body):
+        """Convert a Help markdown file into the styled HTML shown in the Help view."""
+        html = markdown.markdown(markdown_body, extensions=self.HELP_MD_EXTENSIONS)
+        ui_font = self._help_font_stack()
+        return f"""<!DOCTYPE html><html><head><meta charset="utf-8"><style>
+body {{ font-family: {ui_font}; font-size: 11pt; color: #1f2937; line-height: 1.6; padding: 8px; }}
+h1 {{ font-size: 18pt; color: #059669; border-bottom: 2px solid #059669; padding-bottom: 4px; margin-top: 20px; }}
+h2 {{ font-size: 14pt; color: #047857; margin-top: 16px; }}
+h3 {{ font-size: 12pt; color: #065f46; margin-top: 12px; }}
+h4 {{ font-size: 11pt; color: #065f46; }}
+code, kbd, samp, tt {{ background: #f3f4f6; padding: 1px 4px; border-radius: 3px; font-size: 10pt; font-family: {ui_font}; }}
+pre {{ background: #f3f4f6; padding: 8px; border-radius: 4px; overflow-x: auto; font-family: {ui_font}; }}
+pre code {{ background: none; padding: 0; font-family: {ui_font}; }}
+blockquote {{ border-left: 4px solid #059669; padding: 4px 12px; margin: 8px 0; color: #4b5563; background: #f0fdfa; }}
+table {{ border-collapse: collapse; width: 100%; margin: 8px 0; font-family: {ui_font}; }}
+th, td {{ border: 1px solid #d1d5db; padding: 4px 8px; text-align: left; }}
+th {{ background: #e5e7eb; font-weight: bold; color: #1f2937; }}
+tr:nth-child(even) {{ background: #f9fafb; }}
+ul, ol {{ margin: 4px 0; padding-left: 24px; }}
+li {{ margin: 2px 0; }}
+strong {{ color: #111827; }}
+a {{ color: #059669; text-decoration: none; }}
+a:hover {{ text-decoration: underline; }}
+</style></head><body>{html}</body></html>"""
+
     def create_help_view(self):
         view = ttk.Frame(self.content_frame)
         
@@ -3377,8 +3426,6 @@ class GIT4SWApp(tk.Tk):
         md_frame = HtmlFrame(container, messages_enabled=False)
         md_frame.pack(fill="both", expand=True)
         
-        MD_EXTENSIONS = ["extra", "codehilite", "toc", "sane_lists", "pymdownx.magiclink", "pymdownx.betterem"]
-        
         def load_help_file(*args):
             file_name = self.help_lang.get()
             file_path = os.path.join(script_dir, file_name)
@@ -3391,28 +3438,7 @@ class GIT4SWApp(tk.Tk):
                     body = f"Error loading {file_name}:\n{e}"
             else:
                 body = f"{file_name} file not found."
-            html = markdown.markdown(body, extensions=MD_EXTENSIONS)
-            styled_html = f"""<!DOCTYPE html><html><head><meta charset="utf-8"><style>
-body {{ font-family: system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif; font-size: 11pt; color: #1f2937; line-height: 1.6; padding: 8px; }}
-h1 {{ font-size: 18pt; color: #059669; border-bottom: 2px solid #059669; padding-bottom: 4px; margin-top: 20px; }}
-h2 {{ font-size: 14pt; color: #047857; margin-top: 16px; }}
-h3 {{ font-size: 12pt; color: #065f46; margin-top: 12px; }}
-h4 {{ font-size: 11pt; color: #065f46; }}
-code {{ background: #f3f4f6; padding: 1px 4px; border-radius: 3px; font-size: 10pt; }}
-pre {{ background: #f3f4f6; padding: 8px; border-radius: 4px; overflow-x: auto; }}
-pre code {{ background: none; padding: 0; }}
-blockquote {{ border-left: 4px solid #059669; padding: 4px 12px; margin: 8px 0; color: #4b5563; background: #f0fdfa; }}
-table {{ border-collapse: collapse; width: 100%; margin: 8px 0; }}
-th, td {{ border: 1px solid #d1d5db; padding: 4px 8px; text-align: left; }}
-th {{ background: #e5e7eb; font-weight: bold; color: #1f2937; }}
-tr:nth-child(even) {{ background: #f9fafb; }}
-ul, ol {{ margin: 4px 0; padding-left: 24px; }}
-li {{ margin: 2px 0; }}
-strong {{ color: #111827; }}
-a {{ color: #059669; text-decoration: none; }}
-a:hover {{ text-decoration: underline; }}
-</style></head><body>{html}</body></html>"""
-            md_frame.load_html(styled_html)
+            md_frame.load_html(self._render_help_html(body))
         
         self.help_lang.trace_add("write", load_help_file)
         load_help_file()
@@ -3651,7 +3677,10 @@ a:hover {{ text-decoration: underline; }}
             anchor="w",
             justify="left",
             wraplength=760,
-            font=("TkDefaultFont", 9),
+            # Use the application's default UI font (same as every other label).
+            # NOTE: ("TkDefaultFont", 9) would be read as a *family* name and fall
+            # back to an unrelated font, so the named font object is used here.
+            font=tkfont.nametofont("TkDefaultFont"),
         )
         self.lbl_sw_library.pack(side="left", fill="x", expand=True)
 
@@ -3659,7 +3688,8 @@ a:hover {{ text-decoration: underline; }}
             lib_frm,
             text="Pull Library",
             command=self.pull_sw_library,
-            width=14,
+            # Same width as the [Cleanup LFS Cache] button directly above it.
+            width=18,
         )
         self.btn_sw_library_sync.pack(side="right", padx=(8, 0))
 
